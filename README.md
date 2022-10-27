@@ -23,11 +23,6 @@ Hey, welcome to this repo. This is exploartion of the Kaggle Connect-X open comp
 
 ### Focus
 My focus on this project is on showing the efficiacy of deep reinforcement learning my making increasingly effective agents. After a while, I should explore the working of AlphaZero, to create a 100% winning agent. This type of agent is not always guranteed for these kind of problems but discussions in the compettition give evidence for a complete solution here.  
-Important Checks 
-- [x] Is the webiste accessible? (Check)
-- [x] Is the final user interface easy to interact with? (Check)
-- [x] Has all code been refactored to ease maintanence and readability? (Check)
-- [ ] Have CSS adjustments been made to the code for different browsers?
 
 ### Min Max Agent
 
