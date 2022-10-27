@@ -10,6 +10,7 @@ Hey, welcome to this repo. This is exploartion of the Kaggle Connect-X open comp
 - [Overview](#overview)
   - [Focus](#focus)
   - [Min Max Agent](#min-max-agent)
+  - [Simple DQN](#simple-dqn)
   - [First Deep Learning Agent](#first-deep-learning-agent)
   - [Screenshot](#screenshot)
 - [My process](#my-process)
@@ -26,7 +27,7 @@ My focus on this project is on showing the efficiacy of deep reinforcement learn
 
 ### Min Max Agent
 
-### Simp
+### Simple DQN 
 
 ##  My Process
 
