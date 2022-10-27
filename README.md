@@ -9,8 +9,8 @@ Hey, welcome to this repo. This is exploartion of the Kaggle Connect-X open comp
 
 - [Overview](#overview)
   - [Focus](#focus)
-  - [Min Max Agent](#min-max agent)
-  - [First Deep Learning Agent](#deep-learning agent)
+  - [Min Max Agent](#min max agent)
+  - [First Deep Learning Agent](#first deep learning agent)
   - [Screenshot](#screenshot)
 - [My process](#my-process)
   - [Built with](#built-with)
