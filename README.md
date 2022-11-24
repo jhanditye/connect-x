@@ -1,18 +1,11 @@
 
-# Connect - X 
-
-Hey, welcome to this repo. This is exploartion of the Kaggle Connect-X open competition which tasks competitors to create an agent to play Connect 4. Agents which are not updated for more than 2 months are removed to ensure that agents are being constantly improved. 
-
-
-
 ## Table of contents
 
 - [Overview](#overview)
-  - [Focus](#focus)
+  - [Intro](#intro)
   - [Min Max Agent](#min-max-agent)
   - [Simple DQN](#simple-dqn)
   - [First Deep Learning Agent](#first-deep-learning-agent)
-  - [Screenshot](#screenshot)
 - [My process](#my-process)
   - [Built with](#built-with)
   - [What I learned](#what-i-learned)
@@ -22,12 +15,46 @@ Hey, welcome to this repo. This is exploartion of the Kaggle Connect-X open comp
 
 ## Overview
 
-### Focus
+### :bug: Intro
+
+This project is inspired by the Kaggle Connect-X comptetition, which tasked competitors to create agents to play the classic Connect 4 game. 
+If haven't played before, Connext 4 is two player game where players take turns to drop coloured discs into a vertical grid. Each player uses has their own colour disc and the winner is the first player to make a line of four discs of their own colour. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 My focus on this project is on showing the efficiacy of deep reinforcement learning my making increasingly effective agents. After a while, I should explore the working of AlphaZero, to create a 100% winning agent. This type of agent is not always guranteed for these kind of problems but discussions in the compettition give evidence for a complete solution here.  
 
 ### Min Max Agent
 
 ### Simple DQN 
+
+### First Deep Learning Agent
+
 
 ##  My Process
 
@@ -45,6 +72,8 @@ My focus on this project is on showing the efficiacy of deep reinforcement learn
 ### Continued development
 
 1. Read Deepmind paper on Atari
+
+### Useful resources
 
 ## Fin
 Feel free to contact me if you'd like to work on this with me or just want to talk about reinforcement learning!
