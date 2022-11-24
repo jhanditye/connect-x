@@ -6,6 +6,7 @@
   - [Heuristic Agent](#heuristic-agent)
   - [Simple DQN](#simple-dqn)
   - [First Deep Learning Agent](#first-deep-learning-agent)
+  - [Comparing my agents](#comapring-my-agents)
 - [My process](#my-process)
   - [Built with](#built-with)
   - [What I learned](#what-i-learned)
@@ -66,6 +67,10 @@ Now, even though there is the possibility of attaining a score of +40 for the ag
 Coming soon! Expected date : 28/11/2022
 ### 🌲First Deep Learning Agent
 Coming soon!
+
+### Comparing my agents
+Coming soon!
+
 ##  My Process
 
 ### Built with
