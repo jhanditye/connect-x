@@ -84,7 +84,6 @@ Coming soon!
 
 ### Useful resources
 
-## Fin
 Feel free to contact me if you'd like to work on this with me or just want to talk about reinforcement learning!
 
 
