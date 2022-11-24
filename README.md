@@ -2,21 +2,21 @@
 ## Table of contents
 
 - [Overview](#overview)
-  - [Intro](#intro)
-  - [Heuristic Agent](#heuristic-agent)
-  - [Simple DQN](#simple-dqn)
-  - [First Deep Learning Agent](#first-deep-learning-agent)
-  - [Comparing my agents](#comapring-my-agents)
+  - [:duck: Intro](#intro)
+  - [:seedling: Heuristic Agent](#heuristic-agent)
+  - [:blossom: Simple DQN](#simple-dqn)
+  - [:evergreen_tree: First Deep Learning Agent](#first-deep-learning-agent)
+  - [Comparing my agents](#comparing-my-agents)
 - [My process](#my-process)
   - [Built with](#built-with)
-  - [What I learned](#what-i-learned)
+  - [What I learnt](#what-i-learnt)
   - [Continued development](#continued-development)
   - [Useful resources](#useful-resources)
 - [Author](#author)
 
 ## Overview
 
-### 🦆 Intro
+### 🦆Intro
 
 This project is inspired by the Kaggle Connect-X comptetition, which tasked competitors to create agents to play the classic Connect 4 game. 
 If haven't played before, Connext 4 is two player game where players take turns to drop coloured discs into a vertical grid of seven columns. Each player uses has their own colour disc and the winner is the first player to make a line of four discs of their own colour. 
@@ -28,7 +28,7 @@ solution
 
 The comptetition is an attempt to teach deep reinforcement learning through a fun game. But before I consider a deep learning solution, I think it is worthwile to consider a manual bruteforce engineering solution. We can then later compare the agents we making to truly gauge the improvemnts that a deep learning solution could provide. 
 
-### 🌱 Heuristic Agent 
+### 🌱Heuristic Agent 
 
 #### TLDR
 - Make a heuristic function to score every possible board
@@ -61,15 +61,14 @@ Now, even though there is the possibility of attaining a score of +40 for the ag
   <img src="https://i.imgur.com/bWezUC3.png"  width="80%"/>
 </p>
 
+You might ask be asking yourself "why we can't just do this for the game tree and pick the moves that gurantee a win?" The problem is that this is extremely computational expensive and only really works for small games like tic-tac-toe. Thus, we can only really look forward a few steps. 
 
-
-### 🌼 Simple DQN 
+### 🌼Simple DQN 
 Coming soon! Expected date : 28/11/2022
-### 🌲First Deep Learning Agent
+### 🌲First Deep Learning Agent 
 Coming soon!
 
 ### Comparing my agents
-Coming soon!
 
 ##  My Process
 
@@ -78,7 +77,7 @@ Coming soon!
 - Python
 - TensorFlow
 
-### What I learned
+### What I learnt
 
 1. MiniMax algorithm, and its computational improvements such as alpha-beta pruning
 2. Reinforcement learning Q-function types
