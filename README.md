@@ -11,8 +11,7 @@
   - [Built with](#built-with)
   - [What I learnt](#what-i-learnt)
   - [Continued development](#continued-development)
-  - [Useful resources](#useful-resources)
-- [Author](#author)
+
 
 ## Overview
 
@@ -86,7 +85,6 @@ Coming soon!
 
 1. Read Deepmind's paper on Atari games
 
-### Useful resources
 
 Feel free to contact me if you'd like to work on this with me or just want to talk about reinforcement learning!
 
