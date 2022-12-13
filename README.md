@@ -63,7 +63,7 @@ Now, even though there is the possibility of attaining a score of +40 for the ag
 You might ask be asking yourself "why we can't just do this for the game tree and pick the moves that gurantee a win?" The problem is that this is extremely computational expensive and only really works for small games like tic-tac-toe. Thus, we can only really look forward a few steps. 
 
 ### 🌼Simple DQN 
-Coming soon! Expected date : 10/12/2022
+Coming soon! Expected date : 15/12/2022
 ### 🌲First Deep Learning Agent 
 Coming soon!
 
