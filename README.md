@@ -1,22 +1,4 @@
 
-## Table of contents
-
-- [Overview](#overview)
-  - [:duck: Intro](#intro)
-  - [:seedling: Heuristic Agent](#heuristic-agent)
-  - [:blossom: Simple DQN](#simple-dqn)
-  - [:evergreen_tree: First Deep Learning Agent](#first-deep-learning-agent)
-  - [Comparing my agents](#comparing-my-agents)
-- [My process](#my-process)
-  - [Built with](#built-with)
-  - [What I learnt](#what-i-learnt)
-  - [Continued development](#continued-development)
-
-
-## Overview
-
-### 🦆Intro
-
 This project is inspired by the Kaggle Connect-X comptetition, which tasked competitors to create agents to play the classic Connect 4 game. 
 If haven't played before, Connext 4 is two player game where players take turns to drop coloured discs into a vertical grid of seven columns. Each player uses has their own colour disc and the winner is the first player to make a line of four discs of their own colour. 
 solution 
@@ -25,8 +7,7 @@ solution
   <img src="Connect_Four.gif" alt="A connect four game in action with colours yellow and red"  width="40%"/>
 </p>
 
-The comptetition is an attempt to teach deep reinforcement learning through a fun game. But before I consider a deep learning solution, I think it is worthwile to consider a manual bruteforce engineering solution. We can then later compare the agents we making to truly gauge the improvemnts that a deep learning solution could provide. 
-
+The comptetition is an attempt to teach deep reinforcement learning through a fun game but I think it is worthwile to consider a manual bruteforce engineering solution. 
 ### 🌱Heuristic Agent 
 
 #### TLDR
@@ -62,30 +43,5 @@ Now, even though there is the possibility of attaining a score of +40 for the ag
 
 You might ask be asking yourself "why we can't just do this for the game tree and pick the moves that gurantee a win?" The problem is that this is extremely computational expensive and only really works for small games like tic-tac-toe. Thus, we can only really look forward a few steps. 
 
-### 🌼Simple DQN 
-Coming soon! Expected date : 15/12/2022
-### 🌲First Deep Learning Agent 
-Coming soon!
-
-### Comparing my agents
-
-##  My Process
-
-### Built with
-
-- Python
-- TensorFlow
-
-### What I learnt
-
-1. MiniMax algorithm, and its computational improvements such as alpha-beta pruning
-2. Reinforcement learning Q-function types
-
-### Continued development
-
-1. Read Deepmind's paper on Atari games
-
-
-Feel free to contact me if you'd like to work on this with me or just want to talk about reinforcement learning!
-
+This project migh eventually be expanded out to look at some deep learning solutions, but as it is, I think it was a sufficient exploration. 
 
