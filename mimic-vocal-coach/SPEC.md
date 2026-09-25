@@ -24,6 +24,7 @@ additive change (a new optional field) and say so in your final report.
 | `src/types.ts` | lead | Shared contracts (read-only for agents) |
 | `src/testing/synth.ts` | lead | Deterministic voice synthesiser for tests (`synthVoice`, `synthMelody`, `sine`, `silence`, `whiteNoise`, `concat`, `mix`) |
 | `src/audio/wav.ts` | lead | `encodeWav`, `decodeWav` |
+| `src/testing/fixtures.ts` | lead | `makeFakeAnalysis`, `makeFakeProfile`, `makeFakeComparison`, `makeFakePlan`, `makeFakeReferenceComparison`, `makeFakeSessions` for tests and UI dev |
 | `src/styles/tokens.css` | lead | Design tokens + base styles |
 | `src/dsp/*` | DSP agent | FFT, resampling, pitch tracking, spectral measures, music/stat helpers |
 | `src/analysis/*` | Analysis agent | Frame features → notes, vibrato, registers, onsets, runs → `VoiceAnalysis`; worker + client |
@@ -32,7 +33,9 @@ additive change (a new optional field) and say so in your final report.
 | `src/main.tsx`, `src/App.tsx`, `src/state/*`, `src/audio/recorder.ts`, `src/audio/decode.ts`, `src/ui/pages/{Studio,Results,Settings,Guide}.tsx`, `src/ui/components/*`, `src/styles/app.css` | UI-core agent | App shell, navigation, capture, results page, settings, guide |
 | `src/ui/charts/*`, `src/ui/pages/{Practice,Progress}.tsx`, `src/audio/tones.ts`, `src/storage/*`, `src/styles/viz.css` | UI-viz agent | Charts, practice player, history storage, progress page |
 
-Agents only create/edit files they own (plus their own `*.test.ts(x)` next to them).
+Agents only create/edit files they own (plus their own `*.test.ts(x)` next to them). Builtin singer
+profile colours are the light-theme hexes of the tokens (`#b97a12` Shawn, `#3a7556` Daniel, `#b23c49`
+Jalen); the UI maps builtin ids to the `--singer-*` CSS variables so dark mode works.
 
 ## Module signatures (the cross-module API)
 
@@ -115,6 +118,10 @@ export function analyzeTake(samples: Float32Array, sampleRate: number, opts: Ana
 /** Runs analyzeTake in a Web Worker (import with `?worker&inline` so single-file builds work). Falls back to the main thread if workers are unavailable. */
 export function analyzeInWorker(samples: Float32Array, sampleRate: number, opts: AnalysisOptions,
   onProgress?: (fraction: number) => void): Promise<VoiceAnalysis>;
+
+// analysis/demo.ts
+/** ~15 s synthesized take (rising phrase through the passaggio, held notes with vibrato, a short run, a falsetto flip) for the "Try a demo take" button. */
+export function makeDemoTake(sampleRate?: number): { samples: Float32Array; sampleRate: number };
 
 // analysis/worker.ts — message protocol
 // in:  { type: 'analyze', samples: Float32Array, sampleRate: number, opts: AnalysisOptions }
