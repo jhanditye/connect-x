@@ -72,10 +72,28 @@ record a voice memo and upload it.
 
 ## Deploy to GitHub Pages
 
-`.github/workflows/pages.yml` builds and deploys on every push to `main`. Enable it once under
-**Settings → Pages → Build and deployment → Source: GitHub Actions**. GitHub Pages on a private
-repository needs a paid plan; on a free plan, make the repository public first. `ci.yml` runs the
-typecheck, tests and build on every push.
+`.github/workflows/pages.yml` builds and deploys on every push to `main`, and `ci.yml` runs the
+typecheck, tests and build on every push. Both assume this folder is the root of its repository.
+Enable Pages once under **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+GitHub Pages on a private repository needs a paid plan; on a free plan, make the repository public
+first.
+
+If this folder is sitting inside another repository (for example `connect-x/mimic-vocal-coach`),
+GitHub won't see the workflows. Move it into its own repository with its history:
+
+```bash
+# from the parent repository
+git subtree split --prefix mimic-vocal-coach -b mimic-vocal-coach
+# create an empty repository called mimic-vocal-coach on GitHub, then:
+git push git@github.com:<you>/mimic-vocal-coach.git mimic-vocal-coach:main
+```
+
+## Privacy
+
+Analysis runs in your browser. Recordings, reference clips and results stay on your device; saved
+progress and settings live in this site's local storage. The fonts are bundled, so the app makes no
+third-party requests. The only exception is the optional AI coach, which sends the numeric analysis
+summary (never audio) to Anthropic's API with your own key.
 
 ## How it works
 
