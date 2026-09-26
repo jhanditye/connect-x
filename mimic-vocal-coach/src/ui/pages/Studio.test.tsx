@@ -1,0 +1,209 @@
+// @vitest-environment jsdom
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createRecorder, microphoneUnavailableReason, RecorderError } from '../../audio/recorder';
+import { AppContext, type AppController } from '../../state/context';
+import { createInitialState, type AppState } from '../../state/reducer';
+import { makeFakeAnalysis, makeFakeProfile } from '../../testing/fixtures';
+import type { AppSettings } from '../../types';
+import { StudioPage } from './Studio';
+
+// Other engineers' modules are replaced so this test pins down only the Studio's own behaviour.
+vi.mock('../../analysis/passaggio', () => ({
+  passaggioFor: () => ({ lowMidi: 62, highMidi: 67 }),
+  VOICE_TYPE_LABELS: { bass: 'Bass', baritone: 'Baritone', tenor: 'Tenor', alto: 'Alto', mezzo: 'Mezzo-soprano', soprano: 'Soprano' },
+}));
+vi.mock('../../audio/recorder', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../audio/recorder')>();
+  return { ...actual, microphoneUnavailableReason: vi.fn(actual.microphoneUnavailableReason), createRecorder: vi.fn(actual.createRecorder) };
+});
+vi.mock('../../coach/exercises', () => ({
+  getExercise: (id: string) => (id === 'straw' ? { id, name: 'Straw phonation', goal: 'Balance airflow.' } : undefined),
+  EXERCISES: [],
+}));
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const SETTINGS: AppSettings = { voiceType: 'baritone', a4Hz: 440, anthropicApiKey: null, aiModel: 'claude-opus-5' };
+const BUILTINS = [
+  makeFakeProfile({ id: 'shawn-mendes', name: 'Shawn Mendes', tagline: 'Bright pop tenor mix', color: '#b97a12' }),
+  makeFakeProfile({ id: 'daniel-caesar', name: 'Daniel Caesar', tagline: 'Airy, intimate R&B', color: '#3a7556' }),
+  makeFakeProfile({ id: 'jalen-ngonda', name: 'Jalen Ngonda', tagline: 'Soul falsetto', color: '#b23c49' }),
+];
+
+function controller(overrides: Partial<AppState> = {}, fns: Partial<AppController> = {}): AppController {
+  const state = { ...createInitialState(SETTINGS, [], BUILTINS), ...overrides };
+  return {
+    state,
+    dispatch: vi.fn(),
+    builtins: BUILTINS,
+    profiles: BUILTINS,
+    profile: BUILTINS.find((b) => b.id === state.selectedProfileId) ?? null,
+    route: 'studio',
+    go: vi.fn(),
+    analyzeSamples: vi.fn(async () => true),
+    analyzeFile: vi.fn(async () => true),
+    analyzeDemo: vi.fn(async () => true),
+    loadReferenceFile: vi.fn(async () => true),
+    setReferenceVoiceType: vi.fn(),
+    clearReference: vi.fn(),
+    selectProfile: vi.fn(),
+    updateSettings: vi.fn(),
+    saveSession: vi.fn(() => null),
+    deleteSession: vi.fn(),
+    clearSessions: vi.fn(),
+    clearAllData: vi.fn(),
+    openPractice: vi.fn(),
+    recordDrill: vi.fn(),
+    theme: 'system',
+    setTheme: vi.fn(),
+    ...fns,
+  };
+}
+
+let container: HTMLDivElement;
+let root: Root;
+
+function render(app: AppController) {
+  act(() => {
+    root.render(
+      <AppContext.Provider value={app}>
+        <StudioPage />
+      </AppContext.Provider>,
+    );
+  });
+}
+
+function button(text: RegExp): HTMLButtonElement {
+  const b = Array.from(container.querySelectorAll('button')).find((el) => text.test(el.textContent ?? ''));
+  if (!b) throw new Error(`No button matching ${text}`);
+  return b;
+}
+
+beforeEach(() => {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+describe('StudioPage', () => {
+  it('renders the three singers plus the reference card, with the selected one pressed', () => {
+    render(controller());
+    const cards = Array.from(container.querySelectorAll<HTMLButtonElement>('.singer-card'));
+    expect(cards.map((c) => c.querySelector('.singer-card-name')?.textContent)).toEqual(['Shawn Mendes', 'Daniel Caesar', 'Jalen Ngonda', 'Reference clip']);
+    expect(cards[0].getAttribute('aria-pressed')).toBe('true');
+    expect(cards[1].getAttribute('aria-pressed')).toBe('false');
+    expect(cards[0].style.getPropertyValue('--card-color')).toBe('var(--singer-shawn)');
+    // Selected singer panel: description, traits and study songs.
+    expect(container.querySelector('#singer-panel-name')?.textContent).toBe('Shawn Mendes');
+    expect(container.textContent).toContain('Example Song');
+  });
+
+  it('selecting a singer goes through the controller', () => {
+    const app = controller();
+    render(app);
+    act(() => button(/Daniel Caesar/).click());
+    expect(app.selectProfile).toHaveBeenCalledWith('daniel-caesar');
+  });
+
+  it('points to upload when the microphone is unavailable (jsdom has no getUserMedia)', () => {
+    render(controller());
+    const record = button(/^Record$/);
+    expect(record.disabled).toBe(true);
+    expect(container.textContent).toMatch(/Recording is not available here/);
+    expect(container.textContent).toMatch(/record a voice memo on your phone/i);
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(input?.accept).toContain('audio/*');
+    expect(input?.accept).toContain('.m4a');
+  });
+
+  it('runs the demo take and opens the results', async () => {
+    const app = controller();
+    render(app);
+    await act(async () => button(/Try a demo take/).click());
+    expect(app.analyzeDemo).toHaveBeenCalledTimes(1);
+    expect(app.go).toHaveBeenCalledWith('results');
+  });
+
+  it('uploads a chosen audio file and rejects non-audio files with a message', async () => {
+    const app = controller();
+    render(app);
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const choose = (file: File) => {
+      Object.defineProperty(input, 'files', { value: [file], configurable: true });
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    await act(async () => choose(new File(['x'], 'notes.pdf', { type: 'application/pdf' })));
+    expect(app.analyzeFile).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toMatch(/does not look like an audio file/);
+    const memo = new File(['x'], 'memo.m4a', { type: 'audio/mp4' });
+    await act(async () => choose(memo));
+    expect(app.analyzeFile).toHaveBeenCalledWith(memo);
+    expect(app.go).toHaveBeenCalledWith('results');
+  });
+
+  it('shows analysis progress in a live region and disables capture while busy', () => {
+    render(controller({ status: 'analyzing', job: 'take', progress: 0.4, progressLabel: 'Analysing Demo take' }));
+    const bar = container.querySelector('[role="progressbar"]');
+    expect(bar?.getAttribute('aria-valuenow')).toBe('40');
+    expect(container.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain('Analysing Demo take');
+    expect(button(/Try a demo take/).disabled).toBe(true);
+  });
+
+  it('shows errors as alerts that can be dismissed', () => {
+    const app = controller({ error: 'Could not read song.mp3.' });
+    render(app);
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Could not read song.mp3.');
+    act(() => (alert?.querySelector('button') as HTMLButtonElement).click());
+    expect(app.dispatch).toHaveBeenCalledWith({ type: 'error/clear' });
+  });
+
+  it('the reference card opens the reference-clip panel', () => {
+    render(controller());
+    expect(container.querySelector('#ref-heading')).toBeNull();
+    act(() => button(/Reference clip/).click());
+    expect(container.querySelector('#ref-heading')).not.toBeNull();
+    expect(container.textContent).toMatch(/never leaves this device/);
+  });
+
+  it('links back to the last result', () => {
+    const app = controller({
+      analysis: makeFakeAnalysis(),
+      take: { samples: new Float32Array(1), sampleRate: 22050, source: 'demo', name: 'Demo take', durationSec: 12 },
+    });
+    render(app);
+    act(() => button(/View results/).click());
+    expect(app.go).toHaveBeenCalledWith('results');
+  });
+
+  it('announces a drill picked on the Practice page', () => {
+    render(controller({ drillExerciseId: 'straw' }));
+    expect(container.textContent).toContain('Recording a drill: Straw phonation');
+  });
+
+  it('explains a refused microphone and points to upload instead of dead-ending', async () => {
+    vi.mocked(microphoneUnavailableReason).mockReturnValueOnce(null);
+    vi.mocked(createRecorder).mockReturnValueOnce({
+      start: () => Promise.reject(new RecorderError('denied', 'Microphone access was blocked.')),
+      stop: () => Promise.resolve({ samples: new Float32Array(0), sampleRate: 48000 }),
+      cancel: () => undefined,
+      analyser: null,
+    });
+    render(controller());
+    const record = button(/^Record$/);
+    expect(record.disabled).toBe(false);
+    await act(async () => record.click());
+    expect(container.textContent).toContain('The microphone did not start');
+    expect(container.textContent).toContain('Microphone access was blocked.');
+    expect(container.textContent).toMatch(/record a voice memo on your phone, then upload it/i);
+    expect(button(/^Record$/).disabled).toBe(false);
+    expect(container.querySelector('input[type="file"]')).not.toBeNull();
+  });
+});

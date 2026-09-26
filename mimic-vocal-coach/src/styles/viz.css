@@ -1,0 +1,697 @@
+/* Charts, the Practice page and the Progress page. Colours come only from tokens.css (directly or
+   via color-mix); mobile first, two-column layouts from 721px like app.css. */
+
+/* ---------------------------------------------------------------- chart chrome */
+
+.viz {
+  min-width: 0;
+  max-width: 100%;
+}
+.viz svg {
+  display: block;
+}
+/* A chart renders at a default width until its container is measured; never let that first
+   frame widen the page. The pitch plot's scroller opts out below. */
+.viz > svg {
+  max-width: 100%;
+}
+
+.viz-tick {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  fill: var(--ink-3);
+}
+.viz-label {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  fill: var(--ink-2);
+}
+.viz-note {
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  fill: var(--ink-3);
+}
+.viz-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+
+.viz-legend {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) 14px;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.viz-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.viz-key {
+  display: inline-block;
+  flex: none;
+}
+.viz-key--line {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+}
+.viz-key--dashed {
+  width: 16px;
+  height: 0;
+  border-top: 2px dashed var(--ink-3);
+}
+.viz-key--band {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--reg-mix);
+  opacity: 0.3;
+}
+.viz-key--range {
+  width: 16px;
+  height: 6px;
+  border-radius: 3px;
+}
+.viz-key--block {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.viz-key-svg {
+  display: inline-block;
+  vertical-align: middle;
+}
+.viz-caption {
+  margin-top: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  max-width: 48ch;
+}
+.viz-empty {
+  padding: var(--space-4);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------- pitch plot */
+
+.pitchplot-readout {
+  min-height: 1.5em;
+  margin-bottom: var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pitchplot-frame {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+.pitchplot-axis {
+  flex: none;
+}
+.pitchplot-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.pitchplot-scroll--on {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.pitchplot-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.pitchplot-scroll svg {
+  max-width: none;
+  cursor: crosshair;
+}
+
+/* ---------------------------------------------------------------- style radar */
+
+.radar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+.radar .viz-legend {
+  justify-content: center;
+}
+.radar .viz-caption {
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------- range keyboard */
+
+.rangekb-white {
+  fill: var(--surface);
+  stroke: var(--line);
+  stroke-width: 1;
+}
+.rangekb-black {
+  fill: var(--ink-2);
+}
+/* Dark theme: keep the piano's light/dark key order (dark-grey "white" keys, near-black "black" keys)
+   instead of inverting it with the ink colours. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .rangekb-white {
+    fill: var(--surface-2);
+  }
+  :root:not([data-theme='light']) .rangekb-black {
+    fill: var(--paper);
+  }
+}
+:root[data-theme='dark'] .rangekb-white {
+  fill: var(--surface-2);
+}
+:root[data-theme='dark'] .rangekb-black {
+  fill: var(--paper);
+}
+
+/* ---------------------------------------------------------------- register bar */
+
+.regbar-bars {
+  display: grid;
+  gap: 6px;
+}
+.regbar-row {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+}
+.regbar-name {
+  line-height: 28px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.regbar-stack {
+  min-width: 0;
+}
+.regbar-track {
+  display: flex;
+  gap: 2px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+.regbar-track--target {
+  height: 16px;
+  margin-top: 6px;
+}
+.regbar-track--target .regbar-seg {
+  opacity: 0.72;
+}
+.regbar-seg,
+.regbar-label {
+  min-width: 0;
+  flex-basis: 0;
+}
+.regbar-labels {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+}
+.regbar-label {
+  overflow: hidden;
+  text-align: center;
+}
+.regbar-pct {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.regbar-empty {
+  align-self: center;
+  padding-left: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+/* ---------------------------------------------------------------- score dial */
+
+.dial svg {
+  width: 100%;
+  height: auto;
+}
+.dial-number {
+  font-family: var(--font-display);
+  fill: var(--ink);
+}
+.dial-label {
+  margin-top: var(--space-1);
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------- dimension meter */
+
+.meter {
+  display: grid;
+  gap: 6px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.meter-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+}
+.meter-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.meter-value {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.meter-chip {
+  min-width: 2.6em;
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-align: center;
+}
+.meter-chip--good {
+  border-color: var(--good);
+  background: color-mix(in srgb, var(--good) 16%, var(--surface));
+  color: var(--ink);
+}
+.meter-chip--warn {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+  color: var(--ink);
+}
+.meter-chip--bad {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, var(--surface));
+  color: var(--ink);
+}
+.meter-track {
+  position: relative;
+  height: 10px;
+  margin: var(--space-1) 0;
+  border-radius: 5px;
+  background: var(--surface-2);
+}
+.meter-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent-soft);
+  box-shadow:
+    inset 1px 0 0 var(--accent),
+    inset -1px 0 0 var(--accent);
+}
+.meter-ideal {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+.meter-marker {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+/* Off the scale: the marker becomes an arrow pointing past the end of the track. */
+.meter-marker--off-low {
+  border-radius: 0;
+  clip-path: polygon(0 50%, 100% 0, 100% 100%);
+}
+.meter-marker--off-high {
+  border-radius: 0;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+.meter-missing {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.meter-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+.meter-target {
+  flex: 1;
+  text-align: center;
+}
+.meter-summary {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------- practice page */
+
+.practice-safety {
+  margin-top: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--warn);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  max-width: 70ch;
+}
+.practice-noaudio {
+  margin: var(--space-3) 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.refpitch {
+  padding: var(--space-3) 0 var(--space-4);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.refpitch .subhead {
+  margin-top: 0;
+}
+.refpitch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.refpitch-select {
+  min-width: 0;
+  width: auto;
+}
+.practice-section {
+  margin-top: var(--space-6);
+}
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.filter-chip {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.filter-chip:hover:not([aria-pressed='true']) {
+  border-color: var(--ink-3);
+  color: var(--ink);
+}
+.filter-chip[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.ex-grid {
+  display: grid;
+  gap: var(--space-4);
+}
+.ex-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+.ex-card--focus {
+  border-top: 3px solid var(--accent);
+}
+.ex-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.ex-name {
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: var(--fs-md);
+  line-height: 1.3;
+}
+.ex-duration {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.ex-goal {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.ex-helps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ex-steps {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: 1.3em;
+  font-size: var(--fs-sm);
+}
+.ex-cautions {
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--warn);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.ex-cautions ul {
+  margin: var(--space-1) 0 0;
+  padding-left: 1.1em;
+}
+.ex-cautions-title {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.ex-pattern {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.ex-pattern-desc {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.ex-player {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+.ex-now {
+  min-height: 1.5em;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.ex-actions {
+  margin-top: auto;
+}
+
+/* ---------------------------------------------------------------- progress page */
+
+.hist-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+.hist-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+.hist-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.hist-tab:hover:not([aria-pressed='true']) {
+  border-color: var(--ink-3);
+}
+.hist-tab[aria-pressed='true'] {
+  background: var(--surface);
+  border-color: var(--tab-color, var(--accent));
+  box-shadow: inset 0 0 0 1px var(--tab-color, var(--accent));
+  font-weight: 600;
+}
+.hist-tab-dot {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--tab-color, var(--singer, var(--accent)));
+}
+.hist-tab-count {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.hist-singer {
+  margin: var(--space-2) 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.hist-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0 0 var(--space-2);
+}
+.hist-stats dt {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.hist-stats dd {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.hist-metric {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: var(--space-5) 0 var(--space-2);
+}
+.hist-metric .subhead {
+  margin: 0;
+}
+.hist-metric .select {
+  flex: 1 1 200px;
+  min-width: 0;
+  max-width: 320px;
+}
+.hist-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+}
+.hist-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.hist-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.hist-row-date {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.hist-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.hist-row-label {
+  overflow-wrap: anywhere;
+}
+.hist-row-score {
+  min-width: 2ch;
+  text-align: right;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+.hist-more {
+  margin-top: var(--space-3);
+}
+.hist-clear {
+  margin-top: var(--space-5);
+}
+.hist-empty {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 62ch;
+  padding: var(--space-5);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-md);
+}
+
+@media (min-width: 721px) {
+  .ex-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
