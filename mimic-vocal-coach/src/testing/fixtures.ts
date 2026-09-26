@@ -104,6 +104,7 @@ export function makeFakeAnalysis(style: Partial<StyleVector> = {}): VoiceAnalysi
     style: { ...FAKE_STYLE, ...style },
     quality: { clippingRatio: 0, noiseFloorDb: -64, snrDb: 38 },
     warnings: [],
+    issues: [],
   };
 }
 

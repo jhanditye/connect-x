@@ -1,3 +1,28 @@
+/* Self-hosted fonts (latin subset, SIL Open Font License; see src/assets/fonts/README.md).
+   Bundled so the app renders offline and makes no third-party requests. Figtree and JetBrains Mono
+   are variable fonts, so one file covers every weight. */
+@font-face {
+  font-family: 'Gloock';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/gloock-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Figtree';
+  font-style: normal;
+  font-weight: 300 900;
+  font-display: swap;
+  src: url('../assets/fonts/figtree-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('../assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+}
+
 /* Design tokens. Light palette on :root, dark palette redefined for the OS setting (unless the
    host forces light) and for an explicit data-theme="dark". Components must use these tokens,
    never raw colours. */
@@ -11,7 +36,7 @@
   --surface-2: #e4e7df;
   --ink: #17191c;
   --ink-2: #4b515a;
-  --ink-3: #737a84;
+  --ink-3: #5f6670; /* 5.0:1 on --paper, 4.6:1 on --surface-2 (WCAG AA for small text) */
   --line: #d3d7ce;
 
   /* Interaction accent (buttons, links, focus). */

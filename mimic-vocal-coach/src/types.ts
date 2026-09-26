@@ -135,6 +135,15 @@ export interface AudioQuality {
   snrDb: number;
 }
 
+/**
+ * Machine-readable problems with a take, so the coach and UI can react without parsing warning text.
+ * - too-little-singing: under ~3 s of voiced singing; style measures are unreliable or null.
+ * - accompaniment: sounds like singing over instruments (a song mix); pitch may follow the bass.
+ * - speech-like: mostly short syllables with few held notes; singing measures are unreliable.
+ * - noisy / clipping / too-quiet / trimmed: recording-quality problems (see `warnings` for the wording).
+ */
+export type AnalysisIssue = 'too-little-singing' | 'accompaniment' | 'speech-like' | 'noisy' | 'clipping' | 'too-quiet' | 'trimmed';
+
 export interface VoiceAnalysis {
   version: 1;
   durationSec: number;
@@ -176,6 +185,8 @@ export interface VoiceAnalysis {
   quality: AudioQuality;
   /** Human-readable problems with the recording itself (too short, clipping, noisy, too quiet...). */
   warnings: string[];
+  /** The same problems as machine-readable codes (one code may cover several warnings). */
+  issues: AnalysisIssue[];
 }
 
 // ---------------------------------------------------------------------------------------------
