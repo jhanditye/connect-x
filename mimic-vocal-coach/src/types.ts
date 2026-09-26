@@ -233,8 +233,11 @@ export interface SingerProfile {
   signatureMoves: SignatureMove[];
   /** Hex colour used for this singer in the UI. */
   color: string;
-  /** 'builtin' = hand-authored estimate; 'reference' = measured from a clip the user uploaded. */
-  source: 'builtin' | 'reference';
+  /**
+   * 'builtin' = hand-authored estimate; 'measured' = a builtin singer whose targets were measured from
+   * clips of that singer the user added; 'reference' = measured from a single reference clip.
+   */
+  source: 'builtin' | 'measured' | 'reference';
   /** Caveat shown in the UI about how the targets were derived. */
   sourceNote: string;
 }
@@ -318,6 +321,22 @@ export interface CoachingPlan {
   healthNotes: string[];
   /** One sentence: what to record next session. */
   nextTake: string;
+}
+
+/**
+ * The measurements of one clip of an artist (numbers only, never audio), kept so the app can build
+ * that singer's targets from their real recordings instead of the hand-set estimates.
+ */
+export interface MeasuredClip {
+  id: string;
+  /** File name without extension. */
+  name: string;
+  /** ISO timestamp. */
+  addedAt: string;
+  durationSec: number;
+  voicedSec: number;
+  style: StyleVector;
+  pitch: { lowMidi: number | null; highMidi: number | null; tessituraLowMidi: number | null; tessituraHighMidi: number | null };
 }
 
 // ---------------------------------------------------------------------------------------------

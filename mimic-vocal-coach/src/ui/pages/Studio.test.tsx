@@ -63,6 +63,9 @@ function controller(overrides: Partial<AppState> = {}, fns: Partial<AppControlle
     deleteSession: vi.fn(),
     clearSessions: vi.fn(),
     clearAllData: vi.fn(),
+    measureClips: vi.fn(async () => ({ added: 0, rejected: [] })),
+    removeMeasuredClip: vi.fn(),
+    clearMeasuredClips: vi.fn(),
     openPractice: vi.fn(),
     recordDrill: vi.fn(),
     theme: 'system',
@@ -131,6 +134,41 @@ describe('StudioPage', () => {
     // Selected singer panel: description, traits and study songs.
     expect(container.querySelector('#singer-panel-name')?.textContent).toBe('Shawn Mendes');
     expect(container.textContent).toContain('Example Song');
+  });
+
+  it('offers to measure the selected singer from real recordings', async () => {
+    const measureClips = vi.fn(async () => ({ added: 1, rejected: [{ name: 'full-mix', reason: 'This clip sounds like a full song mix.' }] }));
+    render(controller({}, { measureClips }));
+    expect(container.querySelector('#measure-heading')?.textContent).toBe('Measure Shawn from real recordings');
+    expect(container.textContent).toContain('These targets are estimates from listening');
+    const input = container.querySelector<HTMLInputElement>('.measure input[type="file"]')!;
+    expect(input.multiple).toBe(true);
+    const files = [new File(['x'], 'stitches-vocal.wav', { type: 'audio/wav' }), new File(['x'], 'full-mix.mp3', { type: 'audio/mpeg' })];
+    Object.defineProperty(input, 'files', { value: files, configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(measureClips).toHaveBeenCalledWith('shawn-mendes', files, expect.any(Function));
+    expect(container.textContent).toContain('Added 1 clip.');
+    expect(container.textContent).toContain('full song mix');
+  });
+
+  it('shows measured clips on the card and in the panel', () => {
+    const clip = {
+      id: 'c1',
+      name: 'Stitches vocal',
+      addedAt: '2026-09-26T10:00:00.000Z',
+      durationSec: 30,
+      voicedSec: 24,
+      style: makeFakeAnalysis().style,
+      pitch: { lowMidi: 50, highMidi: 70, tessituraLowMidi: 55, tessituraHighMidi: 65 },
+    };
+    const removeMeasuredClip = vi.fn();
+    render(controller({ measurements: { 'shawn-mendes': [clip] } }, { removeMeasuredClip }));
+    expect(container.querySelector('.singer-card .singer-card-footer')?.textContent).toBe('Measured from 1 clip');
+    expect(container.textContent).toContain('Stitches vocal');
+    act(() => button(/^Remove$/).click());
+    expect(removeMeasuredClip).toHaveBeenCalledWith('shawn-mendes', 'c1');
   });
 
   it('selecting a singer goes through the controller', () => {

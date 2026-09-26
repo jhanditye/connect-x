@@ -17,6 +17,9 @@ export function FileDrop(props: {
   hint?: ReactNode;
   disabled?: boolean;
   onFile: (file: File) => void;
+  /** Accept several files at once; they arrive together in `onFiles` (non-audio files are left out and reported). */
+  multiple?: boolean;
+  onFiles?: (files: File[]) => void;
   onReject?: (message: string) => void;
   compact?: boolean;
 }) {
@@ -25,6 +28,18 @@ export function FileDrop(props: {
   const [over, setOver] = useState(false);
 
   const take = (files: FileList | null | undefined) => {
+    if (props.multiple && props.onFiles) {
+      const all = Array.from(files ?? []);
+      const audio = all.filter(looksLikeAudio);
+      const others = all.filter((f) => !looksLikeAudio(f));
+      if (others.length) {
+        props.onReject?.(
+          `${others.map((f) => `"${f.name}"`).join(', ')} ${others.length === 1 ? 'does' : 'do'} not look like audio. Use WAV, MP3, M4A, AAC, OGG, WebM or FLAC.`,
+        );
+      }
+      if (audio.length) props.onFiles(audio);
+      return;
+    }
     const file = files?.[0];
     if (!file) return;
     if (!looksLikeAudio(file)) {
@@ -56,6 +71,7 @@ export function FileDrop(props: {
         className="visually-hidden"
         type="file"
         accept={AUDIO_ACCEPT}
+        multiple={props.multiple}
         disabled={props.disabled}
         onChange={(e) => {
           take(e.currentTarget.files);

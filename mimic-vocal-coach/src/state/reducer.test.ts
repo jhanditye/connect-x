@@ -482,3 +482,48 @@ describe('practiceFocusIds', () => {
     expect(practiceFocusIds({ practiceFocus: [], plan })).toBeUndefined();
   });
 });
+
+describe('measured singer clips', () => {
+  const measured = (base: SingerProfile, clips: { id: string }[]) =>
+    ({ ...base, source: 'measured' as const, sourceNote: `measured from ${clips.length}` }) as SingerProfile;
+  const fakeClip = (id: string) => ({
+    id,
+    name: id,
+    addedAt: '2026-09-26T10:00:00.000Z',
+    durationSec: 20,
+    voicedSec: 15,
+    style: makeFakeAnalysis().style,
+    pitch: { lowMidi: 50, highMidi: 70, tessituraLowMidi: 55, tessituraHighMidi: 65 },
+  });
+
+  it('replaces the selected singer with its measured profile and re-scores', () => {
+    const measuredProfile = vi.fn(measured);
+    const s = setup({ measuredProfile });
+    const analysis = makeFakeAnalysis();
+    const withTakeState = s.reduce(s.state, { type: 'take/analyzed', take: take(), analysis, opts: takeOptions(SETTINGS) });
+    const next = s.reduce(withTakeState, { type: 'measurements/set', singerId: 'shawn-mendes', clips: [fakeClip('a')] });
+    expect(activeProfile(next, s.deps)?.source).toBe('measured');
+    expect(availableProfiles(next, s.deps)[0].source).toBe('measured');
+    const lastCompared = (s.deps.compare as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as SingerProfile;
+    expect(lastCompared.source).toBe('measured');
+  });
+
+  it('keeps the same measured profile object until the clips change', () => {
+    const measuredProfile = vi.fn(measured);
+    const s = setup({ measuredProfile });
+    const next = s.reduce(s.state, { type: 'measurements/set', singerId: 'daniel-caesar', clips: [fakeClip('a')] });
+    const a = availableProfiles(next, s.deps)[1];
+    const b = availableProfiles({ reference: next.reference, measurements: next.measurements }, s.deps)[1];
+    expect(a).toBe(b);
+    expect(measuredProfile).toHaveBeenCalledTimes(1);
+  });
+
+  it('goes back to the estimates when the clips are removed, and ignores unknown singers', () => {
+    const s = setup({ measuredProfile: measured });
+    const on = s.reduce(s.state, { type: 'measurements/set', singerId: 'shawn-mendes', clips: [fakeClip('a')] });
+    const off = s.reduce(on, { type: 'measurements/set', singerId: 'shawn-mendes', clips: [] });
+    expect(off.measurements['shawn-mendes']).toBeUndefined();
+    expect(activeProfile(off, s.deps)?.source).toBe('builtin');
+    expect(s.reduce(off, { type: 'measurements/set', singerId: 'nobody', clips: [fakeClip('b')] })).toBe(off);
+  });
+});

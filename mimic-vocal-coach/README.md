@@ -29,14 +29,23 @@ explains each measure and its limits.
 
 ## The singer profiles
 
-Each built-in profile is a set of hand-set targets (with tolerances and weights) based on listening
-and published descriptions of the singer's voice, plus study songs, signature moves and range
-estimates. They are estimates, not measurements of the artists' recordings.
+Out of the box, each singer's targets (with tolerances and weights) are estimates based on listening
+and published descriptions of their voice, plus study songs, signature moves and range estimates.
 
-For a measured target, upload a **reference clip** from music you own (an isolated vocal or an a
-cappella section works best). Mimic analyses it the same way it analyses you, targets those numbers,
-and compares your take phrase by phrase after aligning the two pitch contours (key-shift-invariant
-DTW, so singing an octave lower is fine).
+To use **measurements of their real recordings**, open the singer in the Studio and choose
+**Measure from real recordings**, then add clips of that singer from music you own: isolated vocals
+(vocal stems) or a cappella sections. Mimic analyses each clip like your takes, refuses full song mixes,
+speech and clips with too little singing (with the reason), and rebuilds that singer's targets from the
+clips it keeps, weighted by singing time, with bands that widen when the clips disagree. The singer's
+cues, songs and signature moves stay. Only the measurements are stored, in your browser. Tuning keeps a
+fixed "clean" target (released vocals are often pitch-corrected) and rasp, chest weight and loudness
+climb stay capped at healthy levels.
+
+A **reference clip** is the one-song version: Mimic targets that recording and compares your take
+with it phrase by phrase after aligning the two pitch contours (key-shift-invariant DTW, so singing an
+octave lower is fine).
+
+The app ships no artist audio, and the artists have nothing to do with it.
 
 ## Features
 

@@ -18,10 +18,27 @@ export interface SamplesInput {
   notices?: string[];
 }
 
+/** Progress of measuring a batch of artist clips (one file at a time). */
+export interface MeasureProgress {
+  index: number;
+  count: number;
+  name: string;
+  phase: 'decoding' | 'analyzing';
+  /** 0..1 within the current file. */
+  fraction: number;
+}
+
+export interface MeasureResult {
+  /** Clips that were measured and kept. */
+  added: number;
+  /** Files that could not be used, with the reason in plain English. */
+  rejected: { name: string; reason: string }[];
+}
+
 export interface AppController {
   state: AppState;
   dispatch: Dispatch<Action>;
-  /** The three builtin singers, in display order. */
+  /** The three builtin singers, in display order (with measured targets where the user added clips). */
   builtins: SingerProfile[];
   /** Builtins plus the reference profile when a reference clip is loaded. */
   profiles: SingerProfile[];
@@ -46,6 +63,11 @@ export interface AppController {
   deleteSession(id: string): void;
   clearSessions(): void;
   clearAllData(): void;
+  /** Measures clips of a builtin singer from the user's own music; their targets replace the estimates. */
+  measureClips(singerId: string, files: File[], onProgress?: (p: MeasureProgress) => void): Promise<MeasureResult>;
+  removeMeasuredClip(singerId: string, clipId: string): void;
+  /** Removes every measured clip of a singer, going back to the estimated targets. */
+  clearMeasuredClips(singerId: string): void;
   openPractice(exerciseIds?: string[]): void;
   recordDrill(exerciseId: string): void;
   theme: ThemePref;

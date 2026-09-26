@@ -644,6 +644,13 @@
   font-weight: 600;
   color: var(--ink);
 }
+.singer-card-footer {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
 .singer-card--reference {
   background: transparent;
   border-style: dashed;
@@ -1033,6 +1040,77 @@
   margin-top: var(--space-4);
   font-size: var(--fs-xs);
   color: var(--ink-3);
+}
+
+/* Measure a builtin singer from the user's own recordings (MeasurePanel). */
+.measure {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: var(--space-3);
+}
+.measure-intro {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.measure-badge {
+  display: inline-block;
+  margin-right: var(--space-1);
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.measure-clips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+.measure-clips li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.measure-clip-name {
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.measure-progress {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--fs-sm);
+}
+.measure-result {
+  font-size: var(--fs-sm);
+  display: grid;
+  gap: var(--space-2);
+}
+.measure-rejected {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--ink-2);
+  display: grid;
+  gap: var(--space-1);
+}
+.measure-rejected strong {
+  overflow-wrap: anywhere;
+}
+.measure-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
 }
 
 .reference-panel {

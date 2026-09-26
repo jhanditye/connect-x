@@ -8,15 +8,18 @@ import { makeDemoTake } from '../analysis/demo';
 import { decodeAudioFile } from '../audio/decode';
 import { isScoreable } from '../coach/compare';
 import { getExercise } from '../coach/exercises';
+import { ARTIST_VOICE_TYPE, clipFromAnalysis, MAX_CLIPS_PER_SINGER } from '../coach/measured';
 import { clearSessions, deleteSession, loadSessions, saveSession, sessionFromResults } from '../storage/history';
+import { clearMeasurements, loadMeasurements, saveMeasurements } from '../storage/measurements';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage/settings';
-import type { AnalysisOptions, AppSettings, ReferenceComparison, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
-import { AppContext, type AppController, type SamplesInput } from './context';
+import type { AnalysisOptions, AppSettings, MeasuredClip, ReferenceComparison, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
+import { AppContext, type AppController, type MeasureProgress, type MeasureResult, type SamplesInput } from './context';
 import {
   availableProfiles,
   activeProfile,
   createInitialState,
   createReducer,
+  effectiveBuiltins,
   referenceOptions,
   sameOptions,
   saveKey,
@@ -64,10 +67,17 @@ function message(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
+function newClipId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return c?.randomUUID ? c.randomUUID() : `clip-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) {
   const deps = props.deps ?? scoringDeps;
   const reducer = useMemo(() => createReducer(deps), [deps]);
-  const [state, dispatch] = useReducer(reducer, undefined, () => createInitialState(loadSettings(), loadSessions(), deps.builtins));
+  const [state, dispatch] = useReducer(reducer, undefined, () =>
+    createInitialState(loadSettings(), loadSessions(), deps.builtins, loadMeasurements()),
+  );
   const [route, go] = useHashRoute();
   const [theme, setThemeState] = useState<ThemePref>(loadTheme);
 
@@ -275,19 +285,73 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
     [deps, refreshSessions],
   );
 
+  // Clips of a builtin singer from the user's own music: each file is decoded and analysed as the
+  // artist's voice (not the user's), checked like a reference clip (song mixes, speech and too little
+  // singing are refused with the reason), and only the measurements are kept.
+  const setMeasuredClips = useCallback((singerId: string, clips: MeasuredClip[]) => {
+    const all = { ...stateRef.current.measurements };
+    if (clips.length) all[singerId] = clips;
+    else delete all[singerId];
+    saveMeasurements(all);
+    dispatch({ type: 'measurements/set', singerId, clips });
+  }, []);
+
+  const measureClips = useCallback(
+    async (singerId: string, files: File[], onProgress?: (p: MeasureProgress) => void): Promise<MeasureResult> => {
+      const added: MeasuredClip[] = [];
+      const rejected: MeasureResult['rejected'] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const name = stripExtension(file.name) || `Clip ${i + 1}`;
+        const report = (phase: MeasureProgress['phase'], fraction: number) => onProgress?.({ index: i, count: files.length, name, phase, fraction });
+        report('decoding', 0);
+        let decoded: Awaited<ReturnType<typeof decodeAudioFile>>;
+        try {
+          decoded = await decodeAudioFile(file, { maxSeconds: MAX_ANALYSIS_SEC });
+        } catch (err) {
+          rejected.push({ name, reason: message(err, `Could not read ${file.name}.`) });
+          continue;
+        }
+        const { samples } = trimForAnalysis(decoded.samples, decoded.sampleRate, name, decoded.sourceDurationSec);
+        let analysis: VoiceAnalysis;
+        try {
+          const opts = { voiceType: ARTIST_VOICE_TYPE, a4Hz: stateRef.current.settings.a4Hz };
+          analysis = await analyzeInWorker(samples, decoded.sampleRate, opts, (f: number) => report('analyzing', f));
+        } catch (err) {
+          rejected.push({ name, reason: message(err, 'The analysis failed.') });
+          continue;
+        }
+        const { usable, reason } = deps.referenceUsability(analysis);
+        if (!usable) {
+          rejected.push({ name, reason: reason ?? 'This clip has too little clear singing to measure.' });
+          continue;
+        }
+        added.push(clipFromAnalysis(analysis, name, newClipId(), new Date().toISOString()));
+      }
+      if (added.length) {
+        const current = stateRef.current.measurements[singerId] ?? [];
+        setMeasuredClips(singerId, [...current, ...added].slice(-MAX_CLIPS_PER_SINGER));
+      }
+      return { added: added.length, rejected };
+    },
+    [deps, setMeasuredClips],
+  );
+
   const setTheme = useCallback((t: ThemePref) => {
     saveTheme(t);
     setThemeState(t);
   }, []);
 
   const reference = state.reference;
-  const profiles = useMemo(() => availableProfiles({ reference }, deps), [reference, deps]);
+  const measurements = state.measurements;
+  const profiles = useMemo(() => availableProfiles({ reference, measurements }, deps), [reference, measurements, deps]);
+  const builtins = useMemo(() => effectiveBuiltins({ measurements }, deps), [measurements, deps]);
 
   const controller = useMemo<AppController>(
     () => ({
       state,
       dispatch,
-      builtins: deps.builtins,
+      builtins,
       profiles,
       profile: activeProfile(state, deps),
       route,
@@ -309,9 +373,17 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         clearSessions();
         refreshSessions();
       },
+      measureClips,
+      removeMeasuredClip: (singerId: string, clipId: string) =>
+        setMeasuredClips(
+          singerId,
+          (stateRef.current.measurements[singerId] ?? []).filter((c) => c.id !== clipId),
+        ),
+      clearMeasuredClips: (singerId: string) => setMeasuredClips(singerId, []),
       clearAllData: () => {
         runRef.current++;
         clearSessions();
+        clearMeasurements();
         saveSettings(DEFAULT_SETTINGS);
         setTheme('system');
         dispatch({ type: 'reset', settings: { ...DEFAULT_SETTINGS }, sessions: [] });
@@ -327,7 +399,25 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
       theme,
       setTheme,
     }),
-    [state, deps, profiles, route, go, analyzeSamples, analyzeFile, analyzeDemo, loadReferenceFile, updateSettings, saveCurrent, refreshSessions, theme, setTheme],
+    [
+      state,
+      deps,
+      builtins,
+      profiles,
+      route,
+      go,
+      analyzeSamples,
+      analyzeFile,
+      analyzeDemo,
+      loadReferenceFile,
+      updateSettings,
+      saveCurrent,
+      refreshSessions,
+      measureClips,
+      setMeasuredClips,
+      theme,
+      setTheme,
+    ],
   );
 
   return <AppContext.Provider value={controller}>{props.children}</AppContext.Provider>;

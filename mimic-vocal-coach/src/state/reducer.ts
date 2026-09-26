@@ -5,6 +5,7 @@ import type {
   AnalysisOptions,
   AppSettings,
   CoachingPlan,
+  MeasuredClip,
   Comparison,
   ReferenceComparison,
   SessionRecord,
@@ -104,6 +105,8 @@ export interface AppState {
   savedKeys: string[];
   /** The AI coach conversation, kept here so it survives leaving Results; `key` says which result it is about. */
   aiThread: { key: string; turns: AiTurn[] } | null;
+  /** Clips of each builtin singer the user added, by singer id; they replace that singer's estimated targets. */
+  measurements: Record<string, MeasuredClip[]>;
 }
 
 export interface ScoringDeps {
@@ -115,6 +118,8 @@ export interface ScoringDeps {
   referenceUsability(ref: VoiceAnalysis): { usable: boolean; reason: string | null };
   /** Used by the provider after an analysis lands (it is too slow to run inside the reducer). */
   compareToReference(user: VoiceAnalysis, ref: VoiceAnalysis): ReferenceComparison;
+  /** Builds a builtin singer's profile from measured clips (coach/measured.ts). Without it, clips are ignored. */
+  measuredProfile?(base: SingerProfile, clips: MeasuredClip[]): SingerProfile;
 }
 
 export type Action =
@@ -138,6 +143,8 @@ export type Action =
   | { type: 'session/saved'; key: string }
   | { type: 'ai/thread'; key: string; turns: AiTurn[] }
   | { type: 'reference/voiceType'; voiceType: VoiceType | null }
+  /** Replaces the measured clips for one builtin singer (an empty list goes back to the estimates). */
+  | { type: 'measurements/set'; singerId: string; clips: MeasuredClip[] }
   | { type: 'reference/clear' }
   | { type: 'take/clear' }
   | { type: 'sessions/set'; sessions: SessionRecord[] }
@@ -148,7 +155,14 @@ export type Action =
   | { type: 'drill/set'; exerciseId: string | null }
   | { type: 'reset'; settings: AppSettings; sessions: SessionRecord[] };
 
-export function createInitialState(settings: AppSettings, sessions: SessionRecord[], builtins: SingerProfile[]): AppState {
+type ProfileDeps = Pick<ScoringDeps, 'builtins' | 'measuredProfile'>;
+
+export function createInitialState(
+  settings: AppSettings,
+  sessions: SessionRecord[],
+  builtins: SingerProfile[],
+  measurements: Record<string, MeasuredClip[]> = {},
+): AppState {
   const first = builtins[0]?.id ?? '';
   return {
     settings,
@@ -176,19 +190,47 @@ export function createInitialState(settings: AppSettings, sessions: SessionRecor
     referenceSerial: 0,
     savedKeys: [],
     aiThread: null,
+    measurements,
   };
 }
 
-/** Builtin singers followed by the reference profile when a usable reference clip is loaded. */
-export function availableProfiles(state: Pick<AppState, 'reference'>, deps: Pick<ScoringDeps, 'builtins'>): SingerProfile[] {
-  return state.reference?.usable ? [...deps.builtins, state.reference.profile] : deps.builtins;
+// One measured profile per clips array: the reducer replaces the array whenever the clips change, so
+// the profile object (and anything keyed on it) stays stable between unrelated state updates.
+const measuredCache = new WeakMap<MeasuredClip[], Map<string, SingerProfile>>();
+
+/** The builtin singers, each with measured targets when the user has added clips of that singer. */
+export function effectiveBuiltins(state: Pick<AppState, 'measurements'>, deps: ProfileDeps): SingerProfile[] {
+  const build = deps.measuredProfile;
+  if (!build) return deps.builtins;
+  return deps.builtins.map((base) => {
+    const clips = state.measurements?.[base.id];
+    if (!clips || clips.length === 0) return base;
+    let byId = measuredCache.get(clips);
+    if (!byId) {
+      byId = new Map();
+      measuredCache.set(clips, byId);
+    }
+    let profile = byId.get(base.id);
+    if (!profile) {
+      profile = build(base, clips);
+      byId.set(base.id, profile);
+    }
+    return profile;
+  });
 }
 
-export function resolveProfile(state: AppState, deps: Pick<ScoringDeps, 'builtins'>, id = state.selectedProfileId): SingerProfile | null {
+/** Builtin singers (measured where the user added clips) followed by the reference profile when a usable reference clip is loaded. */
+export function availableProfiles(state: Pick<AppState, 'reference' | 'measurements'>, deps: ProfileDeps): SingerProfile[] {
+  const builtins = effectiveBuiltins(state, deps);
+  return state.reference?.usable ? [...builtins, state.reference.profile] : builtins;
+}
+
+export function resolveProfile(state: AppState, deps: ProfileDeps, id = state.selectedProfileId): SingerProfile | null {
   if (id === REFERENCE_ID) {
     return state.reference?.usable ? state.reference.profile : resolveProfile(state, deps, state.builtinProfileId);
   }
-  return deps.builtins.find((p) => p.id === id) ?? deps.builtins[0] ?? null;
+  const builtins = effectiveBuiltins(state, deps);
+  return builtins.find((p) => p.id === id) ?? builtins[0] ?? null;
 }
 
 /** "baritone@440": the options an analysis was computed with, as part of a save key. */
@@ -210,7 +252,7 @@ export function saveKey(
   return `${state.takeSerial}/${optionsTag(state.takeOpts)}|${target}`;
 }
 
-export function activeProfile(state: AppState, deps: Pick<ScoringDeps, 'builtins'>): SingerProfile | null {
+export function activeProfile(state: AppState, deps: ProfileDeps): SingerProfile | null {
   return resolveProfile(state, deps);
 }
 
@@ -440,6 +482,16 @@ export function createReducer(deps: ScoringDeps) {
 
       case 'drill/set':
         return { ...state, drillExerciseId: action.exerciseId };
+
+      case 'measurements/set': {
+        if (!deps.builtins.some((p) => p.id === action.singerId)) return state;
+        const measurements = { ...state.measurements };
+        if (action.clips.length) measurements[action.singerId] = action.clips;
+        else delete measurements[action.singerId];
+        const next: AppState = { ...state, measurements };
+        // Only the selected singer's plan depends on these targets.
+        return state.selectedProfileId === action.singerId ? rescore({ ...next, practiceFocus: null }, deps) : next;
+      }
 
       case 'reset':
         return { ...createInitialState(action.settings, action.sessions, deps.builtins) };

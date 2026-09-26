@@ -69,7 +69,7 @@ function Shell() {
       </main>
       <footer className="footer">
         <p>
-          Mimic analyses your singing on this device. Singer profiles are listening-based estimates; the app is not affiliated with the
+          Mimic analyses your singing on this device. Singer profiles are listening-based estimates until you measure them from recordings you own; the app is not affiliated with the
           artists.
         </p>
       </footer>

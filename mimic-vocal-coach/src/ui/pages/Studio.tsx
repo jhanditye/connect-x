@@ -14,6 +14,7 @@ import { FileDrop } from '../components/FileDrop';
 import { formatClock, noteRange } from '../components/format';
 import { Icon } from '../components/Icon';
 import { LiveMonitor } from '../components/LiveMonitor';
+import { MeasurePanel } from '../components/MeasurePanel';
 import { Notice } from '../components/Notice';
 import { ReferenceCard, SingerCard } from '../components/SingerCard';
 import { shortName, singerColor } from '../components/singer';
@@ -32,17 +33,27 @@ function scrollBehavior(): ScrollBehavior {
   }
 }
 
+function measuredFooter(clips: number): ReactNode {
+  return clips > 0 ? `Measured from ${clips} clip${clips === 1 ? '' : 's'}` : undefined;
+}
+
 function recordingName(): string {
   const when = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
   return `Recording ${when}`;
 }
 
-function SingerPanel(props: { profile: SingerProfile; baseName?: string }) {
+function SingerPanel(props: { profile: SingerProfile; baseName?: string; measure?: ReactNode }) {
   const { profile } = props;
   const style = { '--singer': singerColor(profile) } as CSSProperties;
   return (
     <section className="singer-panel" style={style} aria-labelledby="singer-panel-name">
-      <p className="eyebrow">{profile.source === 'reference' ? 'Target from your reference clip' : 'Target sound'}</p>
+      <p className="eyebrow">
+        {profile.source === 'reference'
+          ? 'Target from your reference clip'
+          : profile.source === 'measured'
+            ? 'Target sound, measured from your clips'
+            : 'Target sound'}
+      </p>
       <h2 id="singer-panel-name" className="singer-panel-name">
         {profile.name}
       </h2>
@@ -77,6 +88,7 @@ function SingerPanel(props: { profile: SingerProfile; baseName?: string }) {
         {props.baseName ? `Weights, songs and signature moves come from the ${props.baseName} profile. ` : ''}
         {profile.sourceNote}
       </p>
+      {props.measure}
     </section>
   );
 }
@@ -287,7 +299,13 @@ export function StudioPage() {
         </h2>
         <div className="singer-grid">
           {builtins.map((p) => (
-            <SingerCard key={p.id} profile={p} selected={state.selectedProfileId === p.id} onSelect={() => app.selectProfile(p.id)} />
+            <SingerCard
+              key={p.id}
+              profile={p}
+              selected={state.selectedProfileId === p.id}
+              onSelect={() => app.selectProfile(p.id)}
+              footer={measuredFooter(state.measurements[p.id]?.length ?? 0)}
+            />
           ))}
           <ReferenceCard
             loadedName={state.reference?.name ?? null}
@@ -417,7 +435,22 @@ export function StudioPage() {
 
         <div className="studio-side">
           {profile ? (
-            <SingerPanel profile={profile} baseName={profile.source === 'reference' ? baseName : undefined} />
+            <SingerPanel
+              profile={profile}
+              baseName={profile.source === 'reference' ? baseName : undefined}
+              measure={
+                profile.source === 'reference' ? undefined : (
+                  <MeasurePanel
+                    key={profile.id}
+                    singerName={profile.name}
+                    clips={state.measurements[profile.id] ?? []}
+                    onMeasure={(files, onProgress) => app.measureClips(profile.id, files, onProgress)}
+                    onRemove={(clipId) => app.removeMeasuredClip(profile.id, clipId)}
+                    onClear={() => app.clearMeasuredClips(profile.id)}
+                  />
+                )
+              }
+            />
           ) : (
             <p className="muted">Choose a singer to see their sound.</p>
           )}

@@ -141,7 +141,12 @@ function summarizeProfile(p: SingerProfile): object {
   for (const [k, band] of Object.entries(p.targets)) if (band) targets[k] = roundedBand(band);
   return {
     name: p.name,
-    source: p.source === 'reference' ? 'measured from the singer\'s reference clip' : 'hand-authored estimate',
+    source:
+      p.source === 'reference'
+        ? 'measured from the singer\'s reference clip'
+        : p.source === 'measured'
+          ? 'measured from clips of the singer\'s recordings that the user added'
+          : 'hand-authored estimate',
     description: clip(p.description, 600),
     typicalRange: `${note(p.typicalRange.lowMidi)}-${note(p.typicalRange.highMidi)}`,
     targets,

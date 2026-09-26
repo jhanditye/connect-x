@@ -2,6 +2,7 @@
 
 import { buildCoachingPlan } from '../coach/coach';
 import { compareToProfile } from '../coach/compare';
+import { measuredProfile } from '../coach/measured';
 import { SINGERS } from '../coach/profiles';
 import { compareToReference, profileFromReference, referenceUsability } from '../coach/reference';
 import type { ScoringDeps } from './reducer';
@@ -13,4 +14,5 @@ export const scoringDeps: ScoringDeps = {
   profileFromReference,
   referenceUsability,
   compareToReference,
+  measuredProfile,
 };

@@ -234,10 +234,19 @@ export function GuidePage() {
             about this.
           </p>
           <p>
-            For a measured target, use a <strong>reference clip</strong>: upload a recording of the artist from music you own. Mimic runs
-            the same analysis on it, centres the targets on what it measures, and lines your take up against it phrase by phrase (in any
-            key). An isolated vocal or an a cappella section works best. Released vocals are often pitch-corrected, compressed, doubled and
-            drenched in reverb, and all of that shifts the numbers.
+            To replace the estimates with <strong>measurements of the singer’s real voice</strong>, open the singer in the Studio and use{' '}
+            <em>Measure from real recordings</em>: add clips of that singer from music you own. Mimic analyses each clip the same way it
+            analyses you, refuses clips it can’t measure (full song mixes, speech, too little singing) and says why, then rebuilds the
+            singer’s targets from the clips it kept, weighted by how much singing each one has. When the clips disagree, the target bands
+            widen to cover that range. The singer’s coaching cues, songs and signature moves stay; only the numbers change. Only the
+            measurements are kept, in this browser; the audio is not stored. Use isolated vocals (vocal stems) or a cappella sections: a
+            stem-splitter app can pull the vocal out of a song. Released vocals are often pitch-corrected, so tuning keeps a fixed
+            “clean” target, and rasp, chest weight and loudness climb stay capped at healthy levels whatever the recordings do.
+          </p>
+          <p>
+            A <strong>reference clip</strong> is the other measured option: one recording of a song you are learning. Mimic centres the
+            targets on it and lines your take up against it phrase by phrase (in any key), which shows where you drift from that
+            particular performance.
           </p>
           <p>
             Imitation is a way to learn technique, not to replace your voice. Your instrument is different from theirs, so borrow the
@@ -271,7 +280,10 @@ export function GuidePage() {
         <section id="guide-privacy" aria-labelledby="guide-privacy-h">
           <h2 id="guide-privacy-h" tabIndex={-1}>Privacy</h2>
           <ul>
-            <li>All analysis runs in your browser. Your recordings and reference clips are never uploaded and are not stored.</li>
+            <li>
+              All analysis runs in your browser. Your recordings, reference clips and singer clips are never uploaded, and no audio is
+              stored; only the measurements of singer clips are kept, in this browser.
+            </li>
             <li>Saving to Progress keeps only scores and measurements, in this browser’s local storage.</li>
             <li>
               The optional AI coach sends the numeric summary of a take (never audio) to Anthropic, using the API key you enter in Settings.

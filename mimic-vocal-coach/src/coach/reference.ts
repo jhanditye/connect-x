@@ -58,7 +58,7 @@ interface BandSpec {
 // singer is to themself), and are deliberately wider for measures that rest on few events (vibrato
 // rate/extent, flips, runs). Tolerances match the scale used by the hand-authored profiles, e.g.
 // 0.3 on 0..1 tone indices and 25 cents on pitch accuracy.
-const BAND_SPECS: Record<StyleKey, BandSpec> = {
+export const BAND_SPECS: Record<StyleKey, BandSpec> = {
   breathiness: { halfWidth: 0.1, tolerance: 0.3, weight: 0.8, min: 0, max: 1 },
   brightness: { halfWidth: 0.1, tolerance: 0.3, weight: 0.7, min: 0, max: 1 },
   rasp: { halfWidth: 0.08, tolerance: 0.25, weight: 0.5, min: 0, max: 1 },
@@ -134,7 +134,7 @@ function safeBand(key: StyleKey, band: TargetBand, value: number): TargetBand {
   }
 }
 
-function targetsFromStyle(style: StyleVector, base?: SingerProfile): Partial<Record<StyleKey, TargetBand>> {
+export function targetsFromStyle(style: StyleVector, base?: SingerProfile): Partial<Record<StyleKey, TargetBand>> {
   const targets: Partial<Record<StyleKey, TargetBand>> = {};
   const weightOf = (key: StyleKey): number => base?.targets[key]?.weight ?? BAND_SPECS[key].weight;
   for (const key of STYLE_KEYS) {

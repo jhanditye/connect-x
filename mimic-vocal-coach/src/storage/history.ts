@@ -35,7 +35,7 @@ function finite(x: unknown): x is number {
   return typeof x === 'number' && Number.isFinite(x);
 }
 
-function sanitizeStyle(x: unknown): StyleVector {
+export function sanitizeStyle(x: unknown): StyleVector {
   const src = isRecord(x) ? x : {};
   const out = {} as StyleVector;
   for (const k of STYLE_KEYS) {
