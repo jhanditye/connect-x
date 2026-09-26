@@ -12,6 +12,10 @@ export interface SamplesInput {
   sampleRate: number;
   source: TakeSource;
   name: string;
+  /** Length of the original file when decoding already cut it short, s. */
+  sourceDurationSec?: number;
+  /** Notes from decoding (e.g. stereo channels that cancel out), shown with the results. */
+  notices?: string[];
 }
 
 export interface AppController {
@@ -34,7 +38,10 @@ export interface AppController {
   clearReference(): void;
   selectProfile(id: string): void;
   updateSettings(patch: Partial<AppSettings>): void;
-  /** Saves the current result to history; returns the record or null when there is nothing to save. */
+  /**
+   * Saves the current result to history; returns the record, or null when there is nothing to save,
+   * the take cannot be scored, or this take and target were already saved.
+   */
   saveSession(label?: string): SessionRecord | null;
   deleteSession(id: string): void;
   clearSessions(): void;

@@ -2,7 +2,7 @@
 // record, how the singer profiles were made, vocal health and privacy.
 
 import type { ReactNode } from 'react';
-import { passaggioFor, VOICE_TYPE_LABELS } from '../../analysis/passaggio';
+import { passaggioFor, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
 import type { VoiceType } from '../../types';
@@ -17,7 +17,7 @@ const SECTIONS = [
   { id: 'guide-privacy', title: 'Privacy' },
 ] as const;
 
-const VOICE_TYPES = Object.keys(VOICE_TYPE_LABELS) as VoiceType[];
+const VOICE_TYPES = Object.keys(VOICE_TYPE_NAMES) as VoiceType[];
 
 interface Measure {
   name: string;
@@ -34,7 +34,8 @@ const MEASURES: Measure[] = [
   {
     name: 'Breathiness',
     what: 'How much air is in the tone. It combines cues such as how much stronger the first harmonic is than the second (H1–H2), how clearly periodic the voice is (cepstral peak prominence, CPP) and the harmonics-to-noise ratio.',
-    limits: 'Vowels change H1–H2 on their own ("oo" and "ee" read airier than "ah"), and so do distance from the mic and a noisy room.',
+    limits:
+      'Vowels change H1–H2 on their own ("oo" and "ee" read airier than "ah"), and so do distance from the mic and a noisy room. It also depends on how much bass the microphone picks up: phone and laptop mics that cut the low end read cleaner than a studio mic. Compare your progress on the same device.',
   },
   {
     name: 'Brightness',
@@ -54,7 +55,8 @@ const MEASURES: Measure[] = [
   {
     name: 'Chest, mix and head above the passaggio',
     what: 'For each moment of singing at or above the bottom of your passaggio, Mimic estimates whether the sound is chest-dominant, mixed or head/falsetto from the harmonic balance, spectral slope, clarity and how loudness changes with pitch, then reports the shares.',
-    limits: 'These are estimates from the sound, not a view of your vocal folds. A pressed head voice or a breathy chest voice can be misread, and vowels shift the cues.',
+    limits:
+      'These are estimates from the sound, not a view of your vocal folds. They are most reliable on open vowels such as "ah" and "eh"; closed vowels ("oo", "ee") shift the cues. A pressed head voice or a breathy chest voice can be misread, and the estimate cannot tell a breathy falsetto from a clear head voice, so both count as head/falsetto.',
   },
   {
     name: 'Loudness climb',
@@ -73,10 +75,23 @@ const MEASURES: Measure[] = [
   },
 ];
 
+/** Scroll to a section and move keyboard focus to its heading, so the next Tab continues from there. */
+function jump(id: string) {
+  const section = document.getElementById(id);
+  if (!section) return;
+  let reduce = false;
+  try {
+    reduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    // No matchMedia: plain scroll.
+  }
+  section.scrollIntoView?.({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
+  section.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
+}
+
 export function GuidePage() {
   const app = useApp();
   const voiceType = app.state.settings.voiceType;
-  const jump = (id: string) => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   return (
     <div className="page page--guide">
@@ -103,7 +118,7 @@ export function GuidePage() {
 
       <article className="prose">
         <section id="guide-mix" aria-labelledby="guide-mix-h">
-          <h2 id="guide-mix-h">What mixed voice is</h2>
+          <h2 id="guide-mix-h" tabIndex={-1}>What mixed voice is</h2>
           <p>
             Your vocal folds can vibrate in a heavier, <strong>chest-dominant</strong> way, where they are thicker and stay in contact for
             longer in each cycle, or a lighter, <strong>head-dominant</strong> way, where they are stretched thinner. Two sets of muscles
@@ -121,15 +136,27 @@ export function GuidePage() {
             That middle is where a lot of pop, R&amp;B and soul melodies sit, which is why how a singer balances weight and lightness there
             is a big part of what makes them recognisable.
           </p>
+          <p>
+            <strong>Falsetto and head voice</strong> both use the lighter, stretched-fold coordination. Falsetto usually means the light,
+            often breathy upper register of male voices, where the folds barely close; head voice is the same mechanism with firmer
+            closure and a clearer tone. For women, what teachers usually call head voice is this register, so where the coaching says
+            falsetto, read it as your light head voice. Mimic cannot tell the two apart from the sound and reports them together as
+            head/falsetto.
+          </p>
         </section>
 
         <section id="guide-passaggio" aria-labelledby="guide-passaggio-h">
-          <h2 id="guide-passaggio-h">The passaggio</h2>
+          <h2 id="guide-passaggio-h" tabIndex={-1}>The passaggio</h2>
           <p>
             The passaggio (Italian for “passage”) is the stretch of pitches where the chest-dominant way of singing gets hard to sustain
             comfortably. Left alone, the voice tends either to get louder and heavier, or to break into falsetto. Mix lives here. Mimic uses
             your voice type to place the zone and treats everything at or above its lower edge as your <em>upper range</em>. These are
             typical zones; your own may sit a note or two either way.
+          </p>
+          <p>
+            The zones below are estimates of where the <em>mix zone</em> sits in contemporary pop and R&amp;B singing. They are set a little
+            higher than the classical passaggio points in voice-teaching texts (for a baritone those start around B3), because
+            contemporary singers carry a speech-like sound further up before they blend.
           </p>
           <table className="guide-table">
             <caption className="visually-hidden">Typical passaggio zone by voice type</caption>
@@ -145,7 +172,7 @@ export function GuidePage() {
                 return (
                   <tr key={v} aria-current={v === voiceType ? 'true' : undefined}>
                     <th scope="row">
-                      {VOICE_TYPE_LABELS[v]}
+                      {VOICE_TYPE_NAMES[v]}
                       {v === voiceType && <span className="muted"> (yours)</span>}
                     </th>
                     <td className="num">
@@ -159,7 +186,7 @@ export function GuidePage() {
         </section>
 
         <section id="guide-measures" aria-labelledby="guide-measures-h">
-          <h2 id="guide-measures-h">What Mimic measures</h2>
+          <h2 id="guide-measures-h" tabIndex={-1}>What Mimic measures</h2>
           <p>
             Every number comes from the sound alone, using acoustic measures that voice research links to how the voice is being produced.
             They are <em>proxies</em>: useful for tracking change and for comparing with a target, but influenced by the vowel you sing, your
@@ -185,7 +212,7 @@ export function GuidePage() {
         </section>
 
         <section id="guide-recording" aria-labelledby="guide-recording-h">
-          <h2 id="guide-recording-h">Recording a good take</h2>
+          <h2 id="guide-recording-h" tabIndex={-1}>Recording a good take</h2>
           <ul>
             <li>Use a quiet room. Soft furnishings help; fans, fridges and traffic hurt.</li>
             <li>Hold the phone or microphone 20–30 cm from your mouth and keep the distance steady.</li>
@@ -198,7 +225,7 @@ export function GuidePage() {
         </section>
 
         <section id="guide-profiles" aria-labelledby="guide-profiles-h">
-          <h2 id="guide-profiles-h">How the singer profiles were made</h2>
+          <h2 id="guide-profiles-h" tabIndex={-1}>How the singer profiles were made</h2>
           <p>
             The built-in profiles for Shawn Mendes, Daniel Caesar and Jalen Ngonda are <strong>hand-set estimates</strong>. They describe
             each singer’s sound in terms of the measures above, based on widely shared listening impressions of their released recordings
@@ -219,7 +246,7 @@ export function GuidePage() {
         </section>
 
         <section id="guide-health" aria-labelledby="guide-health-h">
-          <h2 id="guide-health-h">Look after your voice</h2>
+          <h2 id="guide-health-h" tabIndex={-1}>Look after your voice</h2>
           <ul>
             <li>Warm up for 5–10 minutes before working on high notes: humming, lip trills, singing through a straw, gentle sirens.</li>
             <li>Stay hydrated through the day, not just during practice.</li>
@@ -230,6 +257,11 @@ export function GuidePage() {
             </li>
             <li>Stop and rest if you feel pain, tightness, scratchiness or hoarseness.</li>
             <li>
+              If your voice suddenly cuts out, loses its top notes or turns hoarse during a loud or high note, stop singing straight away,
+              rest your voice and get it checked by a laryngologist within a few days. It can be a small bleed on a vocal fold, so don’t wait
+              to see whether it passes.
+            </li>
+            <li>
               If hoarseness or a change in your voice lasts more than two weeks, or singing is painful, see an ENT doctor or laryngologist
               (ideally one who works with singers). A voice-specialist speech therapist can help with recovery.
             </li>
@@ -237,13 +269,18 @@ export function GuidePage() {
         </section>
 
         <section id="guide-privacy" aria-labelledby="guide-privacy-h">
-          <h2 id="guide-privacy-h">Privacy</h2>
+          <h2 id="guide-privacy-h" tabIndex={-1}>Privacy</h2>
           <ul>
             <li>All analysis runs in your browser. Your recordings and reference clips are never uploaded and are not stored.</li>
             <li>Saving to Progress keeps only scores and measurements, in this browser’s local storage.</li>
             <li>
               The optional AI coach sends the numeric summary of a take (never audio) to Anthropic, using the API key you enter in Settings.
             </li>
+            <li>
+              The API key is kept in this site’s local storage in your browser. On a <span className="num">github.io</span> address that
+              storage is shared with the site owner’s other GitHub Pages sites, so use a key with a spending limit.
+            </li>
+            <li>The fonts are bundled with the app, so loading Mimic makes no requests to other sites.</li>
             <li>“Clear all data” in Settings removes everything Mimic has stored.</li>
           </ul>
         </section>

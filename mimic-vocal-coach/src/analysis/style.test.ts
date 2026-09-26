@@ -17,9 +17,22 @@ describe('per-frame index functions', () => {
   it('breathiness rises with H1-H2 and aspiration and stays in 0..1', () => {
     expect(breathinessIndex(4, 0)).toBeLessThan(breathinessIndex(10, 0));
     expect(breathinessIndex(10, 0)).toBeLessThan(breathinessIndex(10, 0.5));
-    expect(breathinessIndex(-20, 0)).toBe(0);
+    expect(breathinessIndex(14, 0)).toBeLessThan(breathinessIndex(20, 0));
+    expect(breathinessIndex(-20, 0)).toBeCloseTo(breathinessIndex(-10, 0), 9);
+    expect(breathinessIndex(-20, 0)).toBeGreaterThan(0.1);
     expect(breathinessIndex(60, 1)).toBe(1);
     expect(breathinessIndex(NaN, 0)).toBeNaN();
+  });
+
+  it('breathiness is anchored on real voices: clean modal singing reads "clear, balanced"', () => {
+    // Real a cappella singing measured normalised H1-H2 of about -2.5 to +6 dB with no aspiration.
+    for (const h of [-1, 0, 3, 6]) {
+      expect(breathinessIndex(h, 0), `H ${h}`).toBeGreaterThanOrEqual(0.28);
+      expect(breathinessIndex(h, 0), `H ${h}`).toBeLessThanOrEqual(0.42);
+    }
+    // A breathy real voice: higher H1-H2 and aspiration noise.
+    expect(breathinessIndex(12, 0.4)).toBeGreaterThanOrEqual(0.6);
+    expect(breathinessIndex(12, 0.4)).toBeLessThanOrEqual(0.8);
   });
 
   it('brightness is monotonic in the harmonic slope', () => {
@@ -39,18 +52,23 @@ describe('per-frame index functions', () => {
 });
 
 describe('calibration anchors on the synthesiser (vowel /a/, G3-D4)', () => {
-  it('breathiness: pressed 0.1-0.2, modal 0.25-0.4, breathy 0.6-0.75, whisper-ish > 0.85', () => {
+  it('breathiness keeps the synthesiser order: pressed ~0.44 < modal ~0.52 < breathy ~0.8 < whisper > 0.88', () => {
+    // The absolute level is anchored on real voices (see breathinessIndex); the synthesiser's
+    // source has a stronger H1 than a real voice, so its settings read higher than their names.
     const pressed = styleOf({ tiltDbPerOct: -6 }).breathiness ?? NaN;
     const modal = styleOf({ tiltDbPerOct: -12 }).breathiness ?? NaN;
     const breathy = styleOf({ tiltDbPerOct: -16, h1BoostDb: 6, breathNoise: 0.6 }).breathiness ?? NaN;
     const whisper = styleOf({ tiltDbPerOct: -16, breathNoise: 1.5 }).breathiness ?? NaN;
-    expect(pressed).toBeGreaterThanOrEqual(0.1);
-    expect(pressed).toBeLessThanOrEqual(0.2);
-    expect(modal).toBeGreaterThanOrEqual(0.25);
-    expect(modal).toBeLessThanOrEqual(0.4);
-    expect(breathy).toBeGreaterThanOrEqual(0.6);
-    expect(breathy).toBeLessThanOrEqual(0.75);
-    expect(whisper).toBeGreaterThan(0.85);
+    expect(pressed).toBeGreaterThanOrEqual(0.38);
+    expect(pressed).toBeLessThanOrEqual(0.5);
+    expect(modal).toBeGreaterThanOrEqual(0.46);
+    expect(modal).toBeLessThanOrEqual(0.58);
+    expect(modal).toBeGreaterThan(pressed + 0.04);
+    expect(breathy).toBeGreaterThanOrEqual(0.72);
+    expect(breathy).toBeLessThanOrEqual(0.88);
+    expect(breathy).toBeGreaterThan(modal + 0.2);
+    expect(whisper).toBeGreaterThan(0.88);
+    expect(whisper).toBeGreaterThan(breathy);
   });
 
   it('brightness: tilt -6 ~0.75-0.85, -12 ~0.45-0.55, -20 ~0.15-0.25', () => {
@@ -87,5 +105,18 @@ describe('calibration anchors on the synthesiser (vowel /a/, G3-D4)', () => {
     const a = styleOf({ tiltDbPerOct: -10 }, 'a').brightness ?? NaN;
     const o = styleOf({ tiltDbPerOct: -10 }, 'o').brightness ?? NaN;
     expect(o).toBeLessThan(a);
+  });
+});
+
+describe('pitch accuracy', () => {
+  it('is judged on held notes (0.4 s or longer), not on syllables and passing notes', () => {
+    const tune = (durSec: number) =>
+      [55, 57, 59, 60, 62, 60, 59, 57, 55, 57, 59, 60].map((midi, i) => ({ midi: midi + (i % 2 ? 0.2 : -0.15), durSec }));
+    const take = (durSec: number) =>
+      analyzeTake(concat(silence(0.3, SR), synthMelody(tune(durSec), { sampleRate: SR }), silence(0.3, SR)), SR, OPTS);
+    expect(take(0.3).style.pitchAccuracyCents).toBeNull();
+    const held = take(0.55).style.pitchAccuracyCents ?? NaN;
+    expect(held).toBeGreaterThan(8);
+    expect(held).toBeLessThan(25);
   });
 });

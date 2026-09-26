@@ -1,7 +1,7 @@
 // Settings: voice type (drives the passaggio), tuning, AI coach key/model, theme, clear data.
 
-import { useEffect, useId, useState, type FormEvent } from 'react';
-import { passaggioFor, VOICE_TYPE_LABELS } from '../../analysis/passaggio';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { DEFAULT_AI_MODEL } from '../../coach/ai';
 import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
@@ -28,6 +28,18 @@ export function SettingsPage() {
   const [modelDraft, setModelDraft] = useState(settings.aiModel);
   const [confirmClear, setConfirmClear] = useState(false);
   const [cleared, setCleared] = useState(false);
+  const clearedRef = useRef<HTMLParagraphElement>(null);
+  const clearButtonRef = useRef<HTMLButtonElement>(null);
+
+  // The confirmation buttons disappear once used, so move focus to what replaces them: the
+  // "All data cleared." status, or back to "Clear all data" after Cancel.
+  useEffect(() => {
+    if (cleared) clearedRef.current?.focus();
+  }, [cleared]);
+  const cancelClear = () => {
+    setConfirmClear(false);
+    requestAnimationFrame(() => clearButtonRef.current?.focus());
+  };
 
   // Keep drafts in sync when settings change elsewhere (e.g. after clearing all data).
   useEffect(() => setA4Draft(String(settings.a4Hz)), [settings.a4Hz]);
@@ -92,18 +104,19 @@ export function SettingsPage() {
             ))}
           </select>
           <p className="field-hint">
-            For a {VOICE_TYPE_LABELS[settings.voiceType].toLowerCase()}, the passaggio (the stretch where chest-dominant singing has to hand
+            For a {VOICE_TYPE_NAMES[settings.voiceType].toLowerCase()}, the passaggio (the stretch where chest-dominant singing has to hand
             over to a lighter coordination) usually sits around{' '}
             <span className="num">
               {midiToNoteName(zone.lowMidi)}–{midiToNoteName(zone.highMidi)}
             </span>
             . Mimic treats notes from <span className="num">{midiToNoteName(zone.lowMidi)}</span> up as your upper range when it measures your
-            mix. Everyone’s passaggio is a little different; if unsure, pick the type whose zone matches where your voice starts to feel
-            heavy or wants to flip.
+            mix. These are estimates of the mix zone in contemporary singing, a little higher than the classical passaggio points.
+            Everyone’s passaggio is a little different; if unsure, pick the type whose zone matches where your voice starts to feel heavy or
+            wants to flip.
           </p>
           {reanalysing && (
             <p className="field-hint" role="status">
-              Re-analysing your take with the new setting…
+              {app.state.job === 'reference' ? 'Re-analysing your reference clip' : 'Re-analysing your take'} with the new setting…
             </p>
           )}
         </div>
@@ -144,8 +157,13 @@ export function SettingsPage() {
         </h2>
         <p className="settings-text">
           With your own Anthropic API key, the Results page can ask Claude to explain your analysis and answer follow-up questions. The key
-          is stored only in this browser and sent only to Anthropic. Only the numbers from the analysis are sent, never your audio. Usage is
-          billed to your Anthropic account.
+          is sent only to Anthropic. Only the numbers from the analysis are sent, never your audio. Usage is billed to your Anthropic
+          account.
+        </p>
+        <p className="settings-text">
+          The key is saved in this site’s local storage in this browser, as plain text. On a <span className="num">github.io</span> address
+          that storage is shared with the site owner’s other GitHub Pages sites, so use a key with a monthly spending limit (set one in the
+          Anthropic Console) and remove it here when you no longer need it.
         </p>
         <form className="field" onSubmit={saveKey}>
           <label htmlFor={ids.key} className="field-label">
@@ -260,6 +278,7 @@ export function SettingsPage() {
         </p>
         {!confirmClear ? (
           <button
+            ref={clearButtonRef}
             type="button"
             className="button button--danger"
             onClick={() => {
@@ -286,13 +305,13 @@ export function SettingsPage() {
               >
                 Yes, delete everything
               </button>
-              <button type="button" className="button button--ghost" onClick={() => setConfirmClear(false)} autoFocus>
+              <button type="button" className="button button--ghost" onClick={cancelClear} autoFocus>
                 Cancel
               </button>
             </div>
           </div>
         )}
-        <p className="field-hint" role="status">
+        <p ref={clearedRef} className="field-hint" role="status" tabIndex={-1}>
           {cleared ? 'All data cleared.' : ''}
         </p>
       </section>

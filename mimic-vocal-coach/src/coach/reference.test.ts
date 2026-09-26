@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { compareToReference, describeStyleTraits, profileFromReference, REFERENCE_PROFILE_COLOR } from './reference';
+import { compareToReference, describeStyleTraits, profileFromReference, referenceUsability, REFERENCE_PROFILE_COLOR } from './reference';
+import { compareToProfile, isScoreable } from './compare';
+import { SINGERS } from './profiles';
 import { makeFakeAnalysis, makeFakeProfile } from '../testing/fixtures';
 import { makeRng } from '../testing/synth';
-import type { FrameFeatures, Phrase, VoiceAnalysis } from '../types';
+import type { FrameFeatures, Phrase, StyleKey, StyleVector, VoiceAnalysis } from '../types';
 
 interface Transform {
   /** Semitones added to every voiced frame. */
@@ -104,6 +106,66 @@ describe('profileFromReference', () => {
     expect(p.targets.pitchAccuracyCents).toMatchObject({ ideal: 5, low: 0, high: 15 });
   });
 
+  it('never rests a profile on the pitch target alone', () => {
+    const nulls = Object.fromEntries(Object.keys(makeFakeAnalysis().style).map((k) => [k, null])) as Partial<StyleVector>;
+    // A clip with no measurable singing (noise, silence, a buried vocal): no targets at all.
+    const noise = profileFromReference({ ...makeFakeAnalysis(nulls), voicedSec: 0 }, 'noise.wav', SINGERS[0]);
+    expect(noise.targets).toEqual({});
+    // Regression: such a clip used to score every take ~90/100 "very close to that sound".
+    const c = compareToProfile(makeFakeAnalysis(), noise);
+    expect(c.overall).toBe(0);
+    expect(isScoreable(makeFakeAnalysis(), c)).toBe(false);
+    // Only tuning measured: still nothing to compare against.
+    expect(profileFromReference(makeFakeAnalysis({ ...nulls, pitchAccuracyCents: 12 }), 'Clip').targets).toEqual({});
+    // No held notes in the clip: no tuning target.
+    expect(profileFromReference(makeFakeAnalysis({ pitchAccuracyCents: null }), 'Clip').targets.pitchAccuracyCents).toBeUndefined();
+  });
+
+  it('never targets grit, heavy chest or a pushing loudness climb', () => {
+    // A full mix reads as raspy, chest-heavy and climbing steeply.
+    const belted = makeFakeAnalysis({ rasp: 0.5, loudnessClimbDbPerSemitone: 1.6, chestInUpperRange: 0.85, mixInUpperRange: 0.1, headInUpperRange: 0.05 });
+    const t = profileFromReference(belted, 'Clip', SINGERS[0]).targets;
+    expect(t.rasp).toMatchObject({ ideal: 0.15, low: 0 });
+    expect(t.rasp!.high).toBeLessThanOrEqual(0.4);
+    expect(t.chestInUpperRange!.ideal).toBeLessThanOrEqual(0.55);
+    expect(t.chestInUpperRange!.high).toBeLessThanOrEqual(0.6);
+    expect(t.chestInUpperRange!.low).toBeLessThanOrEqual(0.45);
+    expect(t.loudnessClimbDbPerSemitone!.ideal).toBeLessThanOrEqual(0.5);
+    expect(t.loudnessClimbDbPerSemitone!.high).toBeLessThanOrEqual(0.8);
+    expect(t.loudnessClimbDbPerSemitone!.low).toBeLessThanOrEqual(0);
+    // The chest weight it won't ask for goes to mix: 0.1 + (0.85 - 0.55).
+    expect(t.mixInUpperRange!.ideal).toBeCloseTo(0.4, 10);
+    const sum = t.chestInUpperRange!.ideal + t.mixInUpperRange!.ideal + t.headInUpperRange!.ideal;
+    expect(sum).toBeCloseTo(1, 10);
+    for (const band of Object.values(t)) {
+      expect(band.low).toBeLessThanOrEqual(band.ideal);
+      expect(band.high).toBeGreaterThanOrEqual(band.ideal);
+    }
+    // A clean, light clip keeps its own targets.
+    const light = profileFromReference(makeFakeAnalysis({ rasp: 0.05, loudnessClimbDbPerSemitone: 0.1, chestInUpperRange: 0.2 }), 'Clip').targets;
+    expect(light.rasp!.ideal).toBe(0.05);
+    expect(light.loudnessClimbDbPerSemitone!.ideal).toBe(0.1);
+    expect(light.chestInUpperRange!.ideal).toBe(0.2);
+    expect(light.mixInUpperRange!.ideal).toBe(0.3);
+    // Random clips: a clean take is always inside the rasp band, and no band reaches past the health limits.
+    const rng = makeRng(3);
+    for (let n = 0; n < 100; n++) {
+      const style: Partial<StyleVector> = { rasp: rng(), loudnessClimbDbPerSemitone: rng() * 4 - 1, chestInUpperRange: rng() };
+      const b = profileFromReference(makeFakeAnalysis(style), 'Clip').targets;
+      expect(b.rasp!.low).toBe(0);
+      expect(b.rasp!.ideal).toBeLessThanOrEqual(0.15);
+      expect(b.loudnessClimbDbPerSemitone!.high).toBeLessThanOrEqual(0.8);
+      // Keeping the volume level as you climb is never coached against.
+      expect(b.loudnessClimbDbPerSemitone!.low).toBeLessThanOrEqual(0);
+      expect(b.loudnessClimbDbPerSemitone!.high).toBeGreaterThanOrEqual(0);
+      expect(b.chestInUpperRange!.high).toBeLessThanOrEqual(0.6);
+      for (const k of ['rasp', 'loudnessClimbDbPerSemitone', 'chestInUpperRange'] as StyleKey[]) {
+        expect(b[k]!.low).toBeLessThanOrEqual(b[k]!.ideal);
+        expect(b[k]!.ideal).toBeLessThanOrEqual(b[k]!.high);
+      }
+    }
+  });
+
   it('takes weights, colour, songs and moves from a base profile', () => {
     const base = makeFakeProfile({ color: '#b97a12' });
     const p = profileFromReference(makeFakeAnalysis(), 'Test Singer (clip)', base);
@@ -126,6 +188,12 @@ describe('profileFromReference', () => {
     expect(profileFromReference(noPitch, 'Clip', base).typicalRange).toEqual(base.typicalRange);
   });
 
+  it('never calls a clean, low-breathiness clip pressed', () => {
+    const p = profileFromReference(makeFakeAnalysis({ breathiness: 0.1 }), 'Clip');
+    expect(p.description).toMatch(/very clean and firm tone/);
+    expect([p.description, ...p.traits].join(' ')).not.toMatch(/pressed/);
+  });
+
   it('describes the measured sound in plain English with caveats', () => {
     const ref = makeFakeAnalysis({ breathiness: 0.7, brightness: 0.25, rasp: 0.05 });
     const p = profileFromReference(ref, 'Clip');
@@ -146,6 +214,36 @@ describe('profileFromReference', () => {
     expect(traits.some((t) => /Vibrato/.test(t))).toBe(false);
     expect(traits.some((t) => /passaggio/.test(t))).toBe(false);
     expect(traits.some((t) => /3\.2 notes per second/.test(t))).toBe(true);
+  });
+});
+
+describe('referenceUsability', () => {
+  it('accepts a clean clip with enough singing', () => {
+    expect(referenceUsability(makeFakeAnalysis())).toEqual({ usable: true, reason: null });
+    expect(referenceUsability({ ...makeFakeAnalysis(), issues: ['noisy', 'clipping'] }).usable).toBe(true);
+  });
+
+  it('rejects a full mix, too little singing or speech, naming the fix', () => {
+    const mix = referenceUsability({ ...makeFakeAnalysis(), issues: ['accompaniment', 'noisy'] });
+    expect(mix.usable).toBe(false);
+    expect(mix.reason).toMatch(/full song mix/);
+    expect(mix.reason).toMatch(/isolated vocal .* or an a cappella section/);
+
+    const short = referenceUsability({ ...makeFakeAnalysis(), voicedSec: 3.24 });
+    expect(short.usable).toBe(false);
+    expect(short.reason).toMatch(/^Only 3\.2 s of clear singing/);
+    expect(short.reason).toMatch(/isolated vocal or an a cappella section/);
+
+    const none = referenceUsability({ ...makeFakeAnalysis(), voicedSec: 0, issues: ['too-little-singing'] });
+    expect(none.reason).toMatch(/^No clear singing could be measured/);
+    expect(referenceUsability({ ...makeFakeAnalysis(), issues: ['too-little-singing'] }).usable).toBe(false);
+    expect(referenceUsability({ ...makeFakeAnalysis(), voicedSec: NaN }).usable).toBe(false);
+
+    const speech = referenceUsability({ ...makeFakeAnalysis(), issues: ['speech-like'] });
+    expect(speech.usable).toBe(false);
+    expect(speech.reason).toMatch(/speech-like/);
+    expect(speech.reason).toMatch(/a cappella/);
+    for (const r of [mix, short, none, speech]) expect(r.reason).not.toMatch(/NaN|undefined/);
   });
 });
 

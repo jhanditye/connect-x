@@ -15,6 +15,13 @@ const PAD_RIGHT = 10;
 const SCROLL_AFTER_SEC = 60;
 const PX_PER_SEC_LONG = 14;
 
+/** The readout's idle hint, worded to fit one line so the plot does not jump when a tap fills it in. */
+export function readoutHint(containerW: number): string {
+  if (containerW < 320) return 'Touch the plot to read a note.';
+  if (containerW < 480) return 'Touch the plot to read the note and register.';
+  return 'Hover over or touch the plot to read the note and register.';
+}
+
 export interface ContourPoint {
   t: number;
   midi: number;
@@ -267,6 +274,12 @@ export function PitchPlot(props: {
     setHover({ x: found ? x(found.t) : px, frame: found, t: found ? found.t : t });
   };
 
+  // Mouse: the readout follows the pointer and clears when it leaves. Touch and pen: a tap or a
+  // sideways drag sets it, and it stays after the finger lifts (a touch always ends in pointerleave).
+  const onLeave = (e: PointerEvent<SVGSVGElement>) => {
+    if (e.pointerType === 'mouse') setHover(null);
+  };
+
   const readout = hover
     ? hover.frame
       ? `${hover.t.toFixed(2)} s · ${noteWithCents(hover.frame.midi)} · ${hover.frame.register ? `${hover.frame.register} (estimated)` : 'register unclear'}`
@@ -276,7 +289,7 @@ export function PitchPlot(props: {
   return (
     <div className="viz pitchplot" ref={ref}>
       <p className="pitchplot-readout num" aria-hidden="true">
-        {readout || 'Hover over or touch the plot to read the note and register.'}
+        {readout || readoutHint(containerW)}
       </p>
       <div className="pitchplot-frame">
         <svg className="pitchplot-axis" width={AXIS_W} height={height} aria-hidden="true">
@@ -299,8 +312,9 @@ export function PitchPlot(props: {
             height={height}
             role="img"
             aria-label={describePitchPlot(analysis, !!reference, shift)}
+            onPointerDown={onMove}
             onPointerMove={onMove}
-            onPointerLeave={() => setHover(null)}
+            onPointerLeave={onLeave}
           >
             <defs>
               <clipPath id={clipId}>

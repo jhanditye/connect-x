@@ -207,20 +207,20 @@ describe('trackPitch: octave handling', () => {
     }
   });
 
-  it('keeps a real octave leap held for 150 ms but folds back a 30 ms octave excursion', () => {
+  it('keeps a real octave leap held for 250 ms but folds back a 30 ms octave excursion', () => {
     const held = trackPitch(
       synthMelody(
         [
           { midi: 55, durSec: 0.4 },
-          { midi: 67, durSec: 0.15 },
+          { midi: 67, durSec: 0.25 },
           { midi: 55, durSec: 0.4 },
         ],
         { sampleRate: SR, glideSec: 0.01 },
       ),
       SR,
     );
-    const top = errorsIn(held, () => midiToHz(67), 0.43, 0.52);
-    expect(top.voiced).toBeGreaterThanOrEqual(8);
+    const top = errorsIn(held, () => midiToHz(67), 0.43, 0.62);
+    expect(top.voiced).toBeGreaterThanOrEqual(16);
     expect(top.octave).toBe(0);
     expect(top.medianErr).toBeLessThan(20);
 
@@ -239,6 +239,25 @@ describe('trackPitch: octave handling', () => {
       if (!blip.voiced[i]) continue;
       expect(Math.abs(cents(blip.f0[i], midiToHz(55)))).toBeLessThan(600);
     }
+  });
+
+  it('folds back octave-up stretches of 110-140 ms, even when they recur (persistent YIN octave errors)', () => {
+    // Real low male voices can make YIN lock onto 2*f0 for 110-140 ms at a time, alternating with
+    // correct stretches; the synthesised octave jumps stand in for those errors here.
+    const x = synthMelody(
+      [
+        { midi: 45, durSec: 0.5 },
+        { midi: 57, durSec: 0.12 },
+        { midi: 45, durSec: 0.12 },
+        { midi: 57, durSec: 0.14 },
+        { midi: 45, durSec: 0.5 },
+      ],
+      { sampleRate: SR, glideSec: 0.005 },
+    );
+    const tr = trackPitch(x, SR);
+    const r = errorsIn(tr, () => midiToHz(45), 0, x.length / SR);
+    expect(r.voiced).toBeGreaterThan(100);
+    expect(r.octave).toBe(0);
   });
 
   it('reports the sung note, not the subharmonic, for a raspy (period-doubled) voice', () => {

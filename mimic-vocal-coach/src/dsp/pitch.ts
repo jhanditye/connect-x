@@ -131,8 +131,14 @@ const ZIGZAG_MIN_DIPS = 3;
  */
 const ZIGZAG_MAX_F0C_HZ = 190;
 
-/** Octave cleanup: running median over +/-70 ms; errors must persist less than ~80 ms to be fixed. */
-const OCTAVE_MEDIAN_SEC = 0.15;
+/**
+ * Octave cleanup: running median over +/-170 ms, so an octave error is folded back when it
+ * persists for less than ~175 ms. On real low male voices YIN can lock onto 2*f0 for 110-140 ms
+ * at a time, alternating with correct stretches (a +/-70 ms median left those in place and they
+ * became fake notes, runs and "register flips"). The price: a genuine octave leap held for less
+ * than ~175 ms (a quick grace note up and back) is folded too; leaps held for 0.2 s or more stay.
+ */
+const OCTAVE_MEDIAN_SEC = 0.35;
 /** Voiced islands shorter than this are dropped (clicks, consonant bursts). */
 const MIN_VOICED_SEC = 0.04;
 

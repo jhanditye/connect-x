@@ -143,7 +143,7 @@ export function LiveMonitor(props: { analyser: AnalyserNode; a4Hz: number; centr
   return (
     <div className="live">
       <div className="live-row">
-        <div className="tuner" aria-label="Live tuner">
+        <div className="tuner" role="group" aria-label="Live tuner">
           <span className={`tuner-note num${reading.note ? '' : ' tuner-note--idle'}`}>{reading.note ? reading.note.name : '–'}</span>
           <div className="tuner-scale" aria-hidden="true">
             <span className="tuner-centre" />

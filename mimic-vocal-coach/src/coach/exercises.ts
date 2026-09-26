@@ -92,7 +92,8 @@ export const EXERCISES: Exercise[] = [
       'If the top flips into a breathy falsetto, add a little more "g" bite. If it strains, sing it quieter.',
     ],
     durationMin: 4,
-    pattern: { kind: 'arpeggio', steps: OCTAVE_ARPEGGIO, bpm: 108, startOffsetFromPassaggio: -9, stepUpSemitones: 1, repetitions: 6 },
+    pattern: { kind: 'arpeggio', steps: OCTAVE_ARPEGGIO, bpm: 108, startOffsetFromPassaggio: -9, stepUpSemitones: 1, repetitions: 4 },
+    cautions: ['Stop the pattern once the top notes feel effortful; you don\'t need to finish every round.'],
   },
   {
     id: 'mum-five-tone',
@@ -190,7 +191,8 @@ export const EXERCISES: Exercise[] = [
       'Apply the same narrowing to the highest words of your song.',
     ],
     durationMin: 3,
-    pattern: { kind: 'arpeggio', steps: OCTAVE_ARPEGGIO, bpm: 96, startOffsetFromPassaggio: -7, stepUpSemitones: 1, repetitions: 5 },
+    pattern: { kind: 'arpeggio', steps: OCTAVE_ARPEGGIO, bpm: 96, startOffsetFromPassaggio: -7, stepUpSemitones: 1, repetitions: 3 },
+    cautions: ['Stop the pattern once the top notes feel effortful; you don\'t need to finish every round.'],
   },
   {
     id: 'aspirate-onsets',
@@ -320,7 +322,7 @@ export const EXERCISES: Exercise[] = [
     goal: 'Find a sweet, clear falsetto with forward, ringing placement, supported rather than breathy, for soul-style lead lines.',
     helps: ['headInUpperRange', 'brightness', 'breathiness', 'vibratoPresence'],
     steps: [
-      'Find your falsetto on a light "ng" hum a little above your passaggio.',
+      'Find your falsetto (head voice, for higher voices) on a light "ng" hum a little above your passaggio.',
       'Open the "ng" to a bright "ee" or "ih", keeping the buzz in the front of your face.',
       'Sing a five-note scale in falsetto with steady airflow: a thin, clear line, not a sigh.',
       'Keep the volume soft to medium. The clarity comes from placement, not force.',
@@ -338,7 +340,7 @@ export const EXERCISES: Exercise[] = [
       'Start with a quiet "h" and float a falsetto "hoo" a few notes above your passaggio.',
       'Let some air into the tone, but keep a clear pitch centre.',
       'Hold it for about four seconds at a quiet, even level, then glide down into your middle voice.',
-      'Keep the mic or phone close so the quiet detail is captured.',
+      'Keep the mic or phone at your usual 20–30 cm, so this take compares fairly with your others.',
       'Stop and sip water if your throat feels dry.',
     ],
     durationMin: 3,
@@ -394,6 +396,7 @@ export const EXERCISES: Exercise[] = [
       'Skip this completely if your voice is hoarse or tired, or if you are unsure. A clean tone suits all three singers.',
       'Keep it to a couple of minutes, and drink water.',
       'If hoarseness lasts two weeks or more, see an ENT doctor or laryngologist, ideally one who works with singers.',
+      'If your voice suddenly cuts out or loses notes, stop, rest it and get it checked by a laryngologist within a few days.',
     ],
   },
 ];

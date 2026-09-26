@@ -10,11 +10,20 @@ export interface ProgressPoint {
   session: SessionRecord;
 }
 
+/**
+ * False for a session in which no style dimension was measured (silence, noise, a very short take):
+ * its overall 0 is not a real score, so it stays out of trends and stats.
+ */
+export function hasScores(s: Pick<SessionRecord, 'dimensionScores'>): boolean {
+  return Object.values(s.dimensionScores ?? {}).some((v) => typeof v === 'number' && Number.isFinite(v));
+}
+
 /** Sessions for the profile (all when undefined) that carry the metric, oldest first. */
 export function progressPoints(sessions: readonly SessionRecord[], profileId: string | undefined, metric: 'overall' | StyleKey): ProgressPoint[] {
   const out: ProgressPoint[] = [];
   for (const s of sessions) {
     if (profileId !== undefined && s.profileId !== profileId) continue;
+    if (metric === 'overall' && !hasScores(s)) continue;
     const time = Date.parse(s.createdAt);
     const value = metric === 'overall' ? s.overall : s.dimensionScores?.[metric];
     if (!Number.isFinite(time) || value === undefined || !Number.isFinite(value)) continue;
@@ -77,10 +86,13 @@ export function ProgressChart(props: { sessions: SessionRecord[]; profileId?: st
   const color = props.profileId ? singerVar(props.profileId, 'var(--accent)') : 'var(--accent)';
 
   if (points.length === 0) {
+    const onlyUnscored = metric === 'overall' && props.sessions.some((s) => props.profileId === undefined || s.profileId === props.profileId);
     return (
       <div className="viz pchart pchart--empty" ref={ref}>
         <p className="viz-empty">
-          No saved {metric === 'overall' ? 'takes' : 'measurements of this'} yet. Analyse a take, then press “Save to progress” on the Results page to start a trend.
+          {onlyUnscored
+            ? 'None of these takes had enough clear singing to score, so there is no trend yet. Save a take with several seconds of sustained singing to start one.'
+            : `No saved ${metric === 'overall' ? 'takes' : 'measurements of this'} yet. Analyse a take, then press “Save to progress” on the Results page to start a trend.`}
         </p>
       </div>
     );

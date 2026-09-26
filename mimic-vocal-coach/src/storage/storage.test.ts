@@ -189,6 +189,34 @@ describe('history', () => {
     expect(h.loadSessions()[0]).toEqual(r);
   });
 
+  it('stores reference sessions per clip, so different clips get separate trends', async () => {
+    const h = await history();
+    const analysis = makeFakeAnalysis();
+    const clipA = makeFakeProfile({ id: 'reference', name: 'Get You (stem)', source: 'reference' });
+    const clipB = makeFakeProfile({ id: 'reference', name: 'Stitches (stem)', source: 'reference' });
+    const a = h.sessionFromResults(analysis, makeFakeComparison('reference'), clipA);
+    const b = h.sessionFromResults(analysis, makeFakeComparison('reference'), clipB);
+    expect(a.profileId).toBe('reference:Get You (stem)');
+    expect(a.profileName).toBe('Get You (stem)');
+    expect(b.profileId).toBe('reference:Stitches (stem)');
+    expect(h.isReferenceProfileId(a.profileId)).toBe(true);
+    expect(h.isReferenceProfileId('shawn-mendes')).toBe(false);
+    // Builtin singers keep their id.
+    expect(h.sessionFromResults(analysis, makeFakeComparison(), makeFakeProfile({ id: 'shawn-mendes' })).profileId).toBe('shawn-mendes');
+    h.saveSession(a);
+    h.saveSession(b);
+    expect(new Set(h.loadSessions().map((s) => s.profileId))).toEqual(new Set(['reference:Get You (stem)', 'reference:Stitches (stem)']));
+  });
+
+  it('splits sessions saved under the old shared reference id by clip name', async () => {
+    const h = await history();
+    store.setItem(
+      'mimic:v1:sessions',
+      JSON.stringify([rec('old1', 1, { profileId: 'reference', profileName: 'Clip A' }), rec('old2', 2, { profileId: 'reference', profileName: 'Clip B' })]),
+    );
+    expect(h.loadSessions().map((s) => s.profileId)).toEqual(['reference:Clip B', 'reference:Clip A']);
+  });
+
   it('makes ids without crypto.randomUUID', async () => {
     vi.stubGlobal('crypto', {});
     const h = await history();

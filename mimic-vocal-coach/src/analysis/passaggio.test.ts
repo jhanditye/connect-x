@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { VoiceType } from '../types';
-import { passaggioFor, VOICE_TYPE_LABELS } from './passaggio';
+import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from './passaggio';
 
 const TYPES: VoiceType[] = ['bass', 'baritone', 'tenor', 'alto', 'mezzo', 'soprano'];
 
@@ -27,5 +27,13 @@ describe('passaggioFor', () => {
   it('has a label for every voice type', () => {
     for (const t of TYPES) expect(VOICE_TYPE_LABELS[t].length).toBeGreaterThan(3);
     expect(VOICE_TYPE_LABELS.baritone).toBe('Baritone (most male pop voices)');
+  });
+
+  it('has a plain name without a gloss for running text', () => {
+    for (const t of TYPES) {
+      expect(VOICE_TYPE_NAMES[t]).not.toMatch(/[()]/);
+      expect(VOICE_TYPE_LABELS[t].startsWith(VOICE_TYPE_NAMES[t])).toBe(true);
+    }
+    expect(VOICE_TYPE_NAMES.mezzo).toBe('Mezzo-soprano');
   });
 });

@@ -33,6 +33,7 @@ describe('makeDemoTake', () => {
 
   it('analyses cleanly into four phrases through the baritone passaggio', () => {
     expect(a.warnings).toEqual([]);
+    expect(a.issues).toEqual([]);
     expect(a.phrases).toHaveLength(4);
     expect(a.pitch.lowMidi).toBeLessThanOrEqual(57);
     expect(a.pitch.highMidi).toBeGreaterThanOrEqual(70);

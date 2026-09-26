@@ -1,21 +1,18 @@
 // Optional AI coach: turns the numeric analysis into conversational feedback with Claude, using the
 // user's own Anthropic API key. Only the compact summary built by summarizeForAi and the chat text
 // are sent, never audio or per-frame data.
+//
+// The SDK is only imported as types here and loaded on demand (loadSdk), so the optional AI coach
+// doesn't add the SDK to the app's initial download.
 
-import Anthropic, {
-  APIConnectionError,
-  APIError,
-  APIUserAbortError,
-  AuthenticationError,
-  PermissionDeniedError,
-  RateLimitError,
-} from '@anthropic-ai/sdk';
+import type { APIError } from '@anthropic-ai/sdk';
 import type {
   BetaMessageParam,
   BetaMessageStreamParams,
   BetaTextBlock,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { midiToNoteName } from '../dsp/music';
+import { isScoreable } from './compare';
 import type {
   AppSettings,
   CoachingPlan,
@@ -72,14 +69,14 @@ export const AI_SYSTEM_PROMPT = `You are an experienced contemporary vocal coach
 
 What you receive
 The first user message holds a JSON summary of the analysis inside <analysis> tags, followed by the singer's question. You never hear the audio; you only see these measurements:
-- singer: the target profile, with a target band per style dimension (ideal, low-high band, weight = how much it matters to this singer's sound).
-- comparison: the singer's value for each dimension, the target, a 0-100 closeness score and a direction ("more" = raise it, "less" = lower it, "ok" = on target).
+- target: the target profile, with a target band per style dimension (ideal, low-high band, weight = how much it matters to that sound).
+- comparison: the singer's value for each dimension, the target, a 0-100 closeness score and a direction ("more" = raise it, "less" = lower it, "ok" = on target). scoreable = false means the take can't be scored reliably (see take.issues). suggestedTransposeSemitones is key advice from the singer's voice-type setting against the target singer's voice, not measured from this take.
 - plan: the app's own prioritised coaching plan. Build on it rather than contradicting it, unless the numbers clearly point elsewhere.
-- take: pitch range with note names, the passaggio zone, the style vector, tone medians, register shares, and summaries of notes, phrases (with their times), runs and onsets, plus recording quality and warnings.
+- take: pitch range with note names, the passaggio zone, the style vector, tone medians, register shares, and summaries of notes, phrases (with their times), runs and onsets, plus recording quality, warnings and issue codes (too-little-singing, accompaniment = singing over instruments, speech-like, noisy, clipping, too-quiet, trimmed).
 - reference (optional): a phrase-by-phrase pitch comparison with a reference clip after transposing to the singer's key (transposeSemitones = singer minus reference; positive cents = singer sharp).
 
 Style dimensions (0-1 indices unless a unit is given):
-- breathiness: 0-0.2 pressed or very clean, 0.3-0.5 clear and balanced, 0.6-0.8 clearly airy (soft R&B), 0.9-1 near-whisper.
+- breathiness: 0-0.2 very clean and firm, 0.3-0.5 clear and balanced, 0.6-0.8 clearly airy (soft R&B), 0.9-1 near-whisper. A low value alone does not mean a pressed voice.
 - brightness: 0-0.3 dark, covered, warm; 0.4-0.6 neutral; 0.7-1 bright, forward, twangy.
 - rasp: 0-0.15 clean, 0.2-0.4 slight grit on louder notes, 0.5 and above obvious rasp.
 - vibratoPresence: share of sustained notes with vibrato; vibratoRateHz; vibratoExtentCents (plus/minus semi-extent).
@@ -88,11 +85,12 @@ Style dimensions (0-1 indices unless a unit is given):
 - agility: notes per second inside runs (0 = no runs). dynamicRangeDb: loudness spread. softOnsetRatio: share of phrases that start with a breathy onset. pitchAccuracyCents: average deviation of held notes from the nearest semitone (lower is better). flipsPerMinute: sudden switches into head voice or falsetto.
 
 How to coach
+- If comparison.scoreable is false, don't coach on the style numbers: explain from take.issues and warnings why the take can't be scored, and help the singer record one that can.
 - Ground every observation in the numbers and quote the relevant one briefly in plain words (for example "about 55% of your singing above D4 read as chest"). Don't claim to have heard anything and don't invent measurements. If the data can't answer something, say so.
 - Register labels and the tone indices are estimates from acoustic proxies (H1-H2, spectral tilt, alpha ratio, cepstral peak prominence, loudness against pitch), not certainties. Say "reads as" or "estimated", and mention recording warnings when they make a measurement less trustworthy.
 - Coach toward the target singer's sound using the profile's targets. Describe the sound in listening terms; don't state biographical facts, quotes or claims about the singer beyond what the profile says.
 - Give specific technique cues and one to three exercises the singer can do today, such as straw phonation or lip trills, sirens and slides through the passaggio, narrowing or modifying vowels as the line climbs (for example toward "uh" or "oo"), lighter onsets, and keeping the volume level as the pitch rises.
-- Keep it safe. Never tell the singer to push louder, belt harder or power through strain. For high notes, cue less weight, less volume, narrower vowels and semi-occluded (straw, lip trill) work. Never suggest creating rasp or grit by squeezing the throat; if some grit is part of the target, treat it as optional and light, on an easy, well-supported tone, and tell them to stop if it hurts, tickles or leaves the voice hoarse. Recommend rest and water when strain shows up, and a voice specialist (an ENT doctor or speech-language pathologist) for hoarseness or pain that doesn't go away.
+- Keep it safe. Never tell the singer to push louder, belt harder or power through strain. For high notes, cue less weight, less volume, narrower vowels and semi-occluded (straw, lip trill) work. Never suggest creating rasp or grit by squeezing the throat; if some grit is part of the target, treat it as optional and light, on an easy, well-supported tone, and tell them to stop if it hurts, tickles or leaves the voice hoarse. Recommend rest and water when strain shows up, and a voice specialist (an ENT doctor or speech-language pathologist) for hoarseness or pain that doesn't go away. If the voice suddenly cuts out or loses range or power during a loud or high note, tell them to stop singing, rest and see a laryngologist within a few days.
 - Be concise and structured: a one-line overall read, then a few short bullets or short paragraphs on the one or two changes that will make the biggest difference. Use plain text with simple "-" bullets; no tables or headings.
 - Finish by asking the singer to re-record something specific (a phrase by its time and top note, for example "the phrase at 0:32 that peaks on G4") with the single change to focus on.
 - For follow-up questions, answer the question directly, using the same measurements.`;
@@ -150,9 +148,10 @@ function summarizeProfile(p: SingerProfile): object {
   };
 }
 
-function summarizeComparison(c: Comparison): object {
+function summarizeComparison(c: Comparison, a: VoiceAnalysis): object {
   return {
     overall: Math.round(c.overall),
+    scoreable: isScoreable(a, c),
     dimensions: c.dimensions.map((d) => ({
       key: d.key,
       value: num(d.value, 2),
@@ -161,7 +160,7 @@ function summarizeComparison(c: Comparison): object {
       direction: d.direction,
     })),
     suggestedTransposeSemitones: c.suggestedTransposeSemitones,
-    rangeNote: clip(c.rangeNote),
+    rangeNote: clip(c.rangeNote, 500),
   };
 }
 
@@ -267,6 +266,7 @@ function summarizeTake(a: VoiceAnalysis): object {
       noiseFloorDb: num(a.quality.noiseFloorDb, 0),
     },
     warnings: a.warnings.map((w) => clip(w, 200)),
+    issues: [...(a.issues ?? [])],
   };
 }
 
@@ -296,8 +296,8 @@ function summarizeReference(r: ReferenceComparison): object {
 /** Compact JSON-able summary of an analysis (no per-frame data) — what gets sent to the model. */
 export function summarizeForAi(input: AiCoachInput): object {
   const out: Record<string, unknown> = {
-    singer: summarizeProfile(input.profile),
-    comparison: summarizeComparison(input.comparison),
+    target: summarizeProfile(input.profile),
+    comparison: summarizeComparison(input.comparison, input.analysis),
     plan: summarizePlan(input.plan),
     take: summarizeTake(input.analysis),
   };
@@ -377,6 +377,19 @@ export function buildAiRequest(input: AiCoachInput, model: string): BetaMessageS
 }
 
 // ---------------------------------------------------------------------------------------------
+// SDK loading
+
+type Sdk = typeof import('@anthropic-ai/sdk');
+
+let sdk: Sdk | null = null;
+
+/** Loads the Anthropic SDK on first use (a separate chunk in the normal build) and caches it. */
+export async function loadSdk(): Promise<Sdk> {
+  sdk ??= await import('@anthropic-ai/sdk');
+  return sdk;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Errors
 
 const MSG_NO_KEY = 'Add your Anthropic API key in Settings to use the AI coach.';
@@ -405,19 +418,24 @@ function apiErrorMessage(err: APIError): string {
   return `The Claude API returned an error${status !== undefined ? ` (status ${status})` : ''}${suffix}.`;
 }
 
-/** Maps anything thrown while talking to the API to an AiCoachError, most specific SDK class first. */
+/**
+ * Maps anything thrown while talking to the API to an AiCoachError, most specific SDK class first.
+ * Before the SDK has loaded, the only thing that can fail is loading it (e.g. offline), which is a
+ * network problem.
+ */
 export function toAiCoachError(err: unknown, signal?: AbortSignal): AiCoachError {
   if (err instanceof AiCoachError) return err;
-  if (err instanceof APIUserAbortError) return new AiCoachError('other', MSG_STOPPED, { cause: err });
   if (signal?.aborted) return new AiCoachError('other', MSG_STOPPED, { cause: err });
-  if (err instanceof AuthenticationError || err instanceof PermissionDeniedError) {
+  if (!sdk) return new AiCoachError('network', MSG_NETWORK, { cause: err });
+  if (err instanceof sdk.APIUserAbortError) return new AiCoachError('other', MSG_STOPPED, { cause: err });
+  if (err instanceof sdk.AuthenticationError || err instanceof sdk.PermissionDeniedError) {
     return new AiCoachError('auth', MSG_AUTH, { cause: err, status: err.status });
   }
-  if (err instanceof RateLimitError) return new AiCoachError('rate', MSG_RATE, { cause: err, status: err.status });
+  if (err instanceof sdk.RateLimitError) return new AiCoachError('rate', MSG_RATE, { cause: err, status: err.status });
   // Covers timeouts and failed fetches, including requests blocked by a host page's CSP (the SDK
   // wraps the browser's TypeError in APIConnectionError).
-  if (err instanceof APIConnectionError) return new AiCoachError('network', MSG_NETWORK, { cause: err });
-  if (err instanceof APIError) return new AiCoachError('other', apiErrorMessage(err), { cause: err, status: err.status });
+  if (err instanceof sdk.APIConnectionError) return new AiCoachError('network', MSG_NETWORK, { cause: err });
+  if (err instanceof sdk.APIError) return new AiCoachError('other', apiErrorMessage(err), { cause: err, status: err.status });
   return new AiCoachError('other', 'Something went wrong while talking to the AI coach.', { cause: err });
 }
 
@@ -437,17 +455,18 @@ export async function askAiCoach(
   if (signal?.aborted) throw new AiCoachError('other', MSG_STOPPED);
   const model = settings.aiModel?.trim() || DEFAULT_AI_MODEL;
 
-  // The app has no server: the browser calls the API directly with a key the user typed into
-  // Settings, which is stored only in this browser. dangerouslyAllowBrowser acknowledges that the
-  // key is visible to this page, which is acceptable because the key and the page are the user's own.
-  const client = new Anthropic({
-    apiKey,
-    dangerouslyAllowBrowser: true,
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
-    ...(deps.maxRetries !== undefined ? { maxRetries: deps.maxRetries } : {}),
-  });
-
   try {
+    const { default: Anthropic } = await loadSdk();
+    if (signal?.aborted) throw new AiCoachError('other', MSG_STOPPED);
+    // The app has no server: the browser calls the API directly with a key the user typed into
+    // Settings, which is stored only in this browser. dangerouslyAllowBrowser acknowledges that the
+    // key is visible to this page, which is acceptable because the key and the page are the user's own.
+    const client = new Anthropic({
+      apiKey,
+      dangerouslyAllowBrowser: true,
+      ...(deps.fetch ? { fetch: deps.fetch } : {}),
+      ...(deps.maxRetries !== undefined ? { maxRetries: deps.maxRetries } : {}),
+    });
     const stream = client.beta.messages.stream(buildAiRequest(input, model), { signal });
     stream.on('text', (delta) => onText(delta));
     const message = await stream.finalMessage();

@@ -1,8 +1,12 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeFakeSessions } from '../../testing/fixtures';
+import { compareToProfile } from '../../coach/compare';
+import { SINGERS } from '../../coach/profiles';
+import { profileFromReference } from '../../coach/reference';
+import { sessionFromResults } from '../../storage/history';
+import { makeFakeAnalysis, makeFakeSessions } from '../../testing/fixtures';
 import type { SessionRecord } from '../../types';
 import { availableMetrics, ProgressPage, profileTabs } from './Progress';
 
@@ -35,10 +39,26 @@ function sessions(): SessionRecord[] {
   return [...shawn, ...jalen];
 }
 
-function button(re: RegExp): HTMLButtonElement {
-  const b = Array.from(container.querySelectorAll('button')).find((el) => re.test(el.textContent ?? ''));
+function buttonIn(el: ParentNode, re: RegExp): HTMLButtonElement {
+  const b = Array.from(el.querySelectorAll('button')).find((x) => re.test(x.textContent ?? ''));
   if (!b) throw new Error(`No button matching ${re}`);
   return b;
+}
+
+function button(re: RegExp): HTMLButtonElement {
+  return buttonIn(container, re);
+}
+
+/** ProgressPage wired like the app: deleting and clearing change the sessions it is given. */
+function Harness(props: { initial: SessionRecord[] }) {
+  const [list, setList] = useState(props.initial);
+  return <ProgressPage sessions={list} onDelete={(id) => setList((l) => l.filter((s) => s.id !== id))} onClear={() => setList([])} />;
+}
+
+function rowFor(re: RegExp): HTMLElement {
+  const row = Array.from(container.querySelectorAll<HTMLElement>('.hist-row')).find((r) => re.test(r.textContent ?? ''));
+  if (!row) throw new Error(`No row matching ${re}`);
+  return row;
 }
 
 function chartLabels(): string[] {
@@ -73,15 +93,103 @@ describe('ProgressPage', () => {
     expect(chartLabels()[1]).toContain('Mix above the passaggio score over 4 sessions');
   });
 
-  it('lists every session newest first and deletes one', () => {
+  it('lists every session newest first and deletes one after an in-page confirmation', () => {
     const onDelete = vi.fn();
     act(() => root.render(<ProgressPage sessions={sessions()} onDelete={onDelete} onClear={() => {}} />));
-    const rows = Array.from(container.querySelectorAll('.hist-row'));
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('.hist-row'));
     expect(rows).toHaveLength(6);
     expect(rows[0].textContent).toContain('Jalen Ngonda');
     expect(rows[0].textContent).toContain('Chorus');
-    act(() => rows[0].querySelector('button')!.click());
+    // One tap only opens the prompt; nothing is deleted yet.
+    const del = rows[0].querySelector<HTMLButtonElement>('.hist-row-delete')!;
+    act(() => del.click());
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(del.getAttribute('aria-expanded')).toBe('true');
+    expect(rows[0].textContent).toContain('Delete this take?');
+    expect(document.activeElement?.textContent).toBe('Keep');
+    // Keep closes the prompt and puts focus back on the row's Delete.
+    act(() => buttonIn(rows[0], /^Keep$/).click());
+    expect(rows[0].textContent).not.toContain('Delete this take?');
+    expect(document.activeElement).toBe(del);
+    expect(onDelete).not.toHaveBeenCalled();
+    // Escape also keeps it.
+    act(() => del.click());
+    act(() => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(rows[0].textContent).not.toContain('Delete this take?');
+    expect(onDelete).not.toHaveBeenCalled();
+    act(() => del.click());
+    act(() => buttonIn(rows[0], /Yes, delete/).click());
     expect(onDelete).toHaveBeenCalledWith('jas1');
+  });
+
+  it('moves focus to the next row after a delete, and to the heading when the list ends', () => {
+    act(() => root.render(<Harness initial={sessions().slice(3)} />));
+    const rows = () => Array.from(container.querySelectorAll<HTMLElement>('.hist-row'));
+    expect(rows()).toHaveLength(3);
+    const secondDelete = rows()[1].querySelector<HTMLButtonElement>('.hist-row-delete')!;
+    act(() => rows()[0].querySelector<HTMLButtonElement>('.hist-row-delete')!.click());
+    act(() => buttonIn(rows()[0], /Yes, delete/).click());
+    expect(rows()).toHaveLength(2);
+    expect(document.activeElement).toBe(secondDelete);
+    // Deleting the last row focuses the row above it.
+    const last = rows()[1];
+    const firstDelete = rows()[0].querySelector<HTMLButtonElement>('.hist-row-delete')!;
+    act(() => last.querySelector<HTMLButtonElement>('.hist-row-delete')!.click());
+    act(() => buttonIn(last, /Yes, delete/).click());
+    expect(document.activeElement).toBe(firstDelete);
+    // The very last take: focus lands on the empty-state message, not <body>.
+    act(() => firstDelete.click());
+    act(() => buttonIn(rows()[0], /Yes, delete/).click());
+    expect(container.textContent).toContain('No saved takes yet');
+    expect(document.activeElement).toBe(container.querySelector('.hist-empty-title'));
+  });
+
+  it('keeps focus in the page when clearing is cancelled or done', () => {
+    act(() => root.render(<Harness initial={sessions()} />));
+    act(() => button(/Clear history/).click());
+    act(() => button(/Cancel/).click());
+    expect(document.activeElement).toBe(button(/Clear history/));
+    act(() => button(/Clear history/).click());
+    act(() => button(/Delete all/).click());
+    expect(container.textContent).toContain('History cleared');
+    expect(document.activeElement).toBe(container.querySelector('.hist-empty-title'));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('gives each reference clip its own trend, labelled with the clip name', () => {
+    const clip = (id: string, name: string, day: number) => ({
+      ...makeFakeSessions(1)[0],
+      id,
+      profileId: `reference:${name}`,
+      profileName: name,
+      createdAt: new Date(Date.UTC(2026, 8, day, 12)).toISOString(),
+    });
+    const list = [clip('a', 'Get You (stem)', 1), clip('b', 'Get You (stem)', 2), clip('c', 'Stitches (stem)', 3)];
+    act(() => root.render(<ProgressPage sessions={list} onDelete={() => {}} onClear={() => {}} />));
+    const tabs = Array.from(container.querySelectorAll('.hist-tab'));
+    expect(tabs.map((t) => t.textContent)).toEqual(['Get You (stem) 2', 'Stitches (stem) 1']);
+    expect(container.querySelector('.hist-singer')?.textContent).toBe('Against Stitches (stem), your reference clip');
+    expect(chartLabels()[0]).toContain('one session');
+    act(() => (tabs[0] as HTMLButtonElement).click());
+    expect(chartLabels()[0]).toContain('Overall match over 2 sessions');
+    expect(container.querySelector('.hist-singer')?.textContent).toBe('Against Get You (stem), your reference clip');
+  });
+
+  it('shows unscored takes in the list but leaves them out of the stats and trend', () => {
+    const base = makeFakeSessions(3, 'shawn-mendes').map((s) => ({ ...s, profileName: 'Shawn Mendes' }));
+    // An old save of a silent take: nothing measured, overall 0.
+    const silent = { ...base[2], id: 'silent', overall: 0, dimensionScores: {} };
+    act(() => root.render(<ProgressPage sessions={[base[0], base[1], silent]} onDelete={() => {}} onClear={() => {}} />));
+    const stats = container.querySelector('.hist-stats')!.textContent;
+    expect(stats).toContain('Takes3');
+    expect(stats).toContain('Latest59');
+    expect(stats).toContain('Since first+4');
+    expect(container.textContent).toContain('One take had too little clear singing to score');
+    expect(chartLabels()[0]).toContain('Overall match over 2 sessions');
+    const row = rowFor(/Not scored/);
+    expect(row.querySelector('.hist-row-score')?.textContent).toBe('Not scored–');
   });
 
   it('asks for confirmation in the page before clearing', () => {
@@ -114,6 +222,15 @@ describe('Progress helpers', () => {
     const tabs = profileTabs([extra, ...sessions()]);
     expect(tabs.map((t) => t.id)).toEqual(['shawn-mendes', 'jalen-ngonda', 'reference']);
     expect(tabs[0].count).toBe(4);
+  });
+
+  it('keeps sessions against different reference clips apart (end to end through storage)', () => {
+    const a = makeFakeAnalysis();
+    const p1 = profileFromReference(makeFakeAnalysis({ breathiness: 0.7 }), 'Daniel - Get You (stem)', SINGERS[1]);
+    const p2 = profileFromReference(makeFakeAnalysis({ breathiness: 0.2 }), 'Shawn - Stitches (stem)', SINGERS[0]);
+    const s1 = sessionFromResults(a, compareToProfile(a, p1), p1);
+    const s2 = { ...sessionFromResults(a, compareToProfile(a, p2), p2), createdAt: new Date(Date.now() + 1000).toISOString() };
+    expect(profileTabs([s1, s2]).map((t) => t.name)).toEqual(['Daniel - Get You (stem)', 'Shawn - Stitches (stem)']);
   });
 
   it('finds the measures that have scores', () => {

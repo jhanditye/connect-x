@@ -3,7 +3,7 @@
 import { buildCoachingPlan } from '../coach/coach';
 import { compareToProfile } from '../coach/compare';
 import { SINGERS } from '../coach/profiles';
-import { compareToReference, profileFromReference } from '../coach/reference';
+import { compareToReference, profileFromReference, referenceUsability } from '../coach/reference';
 import type { ScoringDeps } from './reducer';
 
 export const scoringDeps: ScoringDeps = {
@@ -11,5 +11,6 @@ export const scoringDeps: ScoringDeps = {
   compare: compareToProfile,
   plan: buildCoachingPlan,
   profileFromReference,
+  referenceUsability,
   compareToReference,
 };

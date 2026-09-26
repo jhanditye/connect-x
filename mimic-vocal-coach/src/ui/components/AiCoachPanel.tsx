@@ -1,5 +1,9 @@
 // Conversational feedback from Claude with the user's own key. Only the numeric summary built in
 // coach/ai.ts is sent; the take's audio never leaves the browser.
+//
+// The conversation itself lives in app state (the parent passes `turns` and `onTurns`), so leaving
+// Results, e.g. to follow a coaching card's exercise link, does not throw away answers the user paid
+// for. Only the in-flight stream belongs to this component.
 
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { AiCoachError, askAiCoach, type AiCoachInput } from '../../coach/ai';
@@ -7,42 +11,59 @@ import type { AppSettings } from '../../types';
 import { Icon } from './Icon';
 import { RichText } from './RichText';
 
-type Turn = { role: 'user' | 'assistant'; text: string };
+export type Turn = { role: 'user' | 'assistant'; text: string };
 
 const FIRST_QUESTION = 'Give me feedback on this take and what to practise next.';
 
 export function AiCoachPanel(props: {
   settings: AppSettings;
   input: Omit<AiCoachInput, 'question' | 'history'>;
-  /** Changes whenever the take or target changes; the conversation restarts. */
+  /** Changes whenever the take or target changes; an answer still streaming for the old key is dropped. */
   conversationKey: string;
+  /** The conversation so far for this key. */
+  turns: Turn[];
+  /** Stores the conversation for `key` (the key it was asked under, even if the page has moved on). */
+  onTurns: (key: string, turns: Turn[]) => void;
   onOpenSettings: () => void;
   singerName: string;
 }) {
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const { turns, onTurns } = props;
   const [streaming, setStreaming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const abortRef = useRef<AbortController | null>(null);
   const inputId = useId();
+  const stopRef = useRef<HTMLButtonElement>(null);
+  const followupRef = useRef<HTMLInputElement>(null);
+  const wasBusy = useRef(false);
 
   useEffect(() => {
     abortRef.current?.abort();
     abortRef.current = null;
-    setTurns([]);
     setStreaming(null);
     setError(null);
     setDraft('');
   }, [props.conversationKey]);
 
+  // Leaving the page stops the stream; ask() then stores whatever had arrived, marked as stopped.
   useEffect(() => () => abortRef.current?.abort(), []);
 
   const busy = streaming !== null;
   const hasKey = !!props.settings.anthropicApiKey?.trim();
 
+  // The button that was pressed disappears while Claude answers, so keep keyboard focus on the
+  // controls that replace it: Stop while streaming, then the follow-up field.
+  useEffect(() => {
+    if (busy && !wasBusy.current) stopRef.current?.focus();
+    if (!busy && wasBusy.current) followupRef.current?.focus();
+    wasBusy.current = busy;
+  }, [busy]);
+
   async function ask(question: string) {
     if (busy || !question.trim()) return;
     const history = turns;
+    const key = props.conversationKey;
+    const setTurns = (t: Turn[]) => onTurns(key, t);
     const controller = new AbortController();
     abortRef.current = controller;
     setError(null);
@@ -59,11 +80,14 @@ export function AiCoachPanel(props: {
         },
         controller.signal,
       );
-      if (abortRef.current !== controller) return;
+      // Stored under the key it was asked for, even if the singer changed meanwhile.
       setTurns([...history, { role: 'user', text: question }, { role: 'assistant', text: answer || partial }]);
     } catch (err) {
-      // Superseded by a reset (new take or singer): drop the reply.
-      if (abortRef.current !== controller) return;
+      // Superseded (the singer changed mid-answer): drop the reply and the unanswered question.
+      if (abortRef.current !== controller) {
+        setTurns(history);
+        return;
+      }
       if (controller.signal.aborted && partial.trim()) {
         // Keep what arrived before Stop so the conversation still alternates user/assistant.
         setTurns([...history, { role: 'user', text: question }, { role: 'assistant', text: `${partial.trim()}\n\n*(stopped)*` }]);
@@ -138,7 +162,7 @@ export function AiCoachPanel(props: {
       )}
 
       {busy ? (
-        <button type="button" className="button button--ghost" onClick={() => abortRef.current?.abort()}>
+        <button ref={stopRef} type="button" className="button button--ghost" onClick={() => abortRef.current?.abort()}>
           <Icon name="stop" size={16} /> Stop
         </button>
       ) : (
@@ -148,6 +172,7 @@ export function AiCoachPanel(props: {
               Ask a follow-up question
             </label>
             <input
+              ref={followupRef}
               id={inputId}
               className="text-input"
               type="text"

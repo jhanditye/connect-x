@@ -11,7 +11,7 @@ import type { DimensionResult, SessionRecord } from '../../types';
 import { formatDimValue, niceTicks, singerVar, timeTicks, formatTick, fmtSigned } from './chartKit';
 import { DimensionMeter, meterDomain } from './DimensionMeter';
 import { contourSegments, pitchYDomain, PitchPlot, refTimeMapper } from './PitchPlot';
-import { labelIndices, ProgressChart, progressPoints } from './ProgressChart';
+import { hasScores, labelIndices, ProgressChart, progressPoints } from './ProgressChart';
 import { isBlackKey, keyboardLayout, RangeKeyboard } from './RangeKeyboard';
 import { centsExtent, decimateRun, diffRuns, ReferenceDiffPlot } from './ReferenceDiffPlot';
 import { normaliseShares, RegisterBar } from './RegisterBar';
@@ -382,6 +382,8 @@ describe('other chart helpers', () => {
     expect(singerVar('shawn-mendes', '#b97a12')).toBe('var(--singer-shawn)');
     expect(singerVar('custom', '#123456')).toBe('#123456');
     expect(singerVar(undefined)).toBe('var(--singer-custom)');
+    // Saved sessions key reference clips as 'reference:<clip name>'.
+    expect(singerVar('reference:My clip.wav', 'var(--accent)')).toBe('var(--singer-custom)');
   });
 
   it('progress points filter by profile and metric, oldest first', () => {
@@ -391,6 +393,17 @@ describe('other chart helpers', () => {
     expect(pts.map((p) => p.session.id)).toEqual(['s0', 's1', 's2']);
     expect(progressPoints(sessions, undefined, 'overall')).toHaveLength(4);
     expect(progressPoints(sessions, 'test-singer', 'rasp')).toHaveLength(0);
+  });
+
+  it('progress points leave out takes where nothing was measured', () => {
+    const sessions: SessionRecord[] = makeFakeSessions(3);
+    sessions.push({ ...makeFakeSessions(1)[0], id: 'silent', overall: 0, dimensionScores: {}, createdAt: new Date(Date.UTC(2026, 9, 1)).toISOString() });
+    expect(hasScores(sessions[3])).toBe(false);
+    expect(hasScores(sessions[0])).toBe(true);
+    expect(progressPoints(sessions, 'test-singer', 'overall').map((p) => p.session.id)).toEqual(['s0', 's1', 's2']);
+    const onlySilent = renderToStaticMarkup(<ProgressChart sessions={[sessions[3]]} profileId="test-singer" />);
+    expect(onlySilent).toContain('enough clear singing to score');
+    expect(onlySilent).not.toContain('role="img"');
   });
 
   it('date labels keep a minimum gap and always include the newest', () => {

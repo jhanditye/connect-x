@@ -2,13 +2,22 @@
 // (exact samples, no browser resampling, works without an AudioContext); everything else goes to
 // the browser's decoder.
 
-import { toMono } from '../dsp/resample';
 import { decodeWav } from './wav';
 
 export interface DecodedTake {
   samples: Float32Array;
   sampleRate: number;
+  /** Length of `samples`, s. */
   durationSec: number;
+  /** Length of the whole file, s: more than durationSec when `maxSeconds` cut it short. */
+  sourceDurationSec: number;
+  /** Notes for the user about how the file was read (e.g. stereo channels that cancel out). */
+  notices: string[];
+}
+
+export interface DecodeOptions {
+  /** Keep only the first this-many seconds. WAV files are then only decoded that far. */
+  maxSeconds?: number;
 }
 
 /** File extensions the upload inputs advertise (browsers vary; the decoder is the final judge). */
@@ -16,6 +25,18 @@ export const AUDIO_ACCEPT = 'audio/*,.wav,.mp3,.m4a,.aac,.ogg,.oga,.opus,.webm,.
 
 /** Bigger files are almost certainly not a single sung take and would exhaust memory when decoded. */
 const MAX_FILE_BYTES = 250 * 1024 * 1024;
+/**
+ * Compressed audio is decoded in full by the browser (about 11 MB of samples per minute at 48 kHz
+ * stereo), so a smaller file size already means a very long recording.
+ */
+const MAX_COMPRESSED_BYTES = 60 * 1024 * 1024;
+/** A mono mix this far below the loudest channel means the channels cancel (one is phase-inverted). */
+const CANCEL_DB = 20;
+/** WAV mixes quieter than this (-30 dBFS RMS) are re-checked for cancelling channels. */
+const QUIET_MIX_RMS = 10 ** (-30 / 20);
+
+const CANCEL_NOTICE =
+  'The two channels of this file cancel each other out when mixed (one is phase-inverted, as some interfaces and mics do), so only the louder channel was analysed.';
 
 export class DecodeError extends Error {
   constructor(message: string) {
@@ -91,12 +112,67 @@ function channelsOf(buffer: AudioBuffer): Float32Array[] {
   return Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c));
 }
 
-/** Decode any browser-supported audio file to mono Float32 at its native rate. Uses decodeWav for WAV first, then AudioContext.decodeAudioData. */
-export async function decodeAudioFile(file: Blob): Promise<DecodedTake> {
-  if (file.size === 0) throw new DecodeError(`${fileLabel(file)} is empty.`);
-  if (file.size > MAX_FILE_BYTES) {
-    throw new DecodeError(`${fileLabel(file)} is too large (${Math.round(file.size / 1048576)} MB). Trim it to the part you sing and try again.`);
+function rms(x: Float32Array, n = x.length): number {
+  let sum = 0;
+  for (let i = 0; i < n; i++) sum += x[i] * x[i];
+  return n > 0 ? Math.sqrt(sum / n) : 0;
+}
+
+/**
+ * The first `frames` frames mixed to mono. When the mix is far quieter than the loudest channel
+ * (a phase-inverted channel cancels the other), that channel is used instead.
+ */
+export function downmix(channels: Float32Array[], frames = Infinity): { samples: Float32Array; cancelled: boolean } {
+  if (channels.length === 0) return { samples: new Float32Array(0), cancelled: false };
+  const n = Math.max(0, Math.min(frames, ...channels.map((c) => c.length)));
+  if (channels.length === 1) return { samples: channels[0].length === n ? channels[0] : channels[0].slice(0, n), cancelled: false };
+  const out = new Float32Array(n);
+  const g = 1 / channels.length;
+  for (const ch of channels) for (let i = 0; i < n; i++) out[i] += ch[i] * g;
+  let loudest = 0;
+  let loudestRms = 0;
+  channels.forEach((ch, c) => {
+    const r = rms(ch, n);
+    if (r > loudestRms) {
+      loudestRms = r;
+      loudest = c;
+    }
+  });
+  if (loudestRms > 0 && rms(out) < loudestRms * 10 ** (-CANCEL_DB / 20)) {
+    return { samples: channels[loudest].slice(0, n), cancelled: true };
   }
+  return { samples: out, cancelled: false };
+}
+
+function frameLimit(maxSeconds: number | undefined, sampleRate: number): number {
+  return maxSeconds !== undefined && maxSeconds >= 0 ? Math.floor(maxSeconds * sampleRate) : Infinity;
+}
+
+/** Our own WAV parser: exact samples, and only as much of a long file as `maxSeconds` asks for. */
+function decodeWavFile(buf: ArrayBuffer, file: Blob, maxSeconds: number | undefined): DecodedTake {
+  const wav = decodeWav(buf, { maxSeconds, mono: true });
+  let samples = wav.channels[0] ?? new Float32Array(0);
+  let cancelled = false;
+  // Mixing while reading keeps memory down; a quiet multi-channel mix is re-read per channel in
+  // case the channels cancel each other.
+  if ((wav.sourceChannels ?? 1) > 1 && rms(samples) < QUIET_MIX_RMS) {
+    ({ samples, cancelled } = downmix(decodeWav(buf, { maxSeconds }).channels));
+  }
+  const total = wav.totalFrames ?? samples.length;
+  return finish(samples, wav.sampleRate, file, total / wav.sampleRate, cancelled);
+}
+
+function tooLarge(file: Blob): DecodeError {
+  return new DecodeError(`${fileLabel(file)} is too large (${Math.round(file.size / 1048576)} MB). Trim it to the part you sing and try again.`);
+}
+
+/**
+ * Decode any browser-supported audio file to mono Float32 at its native rate. Uses decodeWav for WAV
+ * first, then AudioContext.decodeAudioData. `opts.maxSeconds` keeps only the start of a long file.
+ */
+export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Promise<DecodedTake> {
+  if (file.size === 0) throw new DecodeError(`${fileLabel(file)} is empty.`);
+  if (file.size > MAX_FILE_BYTES) throw tooLarge(file);
   let buf: ArrayBuffer;
   try {
     buf = await file.arrayBuffer();
@@ -106,21 +182,24 @@ export async function decodeAudioFile(file: Blob): Promise<DecodedTake> {
 
   if (isRiffWave(buf)) {
     try {
-      const wav = decodeWav(buf);
-      return finish(toMono(wav.channels), wav.sampleRate, file);
-    } catch {
-      // Compressed WAV variants (ADPCM, mu-law...) are not handled by decodeWav; the browser may manage.
+      return decodeWavFile(buf, file, opts.maxSeconds);
+    } catch (err) {
+      // A readable WAV with no samples says so; compressed WAV variants (ADPCM, mu-law...) are not
+      // handled by decodeWav, and the browser may manage them.
+      if (err instanceof DecodeError) throw err;
     }
   }
+  if (file.size > MAX_COMPRESSED_BYTES) throw tooLarge(file);
 
   const ctx = createDecodingContext();
   if (!ctx) {
     throw new DecodeError('This browser cannot decode compressed audio here. Export the take as a WAV file and upload that instead.');
   }
   try {
-    // decodeAudioData detaches its input, so hand it a copy.
-    const audio = await decodeWith(ctx, buf.slice(0));
-    return finish(toMono(channelsOf(audio)), audio.sampleRate, file);
+    // decodeAudioData detaches its input; nothing reads `buf` after this.
+    const audio = await decodeWith(ctx, buf);
+    const { samples, cancelled } = downmix(channelsOf(audio), frameLimit(opts.maxSeconds, audio.sampleRate));
+    return finish(samples, audio.sampleRate, file, audio.length / audio.sampleRate, cancelled);
   } catch (err) {
     if (err instanceof DecodeError) throw err;
     const type = file.type ? ` (${file.type})` : '';
@@ -132,7 +211,14 @@ export async function decodeAudioFile(file: Blob): Promise<DecodedTake> {
   }
 }
 
-function finish(samples: Float32Array, sampleRate: number, file: Blob): DecodedTake {
+function finish(samples: Float32Array, sampleRate: number, file: Blob, sourceDurationSec: number, cancelled: boolean): DecodedTake {
   if (!(sampleRate > 0) || samples.length === 0) throw new DecodeError(`${fileLabel(file)} contains no audio.`);
-  return { samples, sampleRate, durationSec: samples.length / sampleRate };
+  const durationSec = samples.length / sampleRate;
+  return {
+    samples,
+    sampleRate,
+    durationSec,
+    sourceDurationSec: Number.isFinite(sourceDurationSec) ? Math.max(durationSec, sourceDurationSec) : durationSec,
+    notices: cancelled ? [CANCEL_NOTICE] : [],
+  };
 }

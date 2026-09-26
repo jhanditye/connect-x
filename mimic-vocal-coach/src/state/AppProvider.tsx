@@ -2,13 +2,15 @@
 // and theme. Everything a page can do goes through the AppController built here.
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
+import { MAX_ANALYSIS_SEC } from '../analysis/analyze';
 import { analyzeInWorker } from '../analysis/client';
 import { makeDemoTake } from '../analysis/demo';
 import { decodeAudioFile } from '../audio/decode';
+import { isScoreable } from '../coach/compare';
 import { getExercise } from '../coach/exercises';
 import { clearSessions, deleteSession, loadSessions, saveSession, sessionFromResults } from '../storage/history';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage/settings';
-import type { AnalysisOptions, AppSettings, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
+import type { AnalysisOptions, AppSettings, ReferenceComparison, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
 import { AppContext, type AppController, type SamplesInput } from './context';
 import {
   availableProfiles,
@@ -17,6 +19,7 @@ import {
   createReducer,
   referenceOptions,
   sameOptions,
+  saveKey,
   takeOptions,
   type AppState,
   type JobKind,
@@ -26,18 +29,31 @@ import { useHashRoute } from './routing';
 import { scoringDeps } from './scoring';
 import { applyTheme, loadTheme, saveTheme, type ThemePref } from './theme';
 
-/** Longer inputs are trimmed: a take or reference clip beyond this is not one phrase, and analysis time grows linearly. */
-const MAX_ANALYSIS_SEC = 360;
 /** Below this there is not enough singing to measure anything. */
 const MIN_TAKE_SEC = 1;
+/** A take this little over the limit (a recording stopped a moment late) is trimmed without a notice. */
+const TRIM_NOTICE_SLACK_SEC = 1;
 
-function trimForAnalysis(samples: Float32Array, sampleRate: number, name: string): { samples: Float32Array; notices: string[] } {
-  const max = Math.round(MAX_ANALYSIS_SEC * sampleRate);
-  if (samples.length <= max) return { samples, notices: [] };
-  return {
-    samples: samples.slice(0, max),
-    notices: [`Only the first ${MAX_ANALYSIS_SEC / 60} minutes of ${name} were analysed. Trim long files to the part you want coached.`],
-  };
+/**
+ * Takes and reference clips are cut to the analysis limit (the same one analyzeTake uses) before
+ * analysis, so the analysis never trims again and only one notice, with the real file length, is shown.
+ */
+function trimForAnalysis(
+  samples: Float32Array,
+  sampleRate: number,
+  name: string,
+  sourceDurationSec = samples.length / sampleRate,
+): { samples: Float32Array; notices: string[] } {
+  const max = Math.floor(MAX_ANALYSIS_SEC * sampleRate);
+  const kept = samples.length > max ? samples.slice(0, max) : samples;
+  const notices =
+    sourceDurationSec > MAX_ANALYSIS_SEC + TRIM_NOTICE_SLACK_SEC
+      ? [
+          `Only the first ${MAX_ANALYSIS_SEC / 60} minutes of ${name} (${(sourceDurationSec / 60).toFixed(1)} minutes long) were analysed. ` +
+            'Trim long files to the part you want coached.',
+        ]
+      : [];
+  return { samples: kept, notices };
 }
 
 function stripExtension(name: string): string {
@@ -85,23 +101,33 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
       const durationSec = input.samples.length / input.sampleRate;
       if (!(durationSec >= MIN_TAKE_SEC)) {
         // job/fail (not error/set) so a decoded-but-too-short upload also leaves the 'decoding' state.
-        dispatch({ type: 'job/fail', message: 'That take is too short to analyse. Sing at least one full phrase (15–60 s works best).' });
+        dispatch({ type: 'job/fail', job: 'take', message: 'That take is too short to analyse. Sing at least one full phrase (15–60 s works best).' });
         return false;
       }
+      // A drill picked on the Practice page labels the next recorded or uploaded take; a demo take is
+      // synthesised, so it never counts as the drill and the drill stays pending.
       const drillId = stateRef.current.drillExerciseId;
-      const drill = drillId ? getExercise(drillId) : undefined;
-      const name = drill && input.source === 'recording' ? `Drill: ${drill.name}` : input.name;
-      const trimmed = trimForAnalysis(input.samples, input.sampleRate, name);
+      const drill = drillId && input.source !== 'demo' ? getExercise(drillId) : undefined;
+      const name = drill ? `Drill: ${drill.name}` : input.name;
+      const trimmed = trimForAnalysis(input.samples, input.sampleRate, name, input.sourceDurationSec);
+      const notices = [...(input.notices ?? []), ...trimmed.notices];
       const opts = takeOptions(stateRef.current.settings);
       const analysis = await runAnalysis('take', trimmed.samples, input.sampleRate, opts, `Analysing ${name}`);
       if (!analysis) return false;
       failedOptsRef.current = null;
       dispatch({
         type: 'take/analyzed',
-        take: { samples: trimmed.samples, sampleRate: input.sampleRate, source: input.source, name, durationSec: trimmed.samples.length / input.sampleRate },
+        take: {
+          samples: trimmed.samples,
+          sampleRate: input.sampleRate,
+          source: input.source,
+          name,
+          durationSec: trimmed.samples.length / input.sampleRate,
+          notices,
+        },
         analysis,
         opts,
-        notices: trimmed.notices,
+        notices,
       });
       if (drill) dispatch({ type: 'drill/set', exerciseId: null });
       return true;
@@ -113,7 +139,8 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
     const run = ++runRef.current;
     dispatch({ type: 'job/start', job, phase: 'decoding', label: `Reading ${file.name}` });
     try {
-      const decoded = await decodeAudioFile(file);
+      // Only the part that will be analysed is decoded (long WAV files are never read in full).
+      const decoded = await decodeAudioFile(file, { maxSeconds: MAX_ANALYSIS_SEC });
       return runRef.current === run ? decoded : null;
     } catch (err) {
       if (runRef.current === run) dispatch({ type: 'job/fail', message: message(err, `Could not read ${file.name}.`) });
@@ -125,7 +152,14 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
     async (file: File): Promise<boolean> => {
       const decoded = await decode(file, 'take');
       if (!decoded) return false;
-      return analyzeSamples({ samples: decoded.samples, sampleRate: decoded.sampleRate, source: 'upload', name: stripExtension(file.name) || 'Uploaded take' });
+      return analyzeSamples({
+        samples: decoded.samples,
+        sampleRate: decoded.sampleRate,
+        source: 'upload',
+        name: stripExtension(file.name) || 'Uploaded take',
+        sourceDurationSec: decoded.sourceDurationSec,
+        notices: decoded.notices,
+      });
     },
     [decode, analyzeSamples],
   );
@@ -142,12 +176,13 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
   }, [analyzeSamples]);
 
   const analyzeReference = useCallback(
-    async (clip: { name: string; samples: Float32Array; sampleRate: number }, notices: string[]): Promise<boolean> => {
+    async (clip: { name: string; samples: Float32Array; sampleRate: number; notices: string[] }, reanalysis: boolean): Promise<boolean> => {
       const opts = referenceOptions(stateRef.current);
-      const analysis = await runAnalysis('reference', clip.samples, clip.sampleRate, opts, `Analysing reference ${clip.name}`);
+      const label = `${reanalysis ? 'Re-analysing' : 'Analysing'} reference ${clip.name}`;
+      const analysis = await runAnalysis('reference', clip.samples, clip.sampleRate, opts, label);
       if (!analysis) return false;
       failedOptsRef.current = null;
-      dispatch({ type: 'reference/analyzed', clip, analysis, opts, notices });
+      dispatch({ type: 'reference/analyzed', clip, analysis, opts, reanalysis });
       return true;
     },
     [runAnalysis],
@@ -158,8 +193,9 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
       const decoded = await decode(file, 'reference');
       if (!decoded) return false;
       const name = stripExtension(file.name) || 'Reference clip';
-      const trimmed = trimForAnalysis(decoded.samples, decoded.sampleRate, name);
-      return analyzeReference({ name, samples: trimmed.samples, sampleRate: decoded.sampleRate }, trimmed.notices);
+      const trimmed = trimForAnalysis(decoded.samples, decoded.sampleRate, name, decoded.sourceDurationSec);
+      const notices = [...decoded.notices, ...trimmed.notices];
+      return analyzeReference({ name, samples: trimmed.samples, sampleRate: decoded.sampleRate, notices }, false);
     },
     [decode, analyzeReference],
   );
@@ -185,8 +221,9 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
           if (analysis) dispatch({ type: 'take/analyzed', take, analysis, opts: wantTake });
         });
       } else if (refStale && s.reference) {
-        const { name, samples, sampleRate } = s.reference;
-        void analyzeReference({ name, samples, sampleRate }, []);
+        // A re-analysis keeps the clip's base singer and the current selection.
+        const { name, samples, sampleRate, notices } = s.reference;
+        void analyzeReference({ name, samples, sampleRate, notices }, true);
       }
     }, 400);
     return () => clearTimeout(timer);
@@ -200,13 +237,38 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
 
   const refreshSessions = useCallback(() => dispatch({ type: 'sessions/set', sessions: loadSessions() }), []);
 
+  // The phrase-by-phrase reference comparison (a DTW over both pitch tracks) is too slow for the
+  // reducer, so it runs here once the new result has painted. The reducer drops a result whose take or
+  // reference has changed in the meantime.
+  const compareUser = state.analysis;
+  const compareRef = state.reference?.usable ? state.reference.analysis : null;
+  useEffect(() => {
+    if (!compareUser || !compareRef) return;
+    const timer = setTimeout(() => {
+      let comparison: ReferenceComparison | null = null;
+      let error: string | undefined;
+      try {
+        comparison = deps.compareToReference(compareUser, compareRef);
+      } catch (err) {
+        error = message(err, 'Could not compare with the reference clip.');
+      }
+      dispatch({ type: 'reference/compared', user: compareUser, ref: compareRef, comparison, error });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [compareUser, compareRef, deps]);
+
   const saveCurrent = useCallback(
     (label?: string): SessionRecord | null => {
       const s = stateRef.current;
       const profile = activeProfile(s, deps);
       if (!s.analysis || !s.comparison || !profile) return null;
+      // A take that can't be scored would put a meaningless number into the trend.
+      if (!isScoreable(s.analysis, s.comparison)) return null;
+      const key = saveKey(s, profile);
+      if (s.savedKeys.includes(key)) return null;
       const rec = sessionFromResults(s.analysis, s.comparison, profile, label ?? s.take?.name);
       saveSession(rec);
+      dispatch({ type: 'session/saved', key });
       refreshSessions();
       return rec;
     },

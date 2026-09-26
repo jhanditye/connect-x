@@ -163,6 +163,14 @@ export function registerShares(frames: FrameFeatures[], filter: (f: FrameFeature
 
 const FLIP_LOOKBACK_SEC = 0.15;
 const FLIP_MIN_RISE_SEMITONES = 2;
+/**
+ * Rises of more than a minor seventh are rejected. On real recordings every such "flip" was a
+ * tracker jump: an octave error (rise ~12), or the tracker switching between the voice and an
+ * instrument or bass line (12-25). Falsetto flips in this repertoire are mostly 3-9 semitone
+ * moves within a line. The price is that a genuine flip on an octave leap is not counted; it
+ * cannot be told apart from an octave error by pitch and voice quality alone.
+ */
+const FLIP_MAX_RISE_SEMITONES = 10.5;
 /** Head must hold this long after the switch to count (the smoother already removes blips). */
 const FLIP_MIN_HOLD_SEC = 0.05;
 /**
@@ -175,7 +183,7 @@ const FLIP_MIN_SCORE_JUMP = 0.2;
 
 /**
  * Register flips: a switch into head from chest/mix (within the same voiced stretch or across a
- * gap of at most the lookback) together with a pitch rise of at least 2 semitones and a jump in
+ * gap of at most the lookback) together with a pitch rise of 2-10.5 semitones and a jump in
  * lightness within ~150 ms. Returns the flip times.
  */
 export function detectFlips(frames: FrameFeatures[], scores: Float64Array, hopSec: number): number[] {
@@ -210,7 +218,8 @@ export function detectFlips(frames: FrameFeatures[], scores: Float64Array, hopSe
     }
     const rise = median(midiAfter) - lowBefore;
     const jump = median(scoreAfter) - median(scoreBefore);
-    if (rise >= FLIP_MIN_RISE_SEMITONES && jump >= FLIP_MIN_SCORE_JUMP) flips.push(f.t);
+    if (rise < FLIP_MIN_RISE_SEMITONES || rise > FLIP_MAX_RISE_SEMITONES) continue;
+    if (jump >= FLIP_MIN_SCORE_JUMP) flips.push(f.t);
   }
   return flips;
 }

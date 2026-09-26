@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { APIConnectionError, APIUserAbortError } from '@anthropic-ai/sdk';
+import aiSource from './ai.ts?raw';
 import {
   AI_SYSTEM_PROMPT,
   AiCoachError,
@@ -7,6 +8,7 @@ import {
   buildAiMessages,
   DEFAULT_AI_MODEL,
   DEFAULT_AI_QUESTION,
+  loadSdk,
   summarizeForAi,
   toAiCoachError,
   type AiCoachDeps,
@@ -75,9 +77,14 @@ function bigReference() {
 describe('summarizeForAi', () => {
   it('includes the profile, comparison, plan and take summary with note names', () => {
     const s = summarizeForAi(baseInput({ reference: makeFakeReferenceComparison(), question: 'How is my mix?' })) as Record<string, any>;
-    expect(s.singer.name).toBe('Test Singer');
-    expect(s.singer.targets.mixInUpperRange).toEqual({ ideal: 0.5, low: 0.35, high: 0.65, weight: 1 });
+    // "target" is the profile; "singer" means the user throughout the prompt.
+    expect(s.singer).toBeUndefined();
+    expect(s.target.name).toBe('Test Singer');
+    expect(s.target.targets.mixInUpperRange).toEqual({ ideal: 0.5, low: 0.35, high: 0.65, weight: 1 });
     expect(s.comparison.overall).toBe(68);
+    // The fake comparison has only two measured dimensions, so it can't be scored.
+    expect(s.comparison.scoreable).toBe(false);
+    expect(s.take.issues).toEqual([]);
     expect(s.comparison.dimensions[1]).toMatchObject({ key: 'mixInUpperRange', value: 0.3, score: 55, direction: 'more' });
     expect(s.plan.items[0]).toMatchObject({ title: 'Lighten into mix above E4' });
     expect(s.plan.items[0].whatWeHeard).toMatch(/55%/);
@@ -95,6 +102,13 @@ describe('summarizeForAi', () => {
     expect(s.reference.path).toBeUndefined();
     expect(s.reference.phrases[0].note).toMatch(/flat/);
     expect(s.question).toBe('How is my mix?');
+  });
+
+  it('flags unscoreable takes and passes the issue codes on', () => {
+    const analysis: VoiceAnalysis = { ...makeFakeAnalysis(), issues: ['accompaniment', 'noisy'] };
+    const s = summarizeForAi(baseInput({ analysis })) as Record<string, any>;
+    expect(s.comparison.scoreable).toBe(false);
+    expect(s.take.issues).toEqual(['accompaniment', 'noisy']);
   });
 
   it('never includes per-frame data', () => {
@@ -121,6 +135,23 @@ describe('summarizeForAi', () => {
     expect(s.take.notes.mostOffPitch.length).toBeLessThanOrEqual(5);
     expect(s.take.runs).toEqual({ count: 1, fastestNotesPerSec: 7.5 });
     expect(s.conversationTurns).toBe(2);
+  });
+});
+
+describe('AI_SYSTEM_PROMPT', () => {
+  it('names the target profile "target" and keeps "singer" for the user', () => {
+    expect(AI_SYSTEM_PROMPT).toMatch(/^- target: the target profile/m);
+    expect(AI_SYSTEM_PROMPT).not.toMatch(/^- singer: the target profile/m);
+    expect(AI_SYSTEM_PROMPT).toMatch(/transposeSemitones = singer minus reference/);
+  });
+
+  it('matches the app\'s coaching rules', () => {
+    expect(AI_SYSTEM_PROMPT).toMatch(/scoreable = false/);
+    expect(AI_SYSTEM_PROMPT).toMatch(/voice-type setting/);
+    expect(AI_SYSTEM_PROMPT).toMatch(/breathiness: 0-0\.2 very clean and firm/);
+    expect(AI_SYSTEM_PROMPT).not.toMatch(/0-0\.2 pressed/);
+    expect(AI_SYSTEM_PROMPT).toMatch(/above about 0\.8 suggests carrying chest weight upward/);
+    expect(AI_SYSTEM_PROMPT).toMatch(/suddenly cuts out.*laryngologist/);
   });
 });
 
@@ -380,11 +411,37 @@ describe('askAiCoach', () => {
 });
 
 describe('toAiCoachError', () => {
-  it('maps SDK classes most-specific first', () => {
+  it('maps SDK classes most-specific first', async () => {
+    await loadSdk();
     expect(toAiCoachError(new APIUserAbortError()).message).toBe('Stopped.');
     expect(toAiCoachError(new APIConnectionError({ message: 'Connection error.' })).kind).toBe('network');
     const passthrough = new AiCoachError('refusal', 'x');
     expect(toAiCoachError(passthrough)).toBe(passthrough);
     expect(toAiCoachError(new Error('boom')).kind).toBe('other');
+  });
+});
+
+describe('SDK loading', () => {
+  it('only imports the SDK as types at the top level, so it stays out of the main bundle', () => {
+    const valueImports = aiSource.split('\n').filter((line) => /^import (?!type\b).*['"]@anthropic-ai\/sdk/.test(line));
+    expect(valueImports).toEqual([]);
+    expect(aiSource).toMatch(/await import\('@anthropic-ai\/sdk'\)/);
+  });
+
+  it('loads the SDK once and caches it', async () => {
+    const a = await loadSdk();
+    expect(typeof a.default).toBe('function');
+    expect(await loadSdk()).toBe(a);
+  });
+
+  it('maps a failure before the SDK has loaded (e.g. offline) to a network error', async () => {
+    vi.resetModules();
+    const fresh = await import('./ai');
+    const err = fresh.toAiCoachError(new TypeError('Failed to fetch dynamically imported module'));
+    expect(err.kind).toBe('network');
+    expect(err.message).toMatch(/Couldn't reach the Claude API/);
+    const ctrl = new AbortController();
+    ctrl.abort();
+    expect(fresh.toAiCoachError(new Error('x'), ctrl.signal).message).toBe('Stopped.');
   });
 });

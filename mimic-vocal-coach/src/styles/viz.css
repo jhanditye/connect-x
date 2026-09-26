@@ -112,9 +112,8 @@
   margin-bottom: var(--space-1);
   font-size: var(--fs-xs);
   color: var(--ink-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wraps rather than cutting the text off on narrow phones. */
+  overflow-wrap: anywhere;
 }
 .pitchplot-frame {
   display: flex;
@@ -142,6 +141,11 @@
 .pitchplot-scroll svg {
   max-width: none;
   cursor: crosshair;
+}
+/* A sideways drag scrubs the readout; a vertical swipe still scrolls the page. A plot that scrolls
+   sideways itself keeps native panning, and a tap still reads the note there. */
+.pitchplot-scroll:not(.pitchplot-scroll--on) svg {
+  touch-action: pan-y;
 }
 
 /* ---------------------------------------------------------------- style radar */
@@ -413,6 +417,10 @@
 .refpitch .subhead {
   margin-top: 0;
 }
+/* After the "For you" cards the reference pitch needs the same breathing room as a section. */
+.practice-section + .refpitch {
+  margin-top: var(--space-6);
+}
 .refpitch-row {
   display: flex;
   flex-wrap: wrap;
@@ -499,6 +507,27 @@
   flex-wrap: wrap;
   gap: 6px;
 }
+.ex-details {
+  font-size: var(--fs-sm);
+}
+.ex-details-summary {
+  /* list-item keeps the native disclosure triangle. */
+  display: list-item;
+  padding: 10px 0;
+  margin: -10px 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ex-details-summary:hover {
+  color: var(--accent);
+}
+.ex-details[open] > .ex-details-summary {
+  margin-bottom: var(--space-1);
+}
+.ex-details-count {
+  font-weight: 400;
+  color: var(--ink-3);
+}
 .ex-steps {
   display: grid;
   gap: var(--space-1);
@@ -565,6 +594,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  max-width: 100%;
   min-height: 40px;
   padding: 0 var(--space-3);
   border: 1px solid var(--line);
@@ -592,6 +622,13 @@
   border-radius: 50%;
   background: var(--tab-color, var(--singer, var(--accent)));
 }
+.hist-tab-name {
+  /* Reference clips are named after their file, which can be long. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .hist-tab-count {
   font-size: var(--fs-xs);
   font-weight: 400;
@@ -601,6 +638,7 @@
   margin: var(--space-2) 0;
   font-size: var(--fs-sm);
   color: var(--ink-2);
+  overflow-wrap: anywhere;
 }
 .hist-stats {
   display: flex;
@@ -666,6 +704,14 @@
   font-size: var(--fs-xs);
   color: var(--ink-2);
 }
+.hist-row-name {
+  /* A long reference-clip file name wraps next to its dot instead of dropping to its own line. */
+  flex: 0 1 auto;
+  min-width: 0;
+  /* Room for the 10px dot and the 6px gap on the same line. */
+  max-width: calc(100% - 16px);
+  overflow-wrap: anywhere;
+}
 .hist-row-label {
   overflow-wrap: anywhere;
 }
@@ -675,11 +721,27 @@
   font-size: var(--fs-lg);
   font-weight: 700;
 }
+.hist-row-confirm {
+  grid-column: 1 / -1;
+}
+.hist-row-confirm .button-row {
+  margin-top: var(--space-2);
+}
+.hist-section .section-title:focus {
+  outline: none;
+}
+.hist-section .section-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .hist-more {
   margin-top: var(--space-3);
 }
 .hist-clear {
   margin-top: var(--space-5);
+}
+.hist-empty-title:focus {
+  outline: none;
 }
 .hist-empty {
   display: grid;

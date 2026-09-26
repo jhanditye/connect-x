@@ -92,7 +92,11 @@ export interface Run {
  * `null` means the take did not contain enough material to measure it (e.g. no sustained notes for vibrato).
  */
 export interface StyleVector {
-  /** 0..1. 0-0.2 pressed/very clean (belt), 0.3-0.5 clear balanced tone, 0.6-0.8 clearly airy (soft R&B), 0.9-1 near-whisper. */
+  /**
+   * 0..1. 0-0.2 very clean and firm, 0.3-0.5 clear balanced tone (typical clean real singing reads ~0.28-0.44),
+   * 0.6-0.8 clearly airy (soft R&B), 0.9-1 near-whisper. Shifts with the microphone's bass response
+   * (a phone mic's bass roll-off lowers it by ~0.1), so compare takes recorded on the same device.
+   */
   breathiness: number | null;
   /** 0..1. 0-0.3 dark/covered/warm, 0.4-0.6 neutral, 0.7-1 bright/forward/twangy. */
   brightness: number | null;
@@ -131,7 +135,7 @@ export interface AudioQuality {
   clippingRatio: number;
   /** Noise floor estimate, dBFS (10th percentile of frame RMS). */
   noiseFloorDb: number;
-  /** Median voiced RMS minus noise floor, dB. */
+  /** Median voiced RMS minus noise floor, dB. NaN when the take has too few pauses to measure the room noise. */
   snrDb: number;
 }
 

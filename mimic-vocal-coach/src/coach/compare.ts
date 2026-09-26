@@ -2,7 +2,7 @@
 
 import { midiToNoteName } from '../dsp/music';
 import type { Comparison, DimensionResult, Direction, SingerProfile, StyleKey, TargetBand, VoiceAnalysis } from '../types';
-import { STYLE_KEYS, STYLE_LABELS, describeIncludesNumber, formatStyleValue, signedFixed, whoOf, whoseOf } from './profiles';
+import { STYLE_KEYS, STYLE_LABELS, builtinBaseOf, describeIncludesNumber, formatStyleValue, signedFixed, whoOf, whoseOf } from './profiles';
 
 // Inside the band the score falls linearly from 100 at the ideal to this value at the band edge,
 // then from here to 0 across `tolerance` outside the band.
@@ -191,14 +191,115 @@ function userTessitura(analysis: VoiceAnalysis): { centre: number; span: string 
   return null;
 }
 
+/**
+ * Low edge of each builtin singer's passaggio (where the voice changes gear), as MIDI. All three are
+ * light, high-lying male voices whose mix transition sits around E4, the app's tenor zone.
+ */
+const SINGER_PASSAGGIO_LOW: Record<string, number> = {
+  'shawn-mendes': 64,
+  'daniel-caesar': 64,
+  'jalen-ngonda': 64,
+};
+
+/** Voice-type key suggestions stay within a fifth either way. */
+const MAX_VOICE_TYPE_SHIFT = 7;
+
+/**
+ * The passaggio low note of the singer behind a profile (a builtin, or the builtin a reference clip
+ * was built on), or null when unknown. When known, key advice compares voice types instead of
+ * reading one take's pitch.
+ */
+export function singerPassaggioLow(profile: SingerProfile): number | null {
+  const base = builtinBaseOf(profile);
+  return base ? (SINGER_PASSAGGIO_LOW[base.id] ?? null) : null;
+}
+
+/**
+ * Whether a profile's typicalRange describes something measured. A reference clip with no
+ * measurable singing has no targets, and its range is only a stand-in (the base singer's or a
+ * default), so it must not be described as where the clip sits.
+ */
+function hasMeasuredRange(profile: SingerProfile): boolean {
+  return profile.source !== 'reference' || Object.keys(profile.targets).length > 0;
+}
+
+/** "Your take sat mostly between D4 and G#4" (information only), or null without pitch data. */
+function takeSentence(user: { span: string } | null): string | null {
+  if (!user) return null;
+  const span = user.span.startsWith('around') ? user.span : `mostly between ${user.span.replace('–', ' and ')}`;
+  return `This take sat ${span}`;
+}
+
 function rangeFit(analysis: VoiceAnalysis, profile: SingerProfile): { transpose: number; note: string } {
   const user = userTessitura(analysis);
-  const who = capitalize(whoOf(profile));
+  const singerLow = singerPassaggioLow(profile);
+  const userLow = analysis.passaggio?.lowMidi;
+  if (singerLow !== null && typeof userLow === 'number' && Number.isFinite(userLow)) {
+    return voiceTypeFit(user, userLow, singerLow, profile);
+  }
+  return takeFit(user, profile);
+}
+
+/**
+ * Key advice from the user's voice type (their passaggio) against the singer's. A take shows what
+ * was sung, not the voice's comfortable range, so its pitch is reported only as information.
+ */
+function voiceTypeFit(
+  user: { centre: number; span: string } | null,
+  userLow: number,
+  singerLow: number,
+  profile: SingerProfile,
+): { transpose: number; note: string } {
+  const singer = builtinBaseOf(profile);
+  const who = singer ? whoOf(singer) : capitalize(whoOf(profile));
+  // Normalise -0 so the stored number reads cleanly.
+  const transpose = Math.max(-MAX_VOICE_TYPE_SHIFT, Math.min(MAX_VOICE_TYPE_SHIFT, Math.round(userLow - singerLow))) || 0;
+  const yours = midiToNoteName(userLow);
+  const theirs = midiToNoteName(singerLow);
+  const sentences: string[] = [];
+  if (transpose === 0) {
+    sentences.push(
+      `Based on your voice type, ${who}'s original keys should suit you: your passaggio starts around ${yours}, about where ${who}'s voice changes gear.`,
+    );
+  } else {
+    const dir = transpose < 0 ? 'lower' : 'higher';
+    sentences.push(
+      `Based on your voice type, ${who}'s songs should sit best about ${semitoneWords(transpose)} ${dir}: ` +
+        `your passaggio starts around ${yours}, and ${who}'s voice changes gear around ${theirs}.`,
+    );
+  }
+  const sat = takeSentence(user);
+  if (sat) {
+    let info = sat;
+    if (profile.source === 'reference' && user && hasMeasuredRange(profile)) {
+      // The clip's own range: useful if the user sang the same song, as information only.
+      const r = profile.typicalRange;
+      const diff = Math.round(user.centre - (r.tessituraLowMidi + r.tessituraHighMidi) / 2);
+      const clip = noteSpan(r.tessituraLowMidi, r.tessituraHighMidi);
+      info +=
+        Math.abs(diff) < 1
+          ? `, about where the reference clip sits (${clip})`
+          : `, about ${semitoneWords(diff)} ${diff < 0 ? 'below' : 'above'} the reference clip (${clip})`;
+    }
+    sentences.push(`${info}; that reflects what you sang, not your whole range.`);
+  }
+  return { transpose, note: sentences.join(' ') };
+}
+
+/**
+ * Without a known singer passaggio (a reference clip with no builtin behind it), the only basis is
+ * this take against the clip. It is reported as information, not as key advice.
+ */
+function takeFit(user: { centre: number; span: string } | null, profile: SingerProfile): { transpose: number; note: string } {
   const r = profile.typicalRange;
   const singerCentre = (r.tessituraLowMidi + r.tessituraHighMidi) / 2;
   const singerSpan = noteSpan(r.tessituraLowMidi, r.tessituraHighMidi);
-  const whereSinger = profile.source === 'reference' ? `where the reference sits (${singerSpan})` : `where ${who} usually sings (${singerSpan})`;
-  if (!user) {
+  const whereSinger = profile.source === 'reference' ? `the reference clip (${singerSpan})` : `where ${capitalize(whoOf(profile))} usually sings (${singerSpan})`;
+  const sat = takeSentence(user);
+  if (!hasMeasuredRange(profile)) {
+    return { transpose: 0, note: 'There was not enough singing in the reference clip to compare ranges with it.' };
+  }
+  if (!user || !sat) {
     return {
       transpose: 0,
       note: `There was not enough pitched singing in this take to compare your range with ${whoseOf(profile)}.`,
@@ -206,24 +307,47 @@ function rangeFit(analysis: VoiceAnalysis, profile: SingerProfile): { transpose:
   }
   // Normalise -0 so the stored number reads cleanly.
   const transpose = Math.round(user.centre - singerCentre) || 0;
-  const span = user.span.startsWith('around') ? user.span : `mostly between ${user.span.replace('–', ' and ')}`;
-  const sat = `Your take sat ${span}`;
-  if (Math.abs(transpose) < 3) {
-    const a = Math.abs(transpose);
-    const near = a === 0 ? 'close to' : `within ${a} semitone${a === 1 ? '' : 's'} of`;
-    return { transpose, note: `${sat}, ${near} ${whereSinger}, so the original keys should suit you.` };
-  }
-  const lower = transpose < 0;
+  if (Math.abs(transpose) < 1) return { transpose, note: `${sat}, about the same as ${whereSinger}.` };
   let note =
-    `${sat}, about ${semitoneWords(transpose)} ${lower ? 'lower' : 'higher'} than ${whereSinger}. ` +
-    `To make these songs sit in your voice the way they sit in ${profile.source === 'reference' ? 'the reference' : `${who}'s`}, ` +
-    `try them about ${Math.abs(transpose)} semitones ${lower ? 'lower' : 'higher'}.`;
+    `${sat}, about ${semitoneWords(transpose)} ${transpose < 0 ? 'lower' : 'higher'} than ${whereSinger}. ` +
+    'If you sang the same song, that is how far your key was from the original; a single take shows what you sang, not your whole range.';
   if (Math.abs(transpose) >= 10) {
-    note +=
-      ` That is close to an octave: if you are singing the melody an octave ${lower ? 'down' : 'up'}, the key is fine, ` +
-      'but the notes land in a different part of your voice, so the register comparisons will not line up exactly.';
+    note += ' That is close to an octave, so the notes land in a different part of your voice and the register comparisons will not line up exactly.';
   }
   return { transpose, note };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Short takes and scoreability
+
+/** Below this much singing, one flip moves the per-minute rate by more than a flips band is wide. */
+const FLIP_RATE_STABLE_SEC = 60;
+
+/**
+ * The band a dimension is scored against for this take. A take with `v` seconds of singing can only
+ * report multiples of 60/v flips per minute, so on takes under a minute the flips band is widened by
+ * one such step each way: one flip more or fewer than the singer's rate then still counts as on-style.
+ */
+function bandForTake(key: StyleKey, target: TargetBand, analysis: VoiceAnalysis): TargetBand {
+  const sec = analysis.voicedSec;
+  if (key !== 'flipsPerMinute' || !(sec > 0) || sec >= FLIP_RATE_STABLE_SEC) return target;
+  const step = 60 / sec;
+  return { ...target, low: Math.max(0, Math.min(target.low, target.high) - step), high: Math.max(target.low, target.high) + step };
+}
+
+/** Fewer measured dimensions than this and a match score says more about the gaps than the voice. */
+const MIN_SCOREABLE_DIMENSIONS = 4;
+
+/**
+ * Whether a take can be scored at all: false when it has too little singing, sounds like singing
+ * over instruments, or (given a comparison) measured fewer than four of the profile's dimensions.
+ * Unscoreable takes get a re-record plan instead of a score and should not be saved as progress.
+ */
+export function isScoreable(analysis: VoiceAnalysis, comparison?: Comparison): boolean {
+  const issues = analysis.issues ?? [];
+  if (issues.includes('too-little-singing') || issues.includes('accompaniment')) return false;
+  if (comparison && comparison.dimensions.filter((d) => d.value !== null).length < MIN_SCOREABLE_DIMENSIONS) return false;
+  return true;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -233,8 +357,9 @@ export function compareToProfile(analysis: VoiceAnalysis, profile: SingerProfile
   let weighted = 0;
   let totalWeight = 0;
   for (const key of STYLE_KEYS) {
-    const target = profile.targets[key];
-    if (!target) continue;
+    const authored = profile.targets[key];
+    if (!authored) continue;
+    const target = bandForTake(key, authored, analysis);
     const raw = analysis.style[key];
     const value = raw === null || raw === undefined || !Number.isFinite(raw) ? null : raw;
     const direction = directionFor(value, target);

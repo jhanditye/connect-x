@@ -1,11 +1,13 @@
-// Progress: trend charts per singer (overall and one chosen measure), the saved-session list with
-// delete, and "Clear history" behind an in-page confirmation.
+// Progress: trend charts per singer or reference clip (overall and one chosen measure), the
+// saved-session list with delete, and deleting one take or the whole history behind in-page
+// confirmations. After a delete, focus moves to the next row (or the list heading), never <body>.
 
-import { useMemo, useState, type CSSProperties, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react';
 import { STYLE_LABELS } from '../../coach/profiles';
+import { isReferenceProfileId } from '../../storage/history';
 import type { SessionRecord, StyleKey } from '../../types';
 import { DIM_DISPLAY, fmtSigned, singerVar } from '../charts/chartKit';
-import { ProgressChart } from '../charts/ProgressChart';
+import { hasScores, ProgressChart } from '../charts/ProgressChart';
 
 const BUILTIN_ORDER = ['shawn-mendes', 'daniel-caesar', 'jalen-ngonda'];
 const LIST_PAGE = 25;
@@ -16,7 +18,11 @@ interface ProfileTab {
   count: number;
 }
 
-/** One tab per profile that has sessions: builtin singers in their usual order, then others by name. */
+/**
+ * One tab per profileId that has sessions: builtin singers in their usual order, then the others
+ * (reference clips, stored as 'reference:<clip name>') by name. Each tab is labelled with its
+ * sessions' profileName.
+ */
 export function profileTabs(sessions: readonly SessionRecord[]): ProfileTab[] {
   const byId = new Map<string, ProfileTab & { latest: number }>();
   for (const s of sessions) {
@@ -25,7 +31,7 @@ export function profileTabs(sessions: readonly SessionRecord[]): ProfileTab[] {
     if (!cur) byId.set(s.profileId, { id: s.profileId, name: s.profileName || s.profileId, count: 1, latest: t });
     else {
       cur.count++;
-      // The newest session's name wins (a reference profile may be renamed between takes).
+      // The newest session's name wins if a profile's display name ever changes.
       if (t > cur.latest && s.profileName) {
         cur.latest = t;
         cur.name = s.profileName;
@@ -73,36 +79,52 @@ function newestFirst(sessions: readonly SessionRecord[]): SessionRecord[] {
   return [...sessions].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
+/** Takes count every saved take; Latest, Best and Since first use only takes that were scored. */
 function Stats(props: { sessions: SessionRecord[] }): JSX.Element | null {
-  const list = [...props.sessions].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-  if (list.length === 0) return null;
-  const first = list[0].overall;
-  const latest = list[list.length - 1].overall;
+  if (props.sessions.length === 0) return null;
+  const list = props.sessions.filter(hasScores).sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+  const unscored = props.sessions.length - list.length;
+  const first = list[0]?.overall ?? NaN;
+  const latest = list[list.length - 1]?.overall ?? NaN;
   const best = Math.max(...list.map((s) => s.overall));
   const change = Math.round(latest) - Math.round(first);
   return (
-    <dl className="hist-stats">
-      <div>
-        <dt>Takes</dt>
-        <dd className="num">{list.length}</dd>
-      </div>
-      <div>
-        <dt>Latest</dt>
-        <dd className="num">{Math.round(latest)}</dd>
-      </div>
-      <div>
-        <dt>Best</dt>
-        <dd className="num">{Math.round(best)}</dd>
-      </div>
-      {list.length > 1 && (
+    <>
+      <dl className="hist-stats">
         <div>
-          <dt>Since first</dt>
-          <dd className="num">{change === 0 ? '±0' : fmtSigned(change, 0)}</dd>
+          <dt>Takes</dt>
+          <dd className="num">{props.sessions.length}</dd>
         </div>
+        {list.length > 0 && (
+          <>
+            <div>
+              <dt>Latest</dt>
+              <dd className="num">{Math.round(latest)}</dd>
+            </div>
+            <div>
+              <dt>Best</dt>
+              <dd className="num">{Math.round(best)}</dd>
+            </div>
+          </>
+        )}
+        {list.length > 1 && (
+          <div>
+            <dt>Since first</dt>
+            <dd className="num">{change === 0 ? '±0' : fmtSigned(change, 0)}</dd>
+          </div>
+        )}
+      </dl>
+      {unscored > 0 && (
+        <p className="caveat">
+          {unscored === 1 ? 'One take' : `${unscored} takes`} had too little clear singing to score, so {unscored === 1 ? 'it is' : 'they are'} left out
+          of the trend.
+        </p>
       )}
-    </dl>
+    </>
   );
 }
+
+type FocusRequest = { kind: 'after-delete'; gone: string; next: string | null } | { kind: 'after-clear' } | { kind: 'clear-button' };
 
 export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: string) => void; onClear: () => void }): JSX.Element {
   const { sessions, onDelete, onClear } = props;
@@ -111,7 +133,32 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
   const [tab, setTab] = useState<string | null>(null);
   const [metric, setMetric] = useState<StyleKey | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [cleared, setCleared] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
+  const listHeadingRef = useRef<HTMLHeadingElement>(null);
+  const emptyRef = useRef<HTMLParagraphElement>(null);
+  const clearButtonRef = useRef<HTMLButtonElement>(null);
+  const focusRequest = useRef<FocusRequest | null>(null);
+
+  // Buttons that disappear (a deleted row, the confirm prompts) would drop focus to <body>, so move
+  // it on purpose once the list has caught up with the change.
+  useEffect(() => {
+    const req = focusRequest.current;
+    if (!req) return;
+    let target: HTMLElement | null | undefined;
+    if (req.kind === 'clear-button') target = clearButtonRef.current;
+    else if (req.kind === 'after-clear') {
+      if (sessions.length > 0) return;
+      target = emptyRef.current;
+    } else {
+      if (sessions.some((s) => s.id === req.gone)) return;
+      target = (req.next ? deleteButtons.current.get(req.next) : null) ?? (sessions.length > 0 ? listHeadingRef.current : emptyRef.current);
+    }
+    focusRequest.current = null;
+    target?.focus();
+  });
 
   if (sessions.length === 0) {
     return (
@@ -121,7 +168,9 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
           <h1 className="page-title">Your progress</h1>
         </header>
         <div className="hist-empty">
-          <p>No saved takes yet.</p>
+          <p ref={emptyRef} tabIndex={-1} className="hist-empty-title">
+            {cleared ? 'History cleared. No saved takes now.' : 'No saved takes yet.'}
+          </p>
           <p className="muted">
             Record or upload a take in the <a href="#studio">Studio</a>, then press “Save to progress” on the Results page. Each saved take adds
             a point here, per singer, so you can see your mix and tone move toward the sound you are after. Only scores and measurements are
@@ -139,6 +188,19 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
   const metrics = availableMetrics(forActive);
   const activeMetric = metric && metrics.includes(metric) ? metric : (metrics[0] ?? null);
   const visible = showAll ? sorted : sorted.slice(0, LIST_PAGE);
+  const activeIsClip = isReferenceProfileId(active.id);
+
+  const deleteTake = (id: string) => {
+    const i = visible.findIndex((s) => s.id === id);
+    const next = visible[i + 1] ?? visible[i - 1] ?? null;
+    focusRequest.current = { kind: 'after-delete', gone: id, next: next?.id ?? null };
+    setConfirmId(null);
+    onDelete(id);
+  };
+  const keepTake = (id: string) => {
+    setConfirmId(null);
+    deleteButtons.current.get(id)?.focus();
+  };
 
   return (
     <div className="page page--progress">
@@ -164,13 +226,16 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
                 onClick={() => setTab(t.id)}
               >
                 <span className="hist-tab-dot" aria-hidden="true" />
-                {t.name} <span className="hist-tab-count num">{t.count}</span>
+                <span className="hist-tab-name" title={t.name}>
+                  {t.name}
+                </span> <span className="hist-tab-count num">{t.count}</span>
               </button>
             ))}
           </div>
         )}
         <p className="hist-singer">
-          Against <strong>{active.name}</strong>
+          Against <strong className="hist-singer-name">{active.name}</strong>
+          {activeIsClip ? ', your reference clip' : null}
         </p>
         <Stats sessions={forActive} />
 
@@ -198,35 +263,75 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
       </section>
 
       <section className="hist-section" aria-labelledby="hist-list">
-        <h2 id="hist-list" className="section-title">
+        <h2 id="hist-list" className="section-title" ref={listHeadingRef} tabIndex={-1}>
           Saved takes
         </h2>
         <ol className="hist-list">
-          {visible.map((s) => (
-            <li key={s.id} className="hist-row" style={{ '--tab-color': singerVar(s.profileId) } as CSSProperties}>
-              <div className="hist-row-main">
-                <span className="hist-row-date">{formatWhen(s.createdAt)}</span>
-                <span className="hist-row-meta">
-                  <span className="hist-tab-dot" aria-hidden="true" />
-                  {s.profileName}
-                  <span className="num"> · {formatLength(s.durationSec)}</span>
-                  {s.label ? <span className="hist-row-label"> · {s.label}</span> : null}
+          {visible.map((s) => {
+            const scored = hasScores(s);
+            const asking = confirmId === s.id;
+            const when = formatWhen(s.createdAt);
+            const promptId = `hist-del-${s.id}`;
+            return (
+              <li key={s.id} className="hist-row" style={{ '--tab-color': singerVar(s.profileId) } as CSSProperties}>
+                <div className="hist-row-main">
+                  <span className="hist-row-date">{when}</span>
+                  <span className="hist-row-meta">
+                    <span className="hist-tab-dot" aria-hidden="true" />
+                    <span className="hist-row-name">{s.profileName}</span>
+                    <span className="num"> · {formatLength(s.durationSec)}</span>
+                    {s.label ? <span className="hist-row-label"> · {s.label}</span> : null}
+                  </span>
+                </div>
+                <span className="hist-row-score num">
+                  {scored ? (
+                    <>
+                      <span className="visually-hidden">Overall match </span>
+                      {Math.round(s.overall)}
+                    </>
+                  ) : (
+                    <>
+                      <span className="visually-hidden">Not scored</span>
+                      <span aria-hidden="true">–</span>
+                    </>
+                  )}
                 </span>
-              </div>
-              <span className="hist-row-score num">
-                <span className="visually-hidden">Overall match </span>
-                {Math.round(s.overall)}
-              </span>
-              <button
-                type="button"
-                className="button button--ghost button--small hist-row-delete"
-                onClick={() => onDelete(s.id)}
-                aria-label={`Delete the ${s.profileName} take from ${formatWhen(s.createdAt)}`}
-              >
-                Delete
-              </button>
-            </li>
-          ))}
+                <button
+                  type="button"
+                  ref={(el) => {
+                    if (el) deleteButtons.current.set(s.id, el);
+                    else deleteButtons.current.delete(s.id);
+                  }}
+                  className="button button--ghost button--small hist-row-delete"
+                  onClick={() => setConfirmId(asking ? null : s.id)}
+                  aria-expanded={asking}
+                  aria-label={`Delete the ${s.profileName} take from ${when}`}
+                >
+                  Delete
+                </button>
+                {asking && (
+                  <div
+                    className="confirm hist-row-confirm"
+                    role="group"
+                    aria-labelledby={promptId}
+                    onKeyDown={(e: KeyboardEvent) => {
+                      if (e.key === 'Escape') keepTake(s.id);
+                    }}
+                  >
+                    <p id={promptId}>Delete this take? This cannot be undone.</p>
+                    <div className="button-row">
+                      <button type="button" className="button button--danger button--small" onClick={() => deleteTake(s.id)}>
+                        Yes, delete
+                      </button>
+                      <button type="button" className="button button--ghost button--small" onClick={() => keepTake(s.id)} autoFocus>
+                        Keep
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ol>
         {sorted.length > LIST_PAGE && (
           <button type="button" className="link-button hist-more" onClick={() => setShowAll((v) => !v)}>
@@ -236,7 +341,7 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
 
         <div className="hist-clear">
           {!confirming ? (
-            <button type="button" className="button button--danger button--small" onClick={() => setConfirming(true)}>
+            <button ref={clearButtonRef} type="button" className="button button--danger button--small" onClick={() => setConfirming(true)}>
               Clear history
             </button>
           ) : (
@@ -249,13 +354,23 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
                   type="button"
                   className="button button--danger button--small"
                   onClick={() => {
+                    focusRequest.current = { kind: 'after-clear' };
                     setConfirming(false);
+                    setCleared(true);
                     onClear();
                   }}
                 >
                   Delete all
                 </button>
-                <button type="button" className="button button--ghost button--small" onClick={() => setConfirming(false)} autoFocus>
+                <button
+                  type="button"
+                  className="button button--ghost button--small"
+                  onClick={() => {
+                    focusRequest.current = { kind: 'clear-button' };
+                    setConfirming(false);
+                  }}
+                  autoFocus
+                >
                   Cancel
                 </button>
               </div>

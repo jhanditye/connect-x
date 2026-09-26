@@ -1,8 +1,9 @@
 // Studio: pick the target singer, then record, upload or try the demo take. Optional reference
 // clip calibrates the target from a recording the user owns.
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { passaggioFor, VOICE_TYPE_LABELS } from '../../analysis/passaggio';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { MAX_ANALYSIS_SEC } from '../../analysis/analyze';
+import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { createRecorder, MAX_RECORD_SEC, microphoneUnavailableReason, type Recorder } from '../../audio/recorder';
 import { getExercise } from '../../coach/exercises';
 import { useApp } from '../../state/context';
@@ -21,6 +22,15 @@ type RecPhase = 'idle' | 'starting' | 'recording' | 'stopping';
 
 const UPLOAD_HINT = 'WAV, MP3, M4A, AAC, OGG, WebM or FLAC. Drag a file here or choose one.';
 const VOICE_TYPES = Object.keys(VOICE_TYPE_LABELS) as VoiceType[];
+
+/** Smooth scrolling only when the user has not asked for reduced motion. */
+function scrollBehavior(): ScrollBehavior {
+  try {
+    return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  } catch {
+    return 'auto';
+  }
+}
 
 function recordingName(): string {
   const when = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -85,13 +95,21 @@ export function StudioPage() {
   const [micError, setMicError] = useState<string | null>(null);
   const [refOpen, setRefOpen] = useState(false);
   const [rejectMsg, setRejectMsg] = useState<string | null>(null);
+  const [refRejectMsg, setRefRejectMsg] = useState<string | null>(null);
+  // What the recording live region says; it stays mounted so screen readers pick up each change.
+  const [recAnnounce, setRecAnnounce] = useState('');
   const refPanelRef = useRef<HTMLElement>(null);
+  const captureRef = useRef<HTMLElement>(null);
+  const recordRef = useRef<HTMLButtonElement>(null);
+  const stopRef = useRef<HTMLButtonElement>(null);
+  const errorRef = useRef<HTMLDivElement>(null);
 
   const passaggio = passaggioFor(state.settings.voiceType);
-  const voiceLabel = VOICE_TYPE_LABELS[state.settings.voiceType];
+  const voiceName = VOICE_TYPE_NAMES[state.settings.voiceType];
   const drill = state.drillExerciseId ? getExercise(state.drillExerciseId) : undefined;
   const referenceSelected = state.selectedProfileId === REFERENCE_ID;
-  const showReferencePanel = refOpen || referenceSelected || !!state.reference;
+  const errorAt = state.error ? (state.errorJob ?? 'page') : null;
+  const showReferencePanel = refOpen || referenceSelected || !!state.reference || errorAt === 'reference';
 
   // Stop the microphone if the user navigates away mid-take, and do not jump to Results from a
   // page the user has already left.
@@ -106,16 +124,48 @@ export function StudioPage() {
   const showResults = (ok: boolean) => {
     if (ok && mountedRef.current) app.go('results');
   };
+  const focusRecord = () => requestAnimationFrame(() => recordRef.current?.focus());
+
+  // Keyboard focus follows the control that replaced the one just pressed: Record becomes Stop.
+  useEffect(() => {
+    if (phase === 'recording') stopRef.current?.focus();
+  }, [phase]);
+
+  // Show a failure where it happened: next to the upload, in the reference panel, or at the top.
+  useEffect(() => {
+    if (state.error) errorRef.current?.scrollIntoView?.({ block: 'nearest', behavior: scrollBehavior() });
+  }, [state.error]);
+
+  // Arriving from "Record this drill": bring the capture controls into view with focus on Record
+  // (or on the upload when the microphone is unavailable). Deferred past the page-change focus.
+  const drillFocusPending = useRef(!!state.drillExerciseId);
+  useEffect(() => {
+    if (!drillFocusPending.current) return;
+    // The flag clears only once the frame runs, so a cancelled first run (StrictMode) retries.
+    const id = requestAnimationFrame(() => {
+      drillFocusPending.current = false;
+      captureRef.current?.scrollIntoView?.({ block: 'start', behavior: scrollBehavior() });
+      const target = recordRef.current && !recordRef.current.disabled ? recordRef.current : captureRef.current?.querySelector<HTMLInputElement>('input[type="file"]');
+      target?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
 
   const stopRecording = async () => {
     const r = recRef.current;
     if (!r) return;
     recRef.current = null;
     setPhase('stopping');
+    setRecAnnounce('Recording stopped. Analysing your take.');
     setAnalyser(null);
     const { samples, sampleRate } = await r.stop();
     setPhase('idle');
-    showResults(await app.analyzeSamples({ samples, sampleRate, source: 'recording', name: recordingName() }));
+    const ok = await app.analyzeSamples({ samples, sampleRate, source: 'recording', name: recordingName() });
+    if (!ok && mountedRef.current) {
+      setRecAnnounce('');
+      focusRecord();
+    }
+    showResults(ok);
   };
 
   useEffect(() => {
@@ -137,12 +187,15 @@ export function StudioPage() {
     const r = createRecorder();
     recRef.current = r;
     setPhase('starting');
+    setRecAnnounce('Waiting for the microphone.');
     try {
       await r.start();
     } catch (err) {
       recRef.current = null;
       setPhase('idle');
+      setRecAnnounce('');
       setMicError(err instanceof Error ? err.message : 'The microphone could not be started.');
+      focusRecord();
       return;
     }
     if (recRef.current !== r) {
@@ -153,6 +206,7 @@ export function StudioPage() {
     setStartedAt(performance.now());
     setElapsed(0);
     setPhase('recording');
+    setRecAnnounce('Recording started. Choose Stop and analyse when you have finished.');
   };
 
   const cancelRecording = () => {
@@ -160,6 +214,8 @@ export function StudioPage() {
     recRef.current = null;
     setAnalyser(null);
     setPhase('idle');
+    setRecAnnounce('Recording discarded.');
+    focusRecord();
   };
 
   const onUpload = async (file: File) => {
@@ -173,17 +229,33 @@ export function StudioPage() {
     showResults(await app.analyzeDemo());
   };
 
-  const onReferenceCard = () => {
-    if (state.reference) app.selectProfile(REFERENCE_ID);
-    setRefOpen(true);
-    requestAnimationFrame(() => refPanelRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }));
+  const onReferenceFile = (file: File) => {
+    setRefRejectMsg(null);
+    void app.loadReferenceFile(file);
   };
+
+  const onReferenceCard = () => {
+    // A clip that can't be used is never selected; the panel explains why.
+    if (state.reference?.usable) app.selectProfile(REFERENCE_ID);
+    setRefOpen(true);
+    requestAnimationFrame(() => refPanelRef.current?.scrollIntoView?.({ behavior: scrollBehavior(), block: 'start' }));
+  };
+
+  const errorNotice = (where: 'take' | 'reference' | 'page'): ReactNode =>
+    errorAt === where && (
+      <div ref={errorRef} className="error-anchor">
+        <Notice tone="error" onDismiss={() => app.dispatch({ type: 'error/clear' })}>
+          <p>{state.error}</p>
+        </Notice>
+      </div>
+    );
 
   const recording = phase === 'recording';
   const takeJob = busy && state.job === 'take';
   const refJob = busy && state.job === 'reference';
   const baseName = state.reference?.baseProfileId ? builtins.find((b) => b.id === state.reference?.baseProfileId)?.name : undefined;
   const targetName = profile ? shortName(profile) : 'your target';
+  const clipNotes = state.reference ? [...state.reference.notices, ...state.reference.analysis.warnings] : [];
 
   return (
     <div className="page page--studio">
@@ -198,15 +270,11 @@ export function StudioPage() {
 
       {drill && (
         <Notice tone="info" title={`Recording a drill: ${drill.name}`} onDismiss={() => app.dispatch({ type: 'drill/set', exerciseId: null })}>
-          <p>{drill.goal} Record it below and the take will be labelled with the drill name.</p>
+          <p>{drill.goal} Record or upload it below and the take will be labelled with the drill name.</p>
         </Notice>
       )}
 
-      {state.error && (
-        <Notice tone="error" onDismiss={() => app.dispatch({ type: 'error/clear' })}>
-          <p>{state.error}</p>
-        </Notice>
-      )}
+      {errorNotice('page')}
       {state.notices.map((n) => (
         <Notice key={n} tone="warn">
           <p>{n}</p>
@@ -221,30 +289,38 @@ export function StudioPage() {
           {builtins.map((p) => (
             <SingerCard key={p.id} profile={p} selected={state.selectedProfileId === p.id} onSelect={() => app.selectProfile(p.id)} />
           ))}
-          <ReferenceCard loadedName={state.reference?.name ?? null} selected={referenceSelected} onSelect={onReferenceCard} />
+          <ReferenceCard
+            loadedName={state.reference?.name ?? null}
+            unusable={!!state.reference && !state.reference.usable}
+            selected={referenceSelected}
+            onSelect={onReferenceCard}
+          />
         </div>
       </section>
 
       <div className="studio-grid">
-        <section className="capture" aria-labelledby="capture-heading">
+        <section ref={captureRef} className="capture" aria-labelledby="capture-heading">
           <h2 id="capture-heading" className="section-title">
             Capture a take
           </h2>
 
           <div className={`record-block${recording ? ' record-block--live' : ''}`}>
+            <p className="visually-hidden" role="status">
+              {recAnnounce}
+            </p>
             {recording || phase === 'stopping' ? (
               <>
                 <div className="record-status">
                   <span className="rec-light" aria-hidden="true" />
                   <span className="rec-label">Recording</span>
-                  <span className="num rec-time" aria-label={`Elapsed ${formatClock(elapsed)}`}>
+                  <span className="num rec-time" role="timer" aria-label={`Elapsed ${formatClock(elapsed)}`}>
                     {formatClock(elapsed)}
                     <span className="muted"> / {formatClock(MAX_RECORD_SEC)}</span>
                   </span>
                 </div>
                 {analyser && <LiveMonitor analyser={analyser} a4Hz={state.settings.a4Hz} centreMidi={(passaggio.lowMidi + passaggio.highMidi) / 2} />}
                 <div className="record-actions">
-                  <button type="button" className="button button--rec" onClick={() => void stopRecording()} disabled={phase === 'stopping'}>
+                  <button ref={stopRef} type="button" className="button button--rec" onClick={() => void stopRecording()} disabled={phase === 'stopping'}>
                     <Icon name="stop" size={16} /> Stop and analyse
                   </button>
                   <button type="button" className="button button--ghost" onClick={cancelRecording} disabled={phase === 'stopping'}>
@@ -255,6 +331,7 @@ export function StudioPage() {
             ) : (
               <>
                 <button
+                  ref={recordRef}
                   type="button"
                   className="record-button"
                   onClick={() => void startRecording()}
@@ -266,6 +343,7 @@ export function StudioPage() {
                 </button>
                 <p id="record-help" className="record-help">
                   Sing one phrase or a verse, up to {MAX_RECORD_SEC / 60} minutes. You’ll see your note and level live.
+                  {drill && ` This take will be labelled with the drill “${drill.name}”.`}
                 </p>
               </>
             )}
@@ -305,7 +383,8 @@ export function StudioPage() {
             <span className="muted demo-note">A synthesised 15-second phrase, so you can see the results without singing.</span>
           </div>
 
-          {takeJob && <AnalysisProgress status={state.status} progress={state.progress} label={state.progressLabel} />}
+          {errorNotice('take')}
+          <AnalysisProgress status={takeJob ? state.status : 'idle'} progress={state.progress} label={state.progressLabel} />
 
           {state.analysis && state.take && !busy && (
             <p className="last-result">
@@ -328,7 +407,7 @@ export function StudioPage() {
               </li>
               <li>
                 Choose a phrase that crosses your passaggio (about{' '}
-                <span className="num">{noteRange(passaggio.lowMidi, passaggio.highMidi)}</span> for a {voiceLabel.toLowerCase()}), so there is mix to
+                <span className="num">{noteRange(passaggio.lowMidi, passaggio.highMidi)}</span> for a {voiceName.toLowerCase()}), so there is mix to
                 measure. Change voice type in Settings.
               </li>
               <li>Warm up first, and sing at a comfortable volume. Never push to reach a note.</li>
@@ -361,8 +440,24 @@ export function StudioPage() {
                 <span className="muted">Loaded:</span> <strong>{state.reference.name}</strong>{' '}
                 <span className="num muted">({Math.round(state.reference.analysis.durationSec)} s)</span>
               </p>
+              {!state.reference.usable ? (
+                <Notice tone="warn" title="This clip can’t be used as a target">
+                  <p>{state.reference.unusableReason}</p>
+                </Notice>
+              ) : (
+                clipNotes.length > 0 && (
+                  <div className="reference-notes">
+                    <p className="subhead">About this clip</p>
+                    <ul className="plain-list">
+                      {clipNotes.map((n) => (
+                        <li key={n}>{n}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              )}
               <div className="button-row">
-                {!referenceSelected && (
+                {state.reference.usable && !referenceSelected && (
                   <button type="button" className="button button--accent button--small" onClick={() => app.selectProfile(REFERENCE_ID)}>
                     Use as target
                   </button>
@@ -388,7 +483,7 @@ export function StudioPage() {
               onChange={(e) => app.setReferenceVoiceType((e.currentTarget.value || null) as VoiceType | null)}
               disabled={busy}
             >
-              <option value="">Same as my voice type ({voiceLabel})</option>
+              <option value="">Same as my voice type ({voiceName})</option>
               {VOICE_TYPES.map((v) => (
                 <option key={v} value={v}>
                   {VOICE_TYPE_LABELS[v]}
@@ -400,12 +495,18 @@ export function StudioPage() {
           <FileDrop
             compact
             label={state.reference ? 'Replace the reference clip' : 'Upload a reference clip'}
-            hint="A song excerpt or stem, up to 6 minutes"
+            hint={`An isolated vocal or an a cappella section, up to ${MAX_ANALYSIS_SEC / 60} minutes`}
             disabled={busy || recording}
-            onFile={(f) => void app.loadReferenceFile(f)}
-            onReject={setRejectMsg}
+            onFile={onReferenceFile}
+            onReject={setRefRejectMsg}
           />
-          {refJob && <AnalysisProgress status={state.status} progress={state.progress} label={state.progressLabel} />}
+          {refRejectMsg && (
+            <p className="field-error" role="alert">
+              {refRejectMsg}
+            </p>
+          )}
+          {errorNotice('reference')}
+          <AnalysisProgress status={refJob ? state.status : 'idle'} progress={state.progress} label={state.progressLabel} />
         </section>
       )}
     </div>

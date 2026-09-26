@@ -1,10 +1,13 @@
 // Approximate passaggio (register-transition) zones per voice type.
 //
-// These are the zones where the second passaggio / mix transition usually falls for each voice
-// type, as commonly taught in voice pedagogy. They are approximate: individual singers vary by a
-// few semitones either way, and the transition is a gradual zone rather than a single note. The
-// analysis uses `lowMidi` as the start of the "upper range" (where mix coaching matters) and the
-// zone as a prior for the register estimate.
+// These are contemporary (pop/soul) "mix zone" estimates: the stretch where a chest-dominant sound
+// has to start blending towards head voice for each voice type. They sit a little higher than the
+// classical passaggio points (e.g. Miller puts a lyric baritone's at about B3/E4), because
+// contemporary singers carry a speech-like mix further up. They are approximate: individual
+// singers vary by a few semitones either way, and the transition is a gradual zone rather than a
+// single note. The analysis uses `lowMidi` as the start of the "upper range" (where mix coaching
+// matters) and the zone as a prior for the register estimate, so moving a zone changes the
+// register calibration (see register.ts).
 
 import type { PassaggioZone, VoiceType } from '../types';
 
@@ -24,6 +27,19 @@ export const VOICE_TYPE_LABELS: Record<VoiceType, string> = {
   alto: 'Alto (lowest female voice)',
   mezzo: 'Mezzo-soprano (most female pop voices)',
   soprano: 'Soprano (highest female voice)',
+};
+
+/**
+ * Plain voice-type names for running text and parentheses ("for a Baritone", "(Mezzo-soprano)").
+ * VOICE_TYPE_LABELS carries a gloss in parentheses and is meant for option lists.
+ */
+export const VOICE_TYPE_NAMES: Record<VoiceType, string> = {
+  bass: 'Bass',
+  baritone: 'Baritone',
+  tenor: 'Tenor',
+  alto: 'Alto',
+  mezzo: 'Mezzo-soprano',
+  soprano: 'Soprano',
 };
 
 /** Approximate mix/passaggio zone for a voice type (a fresh object; callers may keep it). */

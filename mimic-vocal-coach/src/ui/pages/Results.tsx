@@ -1,13 +1,15 @@
 // Results: the current take scored against the selected singer, with the coaching plan, charts,
 // reference-clip comparison, AI coach and exports. Switching singer re-scores the same analysis.
+// A take that can't be scored (too little singing, singing over a band, too few measures) shows
+// "Not scored" with the reasons and recording advice instead of a number, and can't be saved.
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useId, useMemo, type CSSProperties } from 'react';
 import { encodeWav } from '../../audio/wav';
 import { getExercise } from '../../coach/exercises';
-import { compareToProfile } from '../../coach/compare';
+import { compareToProfile, isScoreable, singerPassaggioLow } from '../../coach/compare';
 import { STYLE_LABELS } from '../../coach/profiles';
 import { useApp } from '../../state/context';
-import { REFERENCE_ID } from '../../state/reducer';
+import { REFERENCE_ID, saveKey } from '../../state/reducer';
 import type { CoachingItem, StyleKey } from '../../types';
 import { DimensionMeter } from '../charts/DimensionMeter';
 import { PitchPlot } from '../charts/PitchPlot';
@@ -20,11 +22,12 @@ import { AiCoachPanel } from '../components/AiCoachPanel';
 import { AnalysisProgress } from '../components/AnalysisProgress';
 import { CoachingItemCard } from '../components/CoachingItemCard';
 import { buildAnalysisExport, downloadBlob, slugify, toJson } from '../components/download';
-import { formatCents, formatDuration, formatTranspose, noteName, noteRange, percent, signed } from '../components/format';
+import { formatCents, formatDuration, formatTranspose, noteName, noteRange, percent } from '../components/format';
 import { Icon } from '../components/Icon';
 import { Notice } from '../components/Notice';
 import { registerTarget, userUpperShares } from '../components/registers';
 import { possessive, shortName, singerColor } from '../components/singer';
+import { styleDiffText } from '../components/styleDiff';
 
 function dimensionLabel(key: CoachingItem['dimension']): string {
   if (key === 'range') return 'Range';
@@ -32,20 +35,29 @@ function dimensionLabel(key: CoachingItem['dimension']): string {
   return STYLE_LABELS[key]?.label ?? key;
 }
 
-function styleDiffText(key: StyleKey, diff: number): string {
-  const meta = STYLE_LABELS[key];
-  const digits = Math.abs(diff) >= 10 ? 0 : Math.abs(diff) >= 1 ? 1 : 2;
-  const unit = meta?.unit ? ` ${meta.unit}` : '';
-  const toward = diff > 0 ? meta?.highWord : meta?.lowWord;
-  return `${signed(diff, digits)}${unit}${toward && Math.abs(diff) > 0 ? `, toward ${toward}` : ''}`;
-}
-
 /** ", moved 12 semitones down to your key" / ", in the same key" (transposeSemitones = user minus reference). */
 function keyShiftPhrase(semitones: number): string {
   return Math.round(semitones) === 0 ? ', in the same key' : `, moved ${formatTranspose(semitones).toLowerCase()} to your key`;
 }
 
-// Stable ids per analysis object, used to restart the AI conversation when the take changes.
+/** Take-based key info for a reference clip with no singer behind it: "3 semitones higher" (take minus clip). */
+function takeVsClip(semitones: number): string {
+  const r = Math.round(semitones);
+  if (!Number.isFinite(r) || r === 0) return 'About the same';
+  const n = Math.abs(r);
+  return `${n} semitone${n === 1 ? '' : 's'} ${r > 0 ? 'higher' : 'lower'}`;
+}
+
+/** The coach may end a move hint with "Start here: <first step>", which the numbered steps repeat. */
+export function hintWithoutFirstStep(hint: string, firstStep: string | undefined): string {
+  const marker = ' Start here: ';
+  const i = hint.indexOf(marker);
+  if (i < 0 || !firstStep) return hint;
+  const norm = (t: string) => t.replace(/[.\s]+$/, '').toLowerCase();
+  return norm(hint.slice(i + marker.length)) === norm(firstStep) ? hint.slice(0, i) : hint;
+}
+
+// Stable ids per analysis object, used to key the AI conversation to this take and target.
 const analysisIds = new WeakMap<object, number>();
 let nextAnalysisId = 1;
 function analysisId(a: object): number {
@@ -81,20 +93,16 @@ export function ResultsPage() {
   const app = useApp();
   const { state, profile, profiles } = app;
   const { analysis, comparison, plan, take, referenceComparison: refComp, reference } = state;
-  const [savedFor, setSavedFor] = useState<string[]>([]);
+  const saveNoteId = useId();
 
-  useEffect(() => setSavedFor([]), [analysis]);
-
+  // Each tab's score, or null when the take can't be scored against that profile.
   const tabScores = useMemo(() => {
-    const out = new Map<string, number>();
+    const out = new Map<string, number | null>();
     if (!analysis) return out;
     for (const p of profiles) {
-      if (comparison && p.id === comparison.profileId) {
-        out.set(p.id, comparison.overall);
-        continue;
-      }
       try {
-        out.set(p.id, compareToProfile(analysis, p).overall);
+        const c = comparison && p.id === comparison.profileId ? comparison : compareToProfile(analysis, p);
+        out.set(p.id, isScoreable(analysis, c) ? c.overall : null);
       } catch {
         // A profile that cannot be scored just shows no number on its tab.
       }
@@ -117,18 +125,36 @@ export function ResultsPage() {
   const style = { '--singer': color } as CSSProperties;
   const regTarget = registerTarget(profile);
   const upper = userUpperShares(analysis);
+  const scoreable = isScoreable(analysis, comparison);
   const items = [...plan.items].sort((a, b) => a.priority - b.priority);
   const moves = plan.signatureFocus
     .map((f) => ({ focus: f, move: profile.signatureMoves.find((m) => m.id === f.moveId) }))
     .filter((x) => x.move);
-  const warnings = [...analysis.warnings, ...state.notices];
+  // The take carries its own decode notes (trimmed, cancelling channels), so a later job cannot clear them.
+  const warnings = [...new Set([...analysis.warnings, ...(take?.notices ?? state.notices)])];
   const lowMidi = Math.min(40, (analysis.pitch.lowMidi ?? 40) - 2, profile.typicalRange.lowMidi - 2);
   const highMidi = Math.max(84, (analysis.pitch.highMidi ?? 84) + 2, profile.typicalRange.highMidi + 2);
-  const saved = savedFor.includes(profile.id);
+  const saved = state.savedKeys.includes(saveKey(state, profile));
+  const canSave = scoreable && !saved;
   const takeName = take?.name ?? 'Take';
+  // The header range note is repeated word for word by a range coaching card when there is one.
+  const showRangeNote = scoreable && !items.some((i) => i.dimension === 'range');
+  // Key advice for builtin singers comes from the voice types; a reference clip with no singer
+  // behind it can only be compared with this take, which is information rather than advice.
+  const keyFromVoiceType = singerPassaggioLow(profile) !== null;
+  // compareToReference returns an empty path (and NaN cents) when there is too little to line up.
+  const aligned = !!refComp && refComp.path.length > 0 && Number.isFinite(refComp.meanAbsCents);
+  // The comparison runs just after the result paints; say so rather than leave a gap.
+  const comparingReference = !!reference?.usable && !refComp;
+  const aiKey = `${analysisId(analysis)}|${profile.id}|${reference?.usable ? analysisId(reference.analysis) : 0}`;
+  const saveNote = !scoreable
+    ? 'This take can’t be scored, so there is nothing to save yet. Record another take using the advice above.'
+    : saved
+      ? 'Saved. See your trend on the Progress page.'
+      : 'Saving keeps only the scores and measurements, not the audio.';
 
   const onSave = () => {
-    if (app.saveSession(takeName)) setSavedFor((s) => [...s, profile.id]);
+    if (canSave) app.saveSession(takeName);
   };
   const onDownloadJson = () => {
     const data = buildAnalysisExport({
@@ -147,11 +173,29 @@ export function ResultsPage() {
     if (!take) return;
     downloadBlob(new Blob([encodeWav(take.samples, take.sampleRate)], { type: 'audio/wav' }), `${slugify(takeName)}.wav`);
   };
+  // aria-disabled rather than disabled, so keyboard focus stays on the button after saving.
+  const saveButton = (
+    <button
+      type="button"
+      className="button button--accent"
+      onClick={onSave}
+      aria-disabled={canSave ? undefined : true}
+      aria-describedby={saveNoteId}
+    >
+      <Icon name="save" size={16} /> {saved ? 'Saved to Progress' : 'Save to progress'}
+    </button>
+  );
+  const recordAnother = (
+    <button type="button" className="button button--ghost" onClick={() => app.go('studio')}>
+      <Icon name="mic" size={16} /> Record another take
+    </button>
+  );
 
   return (
     <div className="page page--results" style={style}>
       <nav className="singer-tabs" aria-label="Compare this take against">
         {profiles.map((p) => {
+          const hasScore = tabScores.has(p.id);
           const score = tabScores.get(p.id);
           return (
             <button
@@ -163,7 +207,15 @@ export function ResultsPage() {
               onClick={() => app.selectProfile(p.id)}
             >
               <span className="singer-tab-name">{p.id === REFERENCE_ID ? 'Reference' : p.name}</span>
-              {score !== undefined && <span className="singer-tab-score num">{Math.round(score)}</span>}
+              {hasScore &&
+                (score === null || score === undefined ? (
+                  <span className="singer-tab-score num">
+                    <span aria-hidden="true">–</span>
+                    <span className="visually-hidden">not scored</span>
+                  </span>
+                ) : (
+                  <span className="singer-tab-score num">{Math.round(score)}</span>
+                ))}
             </button>
           );
         })}
@@ -171,7 +223,14 @@ export function ResultsPage() {
 
       <header className="results-head">
         <div className="results-dial">
-          <ScoreDial score={comparison.overall} label={`Match with ${name}`} color={color} size={176} />
+          {scoreable ? (
+            <ScoreDial score={comparison.overall} label={`Match with ${name}`} color={color} size={176} />
+          ) : (
+            <div className="not-scored">
+              <p className="not-scored-mark">Not scored</p>
+              <p className="not-scored-note">See below for why, and what to change.</p>
+            </div>
+          )}
         </div>
         <div className="results-summary">
           <p className="eyebrow">{takeName}</p>
@@ -193,15 +252,23 @@ export function ResultsPage() {
               <dd className="num">{noteRange(analysis.pitch.lowMidi, analysis.pitch.highMidi)}</dd>
             </div>
             <div>
-              <dt>Suggested key</dt>
-              <dd>{formatTranspose(comparison.suggestedTransposeSemitones)}</dd>
+              <dt>{keyFromVoiceType ? 'Key for your voice type' : 'Your take vs the clip'}</dt>
+              <dd>
+                {keyFromVoiceType
+                  ? formatTranspose(comparison.suggestedTransposeSemitones)
+                  : takeVsClip(comparison.suggestedTransposeSemitones)}
+              </dd>
             </div>
             <div>
               <dt>Tuning</dt>
               <dd className="num">{formatCents(analysis.pitch.tuningOffsetCents)}</dd>
             </div>
           </dl>
-          <p className="range-note">{comparison.rangeNote}</p>
+          {showRangeNote && <p className="range-note">{comparison.rangeNote}</p>}
+          <div className="results-quick-actions">
+            {saveButton}
+            {recordAnother}
+          </div>
         </div>
       </header>
 
@@ -220,9 +287,13 @@ export function ResultsPage() {
       <section className="results-section" aria-labelledby="plan-heading">
         <div className="section-head">
           <h2 id="plan-heading" className="section-title">
-            Your coaching plan
+            {scoreable ? 'Your coaching plan' : 'Before the next take'}
           </h2>
-          <p className="section-sub">What to work on to sound more like {name}, most important first.</p>
+          <p className="section-sub">
+            {scoreable
+              ? `What to work on to sound more like ${name}, most important first.`
+              : 'What to change so the next take can be measured and scored.'}
+          </p>
         </div>
         {plan.strengths.length > 0 && (
           <div className="strengths">
@@ -251,27 +322,29 @@ export function ResultsPage() {
         </p>
       </section>
 
-      <section className="results-section" aria-labelledby="style-heading">
-        <div className="section-head">
-          <h2 id="style-heading" className="section-title">
-            Style match
-          </h2>
-          <p className="section-sub">
-            Each measure against {possessive(name)} target band. Scores are closeness, not quality: a low score only means different from the
-            target.
-          </p>
-        </div>
-        <div className="style-grid">
-          <div className="style-radar">
-            <StyleRadar comparison={comparison} profile={profile} size={300} />
+      {scoreable && (
+        <section className="results-section" aria-labelledby="style-heading">
+          <div className="section-head">
+            <h2 id="style-heading" className="section-title">
+              Style match
+            </h2>
+            <p className="section-sub">
+              Each measure against {possessive(name)} target band. Scores are closeness, not quality: a low score only means different from
+              the target.
+            </p>
           </div>
-          <div className="meter-list">
-            {comparison.dimensions.map((d) => (
-              <DimensionMeter key={d.key} result={d} />
-            ))}
+          <div className="style-grid">
+            <div className="style-radar">
+              <StyleRadar comparison={comparison} profile={profile} size={300} />
+            </div>
+            <div className="meter-list">
+              {comparison.dimensions.map((d) => (
+                <DimensionMeter key={d.key} result={d} />
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section className="results-section" aria-labelledby="pitch-heading">
         <div className="section-head">
@@ -281,18 +354,19 @@ export function ResultsPage() {
           <p className="section-sub">
             Your pitch over time, coloured by estimated register. The shaded band is your passaggio (
             <span className="num">{noteRange(analysis.passaggio.lowMidi, analysis.passaggio.highMidi)}</span>).
-            {refComp && reference ? ` The dashed line is ${reference.name}${keyShiftPhrase(refComp.transposeSemitones)}.` : ''}
+            {aligned && reference ? ` The dashed line is ${reference.name}${keyShiftPhrase(refComp.transposeSemitones)}.` : ''}
           </p>
         </div>
         <PitchPlot
           analysis={analysis}
-          reference={refComp && reference ? reference.analysis : undefined}
-          referenceShiftSemitones={refComp?.transposeSemitones}
-          referencePath={refComp?.path}
+          reference={aligned && reference ? reference.analysis : undefined}
+          referenceShiftSemitones={aligned ? refComp.transposeSemitones : undefined}
+          referencePath={aligned ? refComp.path : undefined}
         />
         <p className="caveat">
           Registers are estimated from acoustic cues (the balance of the first two harmonics, spectral slope, brightness, and loudness
-          against pitch). Vowels and the microphone shift those cues, so treat the colours as a guide, not a diagnosis.
+          against pitch). They are most reliable on open vowels such as “ah”; other vowels and the microphone shift those cues, so treat
+          the colours as a guide, not a diagnosis.
         </p>
 
         <div className="range-grid">
@@ -345,7 +419,7 @@ export function ResultsPage() {
               <article key={focus.moveId} className="move">
                 <h3 className="move-name">{move!.name}</h3>
                 <p>{move!.description}</p>
-                <p className="move-hint">{focus.hint}</p>
+                <p className="move-hint">{hintWithoutFirstStep(focus.hint, move!.howTo[0])}</p>
                 {move!.howTo.length > 0 && (
                   <ol className="move-steps">
                     {move!.howTo.map((h) => (
@@ -359,45 +433,66 @@ export function ResultsPage() {
         </section>
       )}
 
-      {refComp && reference && (
+      {scoreable && reference?.usable && (refComp || comparingReference) && (
         <section className="results-section" aria-labelledby="ref-heading">
           <div className="section-head">
             <h2 id="ref-heading" className="section-title">
               Against your reference clip
             </h2>
-            <p className="section-sub">
-              Your pitch lined up with <strong>{reference.name}</strong> phrase by phrase{keyShiftPhrase(refComp.transposeSemitones)}.
-            </p>
+            {!refComp ? (
+              <p className="section-sub">
+                {state.error ? (
+                  state.error
+                ) : (
+                  <>
+                    Lining your take up with <strong>{reference.name}</strong>…
+                  </>
+                )}
+              </p>
+            ) : aligned ? (
+              <p className="section-sub">
+                Your pitch lined up with <strong>{reference.name}</strong> phrase by phrase{keyShiftPhrase(refComp.transposeSemitones)}.
+              </p>
+            ) : (
+              <p className="section-sub">
+                There is not enough pitched singing in your take or in <strong>{reference.name}</strong> to line them up phrase by phrase.
+                Sing the same phrase as the clip, with a few held notes, and try again.
+              </p>
+            )}
           </div>
-          <dl className="facts">
-            <div>
-              <dt>Within 50¢</dt>
-              <dd className="num">{percent(refComp.withinFiftyCents)}</dd>
-            </div>
-            <div>
-              <dt>Average difference</dt>
-              <dd className="num">{Math.round(refComp.meanAbsCents)}¢</dd>
-            </div>
-            <div>
-              <dt>Key shift</dt>
-              <dd>{formatTranspose(refComp.transposeSemitones)}</dd>
-            </div>
-          </dl>
-          <ReferenceDiffPlot comparison={refComp} />
-          {refComp.segments.length > 0 && (
-            <ol className="segment-list">
-              {refComp.segments.map((s) => (
-                <li key={`${s.userStart}-${s.refStart}`}>
-                  <span className="num segment-time">
-                    {formatDuration(s.userStart)}–{formatDuration(s.userEnd)}
-                  </span>
-                  <span className="num segment-cents">{formatCents(s.meanSignedCents)}</span>
-                  <span className="segment-note">{s.note}</span>
-                </li>
-              ))}
-            </ol>
+          {refComp && aligned && (
+            <>
+              <dl className="facts">
+                <div>
+                  <dt>Within 50¢</dt>
+                  <dd className="num">{percent(refComp.withinFiftyCents)}</dd>
+                </div>
+                <div>
+                  <dt>Average difference</dt>
+                  <dd className="num">{Math.round(refComp.meanAbsCents)}¢</dd>
+                </div>
+                <div>
+                  <dt>Key shift</dt>
+                  <dd>{formatTranspose(refComp.transposeSemitones)}</dd>
+                </div>
+              </dl>
+              <ReferenceDiffPlot comparison={refComp} />
+              {refComp.segments.length > 0 && (
+                <ol className="segment-list">
+                  {refComp.segments.map((s) => (
+                    <li key={`${s.userStart}-${s.refStart}`}>
+                      <span className="num segment-time">
+                        {formatDuration(s.userStart)}–{formatDuration(s.userEnd)}
+                      </span>
+                      <span className="num segment-cents">{formatCents(s.meanSignedCents)}</span>
+                      <span className="segment-note">{s.note}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </>
           )}
-          {Object.keys(refComp.styleDiff).length > 0 && (
+          {refComp && Object.keys(refComp.styleDiff).length > 0 && (
             <>
               <h3 className="subhead">Style differences (you minus the reference)</h3>
               <ul className="diff-list">
@@ -422,7 +517,9 @@ export function ResultsPage() {
         <AiCoachPanel
           settings={state.settings}
           input={{ analysis, comparison, plan, profile, reference: refComp ?? undefined }}
-          conversationKey={`${analysisId(analysis)}|${profile.id}|${refComp ? analysisId(refComp) : 0}`}
+          conversationKey={aiKey}
+          turns={state.aiThread?.key === aiKey ? state.aiThread.turns : []}
+          onTurns={(key, turns) => app.dispatch({ type: 'ai/thread', key, turns })}
           onOpenSettings={() => app.go('settings')}
           singerName={name}
         />
@@ -442,20 +539,16 @@ export function ResultsPage() {
       </section>
 
       <section className="results-actions" aria-label="Save and export">
-        <button type="button" className="button button--accent" onClick={onSave} disabled={saved}>
-          <Icon name="save" size={16} /> {saved ? 'Saved to Progress' : 'Save to progress'}
-        </button>
+        {saveButton}
         <button type="button" className="button button--ghost" onClick={onDownloadJson}>
           <Icon name="download" size={16} /> Download analysis (JSON)
         </button>
         <button type="button" className="button button--ghost" onClick={onDownloadWav} disabled={!take}>
           <Icon name="download" size={16} /> Download take (WAV)
         </button>
-        <button type="button" className="button button--ghost" onClick={() => app.go('studio')}>
-          <Icon name="mic" size={16} /> Record another take
-        </button>
-        <p className="muted results-actions-note" aria-live="polite">
-          {saved ? 'Saved. See your trend on the Progress page.' : 'Saving keeps only the scores and measurements, not the audio.'}
+        {recordAnother}
+        <p id={saveNoteId} className="muted results-actions-note" aria-live="polite">
+          {saveNote}
         </p>
       </section>
     </div>

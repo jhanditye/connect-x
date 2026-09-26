@@ -103,6 +103,7 @@ describe('end-to-end style ordering on contrasting takes', () => {
   it('every take is analysable without recording warnings', () => {
     for (const a of Object.values(takes)) {
       expect(a.warnings).toEqual([]);
+      expect(a.issues).toEqual([]);
       expect(a.voicedSec).toBeGreaterThan(7);
     }
   });

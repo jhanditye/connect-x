@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FAKE_STYLE } from '../testing/fixtures';
+import { scoreDimension } from './compare';
 import type { SingerProfile, StyleKey } from '../types';
 import {
   MOVE_FOCUS,
@@ -76,6 +77,30 @@ describe('SINGERS', () => {
     }
   });
 
+  it('never makes a level climb off-style or puts the climb band past the pushing threshold', () => {
+    for (const s of SINGERS) {
+      const b = s.targets.loudnessClimbDbPerSemitone!;
+      // 0.8 dB/semitone is where the health notes call it pushing.
+      expect(b.high, s.id).toBeLessThanOrEqual(0.8);
+      // A singer who keeps the volume level as they climb is never told to get louder.
+      expect(scoreDimension(0, b), s.id).toBeGreaterThanOrEqual(80);
+    }
+    expect(shawn.signatureMoves.find((m) => m.id === 'shawn-bright-chest-mix')!.howTo.join(' ')).toMatch(/0\.8 dB per semitone/);
+  });
+
+  it('lets a take without register flips be on-style for Shawn and Jalen', () => {
+    expect(shawn.targets.flipsPerMinute!.low).toBe(0);
+    expect(jalen.targets.flipsPerMinute!.low).toBe(0);
+    // Flips on hooks are Daniel's signature, so he keeps a positive low edge.
+    expect(daniel.targets.flipsPerMinute!.low).toBeGreaterThan(0);
+  });
+
+  it('keeps a steady mic distance in the move instructions', () => {
+    const text = SINGERS.flatMap((s) => s.signatureMoves.flatMap((m) => m.howTo)).join(' ');
+    expect(text).not.toMatch(/hand's width|closer to the mic/);
+    expect(daniel.signatureMoves[0].howTo[0]).toMatch(/20–30 cm/);
+  });
+
   it('has register ideals that sum to one', () => {
     for (const s of SINGERS) {
       const sum = ideal(s, 'chestInUpperRange') + ideal(s, 'mixInUpperRange') + ideal(s, 'headInUpperRange');
@@ -96,6 +121,10 @@ describe('SINGERS', () => {
       for (const m of s.signatureMoves) {
         expect(m.howTo.length).toBeGreaterThanOrEqual(3);
         expect(MOVE_FOCUS[m.id], m.id).toBeDefined();
+        for (const [key, dir] of Object.entries(MOVE_FOCUS[m.id])) {
+          expect(ALL_KEYS, `${m.id} ${key}`).toContain(key);
+          expect(['more', 'less'], `${m.id} ${key}`).toContain(dir);
+        }
       }
     }
     const moveIds = SINGERS.flatMap((s) => s.signatureMoves.map((m) => m.id));
@@ -197,7 +226,9 @@ describe('STYLE_LABELS', () => {
   });
 
   it('describes values in plain words that follow the StyleVector anchors', () => {
-    expect(STYLE_LABELS.breathiness.describe(0.1)).toMatch(/pressed/);
+    // A low index means a clean, firm tone; the label never claims a pressed voice from it alone.
+    expect(STYLE_LABELS.breathiness.describe(0.1)).toBe('very clean and firm');
+    for (const v of [0, 0.05, 0.1, 0.19, 0.25]) expect(STYLE_LABELS.breathiness.describe(v)).not.toMatch(/pressed/);
     expect(STYLE_LABELS.breathiness.describe(0.4)).toBe('clear and balanced');
     expect(STYLE_LABELS.breathiness.describe(0.7)).toBe('quite airy');
     expect(STYLE_LABELS.breathiness.describe(0.95)).toMatch(/whisper/);

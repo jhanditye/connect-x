@@ -20,8 +20,8 @@ export function SingerCard(props: {
   );
 }
 
-/** The "use a reference clip" slot in the singer picker. */
-export function ReferenceCard(props: { loadedName: string | null; selected: boolean; onSelect: () => void }) {
+/** The "use a reference clip" slot in the singer picker. `unusable`: a clip is loaded but can't be a target. */
+export function ReferenceCard(props: { loadedName: string | null; unusable?: boolean; selected: boolean; onSelect: () => void }) {
   const style = { '--card-color': 'var(--singer-custom)' } as CSSProperties;
   return (
     <button type="button" className="singer-card singer-card--reference" aria-pressed={props.selected} onClick={props.onSelect} style={style}>
@@ -29,9 +29,15 @@ export function ReferenceCard(props: { loadedName: string | null; selected: bool
       <span className="singer-card-name">Reference clip</span>
       <span className="singer-card-tagline">
         {props.loadedName ? (
-          <>
-            Calibrated from <span className="singer-card-file">{props.loadedName}</span>
-          </>
+          props.unusable ? (
+            <>
+              <span className="singer-card-file">{props.loadedName}</span> can’t be used as a target: see why below
+            </>
+          ) : (
+            <>
+              Calibrated from <span className="singer-card-file">{props.loadedName}</span>
+            </>
+          )
         ) : (
           'Measure the target from a recording you own'
         )}

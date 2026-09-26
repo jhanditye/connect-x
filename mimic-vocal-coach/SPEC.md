@@ -263,6 +263,18 @@ export interface Recorder {
 export function createRecorder(): Recorder;
 ```
 
+### Additions after review (round 2)
+
+- `VoiceAnalysis.issues: AnalysisIssue[]` — machine-readable problems ('too-little-singing' | 'accompaniment' | 'speech-like' | 'noisy' | 'clipping' | 'too-quiet' | 'trimmed'). Consumers branch on these, never on warning text.
+- `analysis/passaggio.ts`: `VOICE_TYPE_NAMES` (plain names for running text). Zones are contemporary mix-zone estimates; the register analysis depends on them.
+- `analysis/quality.ts`: `qualityReport`, `measureAccompaniment` (song-mix detection from the level and periodicity of the gaps between phrases).
+- `coach/compare.ts`: `isScoreable(analysis, comparison?)` — false for too little singing, accompaniment, or fewer than 4 measured dimensions; `suggestedTransposeSemitones` is voice-type based (user passaggio vs the singer's).
+- `coach/reference.ts`: `referenceUsability(ref)` — unusable clips are shown with the reason and never used as a target.
+- `coach/ai.ts`: the SDK is loaded with a dynamic import (`loadSdk`) so it stays out of the main bundle.
+- `storage/history.ts`: reference sessions are keyed `reference:<clip name>` (`sessionProfileId`).
+- `audio/wav.ts`: `decodeWav(buffer, { maxSeconds, mono })` reads only what it needs.
+- One length limit everywhere: 300 s.
+
 ## Pages and flow (UI)
 
 Hash routes with bare tokens (`#studio`, `#results`, `#practice`, `#progress`, `#guide`, `#settings`).

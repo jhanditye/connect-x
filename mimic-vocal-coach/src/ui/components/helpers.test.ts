@@ -7,6 +7,7 @@ import { blockLevel, levelState, meterFraction, traceWindow } from './live';
 import { registerTarget, userUpperShares } from './registers';
 import { parseBlocks } from './RichText';
 import { possessive, shortName, singerColor } from './singer';
+import { styleDiffText } from './styleDiff';
 
 describe('format', () => {
   it('formats clocks and durations', () => {
@@ -194,5 +195,25 @@ describe('upload filter and singer helpers', () => {
     expect(shortName({ name: 'Daniel Caesar', source: 'builtin' })).toBe('Daniel');
     expect(shortName({ name: 'my clip', source: 'reference' })).toBe('my clip');
     expect(possessive('Jalen')).toBe('Jalen’s');
+  });
+});
+
+describe('styleDiffText', () => {
+  it('shows share differences in percentage points, not as fractions with a % sign', () => {
+    expect(styleDiffText('vibratoPresence', -0.54)).toBe('−54 percentage points, toward straight');
+    expect(styleDiffText('headInUpperRange', -0.71)).toBe('−71 percentage points, toward little falsetto');
+    expect(styleDiffText('chestInUpperRange', 0.01)).toBe('+1 percentage point, toward chest-heavy');
+  });
+
+  it('says nothing about direction when the rounded difference is zero', () => {
+    expect(styleDiffText('mixInUpperRange', 0.003)).toBe('0 percentage points');
+    expect(styleDiffText('breathiness', 0.001)).toBe('0.00');
+  });
+
+  it('keeps physical units and 0..1 indices as they are', () => {
+    expect(styleDiffText('breathiness', 0.12)).toBe('+0.12, toward airy');
+    expect(styleDiffText('vibratoRateHz', -1.24)).toBe('−1.2 Hz, toward slow');
+    expect(styleDiffText('dynamicRangeDb', 12.4)).toMatch(/^\+12 dB, toward /);
+    expect(styleDiffText('breathiness', NaN)).toBe('–');
   });
 });

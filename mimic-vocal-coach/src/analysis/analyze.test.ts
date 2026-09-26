@@ -24,6 +24,8 @@ function expectWellFormed(a: VoiceAnalysis) {
   expect(sum === 0 || Math.abs(sum - 1) < 1e-9).toBe(true);
   for (const v of Object.values(a.style)) expect(v === null || Number.isFinite(v)).toBe(true);
   expect(Number.isFinite(a.quality.snrDb)).toBe(true);
+  expect(Array.isArray(a.issues)).toBe(true);
+  expect(new Set(a.issues).size).toBe(a.issues.length);
   // JSON round trip must not lose summary data (NaN only lives in per-frame arrays).
   const summary = JSON.parse(JSON.stringify({ ...a, frames: [] })) as VoiceAnalysis;
   expect(summary.style).toEqual(a.style);
@@ -35,12 +37,14 @@ describe('analyzeTake input validation', () => {
     expectWellFormed(a);
     expect(a.frames).toHaveLength(0);
     expect(a.warnings[0]).toMatch(/empty/);
+    expect(a.issues).toEqual(['too-little-singing']);
     expect(a.passaggio).toEqual({ lowMidi: 62, highMidi: 67 });
   });
 
   it('handles all-NaN, partly-NaN and invalid sample rates', () => {
     const nan = new Float32Array(1000).fill(NaN);
     expect(analyzeTake(nan, SR, OPTS).warnings[0]).toMatch(/no valid audio/);
+    expect(analyzeTake(nan, SR, OPTS).issues).toEqual(['too-little-singing']);
     const partly = concat(silence(0.3, SR), synthMelody([{ midi: 57, durSec: 1 }], { sampleRate: SR }), silence(0.3, SR));
     partly[100] = NaN;
     partly[5000] = Infinity;
@@ -51,6 +55,7 @@ describe('analyzeTake input validation', () => {
     for (const rate of [0, NaN, -44100, 100]) {
       const b = analyzeTake(partly, rate, OPTS);
       expect(b.warnings[0]).toMatch(/sample rate/);
+      expect(b.issues).toEqual(['too-little-singing']);
       expect(b.frames).toHaveLength(0);
     }
   });
@@ -90,6 +95,10 @@ describe('analyzeTake input validation', () => {
     expect(a.durationSec).toBe(MAX_ANALYSIS_SEC);
     expect(a.frames.length).toBeLessThanOrEqual(MAX_ANALYSIS_SEC * 100 + 1);
     expect(a.warnings.some((w) => /first 5 minutes/.test(w))).toBe(true);
+    expect(a.issues[0]).toBe('trimmed');
+    expect(a.issues).toContain('too-little-singing');
+    const empty = analyzeTake(new Float32Array(Math.round((MAX_ANALYSIS_SEC + 5) * sr)).fill(NaN), sr, OPTS);
+    expect(empty.issues).toEqual(['trimmed', 'too-little-singing']);
   }, 30000);
 });
 
@@ -125,6 +134,8 @@ describe('analyzeTake results', () => {
     expect(a.style.pitchAccuracyCents).toBeLessThan(8);
     expect(a.style.agility).toBe(0);
     expect(a.style.flipsPerMinute).toBe(0);
+    expect(a.warnings).toEqual([]);
+    expect(a.issues).toEqual([]);
   });
 
   it('honours the tuning reference', () => {

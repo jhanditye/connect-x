@@ -1,8 +1,10 @@
 // The normalised StyleVector, mapped from raw measures onto the anchors documented in src/types.ts.
 //
 // Calibration comes from the synthesiser (src/testing/synth.ts; see the DSP calibration table in
-// src/dsp/spectral.ts). Real voices sit at different absolute values (recording noise, lip
-// radiation, vowels), so the indices are best read relative to each other and over time.
+// src/dsp/spectral.ts), except breathiness, whose absolute level is anchored on real recordings
+// (the synthesiser's source has a stronger first harmonic than real voices). Real voices still sit
+// at different absolute values (recording noise, microphone, vowels), so the indices are best
+// read relative to each other and over time, on the same microphone.
 
 import { clamp, linearRegression, mean, median, percentile } from '../dsp/stats';
 import type { FrameFeatures, NoteSegment, Onset, PassaggioZone, Run, StyleVector } from '../types';
@@ -15,19 +17,29 @@ import { registerShares } from './register';
 /**
  * Breathiness of one voiced frame, 0..1.
  *
- *   B = -0.05 + 0.03 * min(H, 12) + 0.012 * max(0, H - 12) + 0.35 * A
+ *   B = 0.30 + 0.017 * clamp(H, -10, 12) + 0.01 * max(0, H - 12) + 0.3 * A
  *
  * H = normalised H1-H2 (dB), A = aspiration index. H1-H2 carries the low end (how firmly the folds
- * close: pressed ~4-8 dB, modal ~10-14 on the synthesiser's open vowels) and saturates above
- * 12 dB, where a strong H1 says more about register than air; the aspiration index carries the high
- * end. Take medians on the synthesiser (vowel /a/, G3-D4): pressed (tilt -6) 0.19, modal (tilt -12)
- * 0.33, breathy (breath 0.6) 0.66; /o/ reads about 0.1 lower. Near-whisper frames that are too
- * noisy to be voiced count as WHISPER_BREATHINESS.
+ * close) and the aspiration index the high end; above 12 dB a strong H1 says more about register
+ * than air, so it counts less.
+ *
+ * Anchored on real voices: clean, modal solo singing (four male singers, amateur to trained, and
+ * one clean high voice) reads normalised H1-H2 of about -2.5 to +6 dB with no aspiration (CPP
+ * 23-32 dB), which maps to ~0.28-0.44, the "clear, balanced" band of the StyleVector. No real
+ * breathy singing was available to calibrate the top: a voice that adds +5-10 dB of H1-H2 and
+ * aspiration (A 0.3-0.6) should read about 0.6-0.75, so treat that end as provisional. The
+ * synthesiser keeps the same order but sits higher, because its source has a stronger H1 than a
+ * real voice (take medians on vowel /a/, G3-D4): pressed (tilt -6) 0.44, modal (tilt -12) 0.52,
+ * breathy (breath 0.6) 0.80; /o/ reads about 0.1 lower. Frames firmer than H = -10 dB (belting,
+ * or a microphone that cuts the bass, which lowers H1) all read 0.13. The value depends on the
+ * microphone's bass response (a phone-like 250 Hz roll-off lowers it by 0.1-0.15), so compare takes
+ * made on the same device. Near-whisper frames that are too noisy to be voiced count as
+ * WHISPER_BREATHINESS.
  */
 export function breathinessIndex(h1h2NormDb: number, aspiration: number): number {
   if (Number.isNaN(h1h2NormDb) || Number.isNaN(aspiration)) return NaN;
   const h = h1h2NormDb;
-  return clamp(-0.05 + 0.03 * Math.min(h, 12) + 0.012 * Math.max(0, h - 12) + 0.35 * aspiration, 0, 1);
+  return clamp(0.3 + 0.017 * clamp(h, -10, 12) + 0.01 * Math.max(0, h - 12) + 0.3 * aspiration, 0, 1);
 }
 
 /** Breathiness assigned to near-whisper frames: sound with some periodicity but too noisy to be voiced. */
@@ -131,9 +143,14 @@ const CLIMB_BELOW_PASSAGGIO = 3;
 const MIN_AGILITY_SEC = 3;
 const MIN_DYNAMICS_SEC = 1;
 const MIN_FLIP_SEC = 3;
-const ACCURACY_NOTE_SEC = 0.25;
+/**
+ * Pitch accuracy is judged on held notes only. Shorter notes are mostly syllables, glides and
+ * ornaments whose "pitch" is a passing value, and made even speech read like singing.
+ */
+const ACCURACY_NOTE_SEC = 0.4;
 const ACCURACY_MIN_NOTES = 3;
-const SUSTAINED_NOTE_SEC = 0.45;
+/** A held note: long enough for vibrato (vibrato.ts) and for the speech-like check (analyze.ts). */
+export const SUSTAINED_NOTE_SEC = 0.45;
 
 const orNull = (x: number): number | null => (Number.isFinite(x) ? x : null);
 

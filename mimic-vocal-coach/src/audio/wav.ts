@@ -4,6 +4,17 @@
 export interface DecodedAudio {
   sampleRate: number;
   channels: Float32Array[];
+  /** Channels in the file (with `mono: true`, `channels` holds one mix of them). */
+  sourceChannels?: number;
+  /** Frames in the whole file; more than `channels[0].length` when `maxSeconds` cut it short. */
+  totalFrames?: number;
+}
+
+export interface DecodeWavOptions {
+  /** Stop reading after this many seconds, so a long file never allocates more than it needs. */
+  maxSeconds?: number;
+  /** Average the channels while reading and return a single channel (one array instead of one per channel). */
+  mono?: boolean;
 }
 
 /** Encode mono or multi-channel float samples (-1..1) as 16-bit PCM WAV. */
@@ -45,8 +56,9 @@ export function encodeWav(input: Float32Array | Float32Array[], sampleRate: numb
 /**
  * Decode a PCM (8/16/24/32-bit int) or IEEE float (32/64-bit) WAV file.
  * Throws an Error with a readable message for anything else.
+ * `opts.maxSeconds` reads only the start of the file; `opts.mono` mixes the channels as it reads.
  */
-export function decodeWav(buffer: ArrayBuffer): DecodedAudio {
+export function decodeWav(buffer: ArrayBuffer, opts: DecodeWavOptions = {}): DecodedAudio {
   const v = new DataView(buffer);
   const tag = (off: number) => String.fromCharCode(v.getUint8(off), v.getUint8(off + 1), v.getUint8(off + 2), v.getUint8(off + 3));
   if (buffer.byteLength < 12 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('Not a WAV file.');
@@ -77,10 +89,15 @@ export function decodeWav(buffer: ArrayBuffer): DecodedAudio {
   if (dataOff < 0 || numCh === 0) throw new Error('WAV file has no audio data.');
   if (format !== 1 && format !== 3) throw new Error(`Unsupported WAV encoding (format ${format}).`);
   const bytes = bits / 8;
-  const frames = Math.floor(dataLen / (bytes * numCh));
-  const channels = Array.from({ length: numCh }, () => new Float32Array(frames));
+  const totalFrames = Math.floor(dataLen / (bytes * numCh));
+  const limit = opts.maxSeconds !== undefined && opts.maxSeconds >= 0 && sampleRate > 0 ? Math.floor(opts.maxSeconds * sampleRate) : Infinity;
+  const frames = Math.min(totalFrames, limit);
+  const mono = !!opts.mono && numCh > 1;
+  const channels = Array.from({ length: mono ? 1 : numCh }, () => new Float32Array(frames));
+  const gain = 1 / numCh;
   let p = dataOff;
   for (let i = 0; i < frames; i++) {
+    let sum = 0;
     for (let c = 0; c < numCh; c++) {
       let s: number;
       if (format === 3) s = bits === 64 ? v.getFloat64(p, true) : v.getFloat32(p, true);
@@ -91,9 +108,11 @@ export function decodeWav(buffer: ArrayBuffer): DecodedAudio {
         if (x & 0x800000) x |= ~0xffffff;
         s = x / 8388608;
       } else s = v.getInt32(p, true) / 2147483648;
-      channels[c][i] = s;
+      if (mono) sum += s;
+      else channels[c][i] = s;
       p += bytes;
     }
+    if (mono) channels[0][i] = sum * gain;
   }
-  return { sampleRate, channels };
+  return { sampleRate, channels, sourceChannels: numCh, totalFrames };
 }

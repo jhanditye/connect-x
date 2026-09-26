@@ -45,14 +45,34 @@ function sanitizeStyle(x: unknown): StyleVector {
   return out;
 }
 
+/** Every reference profile has the id 'reference'; this prefix plus the clip name keeps clips apart. */
+export const REFERENCE_PROFILE_PREFIX = 'reference:';
+
+/**
+ * The profileId a session is stored under. Builtin singers keep their id. A reference profile is
+ * keyed by its clip name, so takes scored against different clips get separate trend lines.
+ */
+export function sessionProfileId(profile: Pick<SingerProfile, 'id' | 'name' | 'source'>): string {
+  if (profile.source !== 'reference' && profile.id !== 'reference') return profile.id;
+  const name = profile.name.trim();
+  return name ? `${REFERENCE_PROFILE_PREFIX}${name}` : profile.id;
+}
+
+/** True for sessions scored against a reference clip rather than a builtin singer. */
+export function isReferenceProfileId(profileId: string): boolean {
+  return profileId === 'reference' || profileId.startsWith(REFERENCE_PROFILE_PREFIX);
+}
+
 /** A clean SessionRecord built from parsed JSON, or null when required fields are missing or malformed. */
 export function parseSessionRecord(x: unknown): SessionRecord | null {
   if (!isRecord(x)) return null;
-  const { id, createdAt, profileId, profileName, overall, durationSec, label } = x;
+  const { id, createdAt, profileId: storedProfileId, profileName, overall, durationSec, label } = x;
   if (typeof id !== 'string' || !id) return null;
   if (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) return null;
-  if (typeof profileId !== 'string' || !profileId) return null;
+  if (typeof storedProfileId !== 'string' || !storedProfileId) return null;
   if (typeof profileName !== 'string') return null;
+  // Sessions saved before clips were told apart all say 'reference'; split them by clip name.
+  const profileId = storedProfileId === 'reference' ? sessionProfileId({ id: storedProfileId, name: profileName, source: 'reference' }) : storedProfileId;
   if (!finite(overall) || !finite(durationSec)) return null;
   const dimensionScores: Partial<Record<StyleKey, number>> = {};
   if (isRecord(x.dimensionScores)) {
@@ -154,7 +174,7 @@ export function sessionFromResults(analysis: VoiceAnalysis, comparison: Comparis
   const rec: SessionRecord = {
     id: newId(),
     createdAt: new Date().toISOString(),
-    profileId: profile.id,
+    profileId: sessionProfileId(profile),
     profileName: profile.name,
     overall: Number.isFinite(comparison.overall) ? Math.round(comparison.overall * 10) / 10 : 0,
     dimensionScores,

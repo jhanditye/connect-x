@@ -34,6 +34,17 @@ describe('fitVibrato', () => {
     expect(isVibrato(fitVibrato(times, times.map((t) => 6 * Math.sin(2 * Math.PI * 5.5 * t))))).toBe(false);
     expect(fitVibrato([0, 0.01, 0.02], [0, 1, 2])).toBeNull();
   });
+
+  it('rejects a best fit on the edge of the 3.5-8.5 Hz grid (slow wobble or scoop on a short note)', () => {
+    const times = Array.from({ length: 34 }, (_, i) => i * 0.01);
+    // ~1 cycle of a 3 Hz wobble over 0.34 s: the best grid rate would be the 3.5 Hz floor.
+    expect(fitVibrato(times, times.map((t) => 60 * Math.sin(2 * Math.PI * 3 * t)))).toBeNull();
+    // A slow 2.8 Hz sway over a 0.8 s span sits below the grid.
+    const long = Array.from({ length: 80 }, (_, i) => i * 0.01);
+    expect(fitVibrato(long, long.map((t) => 50 * Math.sin(2 * Math.PI * 2.8 * t + 0.3)))).toBeNull();
+    // Inside the grid the fit still works on the same short span.
+    expect(isVibrato(fitVibrato(times, times.map((t) => 60 * Math.sin(2 * Math.PI * 6 * t))))).toBe(true);
+  });
 });
 
 describe('vibrato on synthesised notes', () => {

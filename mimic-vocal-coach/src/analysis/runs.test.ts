@@ -37,6 +37,72 @@ describe('detectRuns', () => {
   });
 });
 
+/** Contiguous events from [duration, midi] pairs. */
+function chain(spec: [number, number][], phraseIndex = 0): NoteEvent[] {
+  let t = 0;
+  return spec.map(([d, midi]) => {
+    const e = { i0: 0, i1: 0, start: t, end: t + d, midi, phraseIndex };
+    t += d;
+    return e;
+  });
+}
+
+describe('detectRuns: glides and speed', () => {
+  it('skips glide slivers between longer notes, so a syllabic melody is not a run', () => {
+    // Events of a descending syllabic line in a real a cappella take: about 7 sung notes at under
+    // 6/s, with 50 ms glide slivers between them. Counting the slivers made it "10 notes at 7.8/s".
+    const line = events([
+      [2.5, 2.71, 56],
+      [2.77, 2.93, 51.6],
+      [2.93, 2.98, 50.4],
+      [2.98, 3.14, 48.9],
+      [3.14, 3.19, 47.3],
+      [3.19, 3.34, 45.5],
+      [3.34, 3.41, 43],
+      [3.47, 3.57, 44.1],
+      [3.57, 3.73, 45],
+      [3.73, 3.78, 46],
+      [3.78, 4.52, 46.8],
+    ]);
+    expect(detectRuns(line)).toHaveLength(0);
+  });
+
+  it('a stepped passage slower than 6 notes/s is not a run', () => {
+    expect(detectRuns(chain([[0.2, 60], [0.2, 62], [0.2, 64], [0.2, 65], [0.2, 67], [0.6, 65]]))).toHaveLength(0);
+  });
+
+  it('a jump wider than a fifth is not a run step (tracker jumps onto a harmonic or an instrument)', () => {
+    // Events from a real take where the tracker locked onto the third harmonic for a moment.
+    const jumps = events([
+      [8.32, 8.42, 80.7],
+      [8.42, 8.57, 79.4],
+      [8.61, 8.71, 78.3],
+      [8.71, 8.93, 69.3],
+      [8.93, 9.01, 72.1],
+      [9.01, 9.08, 90.3],
+      [9.08, 9.18, 64.8],
+      [9.18, 9.25, 63.6],
+      [9.25, 9.9, 63.5],
+    ]);
+    expect(detectRuns(jumps)).toHaveLength(0);
+    // A run whose last note drops an octave keeps the stepwise part.
+    const drop = detectRuns(chain([[0.1, 72], [0.1, 70], [0.1, 69], [0.1, 67], [0.1, 65], [0.1, 53], [0.6, 53]]));
+    expect(drop).toHaveLength(1);
+    expect(drop[0].noteCount).toBe(5);
+  });
+
+  it('keeps genuinely fast runs of 60 ms notes, and bridges a sliver inside a run', () => {
+    const fast = detectRuns(chain([[0.06, 60], [0.06, 62], [0.06, 64], [0.06, 65], [0.06, 67], [0.06, 65], [0.6, 64]]));
+    expect(fast).toHaveLength(1);
+    expect(fast[0].noteCount).toBe(6);
+    expect(fast[0].notesPerSec).toBeGreaterThan(15);
+    const withSliver = detectRuns(chain([[0.12, 60], [0.12, 62], [0.05, 63], [0.12, 64], [0.12, 65], [0.12, 67], [0.6, 65]]));
+    expect(withSliver).toHaveLength(1);
+    expect(withSliver[0].noteCount).toBe(5);
+    expect(withSliver[0].notesPerSec).toBeGreaterThan(7);
+  });
+});
+
 describe('runs on synthesised takes', () => {
   it('8 notes of 0.12 s make one run at ~8 notes/s', () => {
     const notes = [60, 62, 64, 65, 67, 65, 64, 62].map((midi) => ({ midi, durSec: 0.12 }));

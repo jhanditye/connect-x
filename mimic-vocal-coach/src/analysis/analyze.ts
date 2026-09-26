@@ -4,16 +4,16 @@
 import { trackPitch } from '../dsp/pitch';
 import { ANALYSIS_RATE, resample } from '../dsp/resample';
 import { median, percentile } from '../dsp/stats';
-import type { AnalysisOptions, FrameFeatures, PassaggioZone, StyleVector, VoiceAnalysis } from '../types';
+import type { AnalysisIssue, AnalysisOptions, FrameFeatures, PassaggioZone, StyleVector, VoiceAnalysis } from '../types';
 import { buildFrameTrack, type FrameTrack } from './features';
 import { segmentNotes, buildNoteSegments } from './notes';
 import { classifyOnsets } from './onsets';
 import { passaggioFor } from './passaggio';
 import { findPhrases } from './phrases';
-import { clippingRatio, measureQuality, qualityWarnings } from './quality';
+import { clippingRatio, measureAccompaniment, measureQuality, qualityReport } from './quality';
 import { detectFlips, estimateRegisters, registerShares } from './register';
 import { detectRuns } from './runs';
-import { computeStyle } from './style';
+import { computeStyle, SUSTAINED_NOTE_SEC } from './style';
 
 export const HOP_SEC = 0.01;
 export const MAX_ANALYSIS_SEC = 300;
@@ -36,7 +36,7 @@ const EMPTY_STYLE: StyleVector = {
   flipsPerMinute: null,
 };
 
-function emptyAnalysis(durationSec: number, zone: PassaggioZone, warnings: string[]): VoiceAnalysis {
+function emptyAnalysis(durationSec: number, zone: PassaggioZone, warnings: string[], issues: AnalysisIssue[]): VoiceAnalysis {
   return {
     version: 1,
     durationSec,
@@ -63,6 +63,7 @@ function emptyAnalysis(durationSec: number, zone: PassaggioZone, warnings: strin
     style: { ...EMPTY_STYLE },
     quality: { clippingRatio: 0, noiseFloorDb: -120, snrDb: 0 },
     warnings,
+    issues,
   };
 }
 
@@ -136,10 +137,16 @@ export function analyzeTake(
   const zone = passaggioFor(opts.voiceType);
   const a4Hz = opts.a4Hz !== undefined && opts.a4Hz >= 380 && opts.a4Hz <= 500 ? opts.a4Hz : 440;
   const warnings: string[] = [];
+  const issues: AnalysisIssue[] = [];
 
   if (!(sampleRate > 0) || !Number.isFinite(sampleRate) || sampleRate < 4000) {
     progress(1);
-    return emptyAnalysis(0, zone, ['The audio has an invalid sample rate, so it could not be analysed. Try exporting it again as WAV or M4A.']);
+    return emptyAnalysis(
+      0,
+      zone,
+      ['The audio has an invalid sample rate, so it could not be analysed. Try exporting it again as WAV or M4A.'],
+      ['too-little-singing'],
+    );
   }
   let durationSec = samples.length / sampleRate;
   let input = samples;
@@ -149,6 +156,7 @@ export function analyzeTake(
       `Only the first 5 minutes of this ${(durationSec / 60).toFixed(1)}-minute take were analysed. Shorter takes (under a minute) give the clearest feedback.`,
     );
     durationSec = MAX_ANALYSIS_SEC;
+    issues.push('trimmed');
   }
 
   // Clean copy: non-finite samples become silence, DC offset is removed.
@@ -164,12 +172,17 @@ export function analyzeTake(
   }
   if (input.length === 0 || bad === input.length) {
     progress(1);
-    return emptyAnalysis(durationSec, zone, [
-      ...warnings,
-      input.length === 0
-        ? 'The recording is empty. Record or upload a take with at least 10 seconds of singing.'
-        : 'The recording contains no valid audio. Try recording again or exporting the file as WAV.',
-    ]);
+    return emptyAnalysis(
+      durationSec,
+      zone,
+      [
+        ...warnings,
+        input.length === 0
+          ? 'The recording is empty. Record or upload a take with at least 10 seconds of singing.'
+          : 'The recording contains no valid audio. Try recording again or exporting the file as WAV.',
+      ],
+      [...issues, 'too-little-singing'],
+    );
   }
   if (bad > 0) warnings.push('Some samples in the audio were invalid and were treated as silence. If the analysis looks wrong, export the file again.');
   const dc = sum / (input.length - bad);
@@ -202,7 +215,17 @@ export function analyzeTake(
 
   const shares = registerShares(frames);
   const medianVoicedDb = median(frames.filter((f) => f.voiced).map((f) => f.rmsDb));
-  warnings.push(...qualityWarnings({ voicedSec, quality, medianVoicedDb }));
+  const report = qualityReport({
+    voicedSec,
+    quality,
+    medianVoicedDb,
+    levelP95Db: frames.length > 0 ? percentile(frames.map((f) => f.rmsDb), 95) : -120,
+    heldNotes: notes.filter((n) => n.end - n.start >= SUSTAINED_NOTE_SEC - 1e-9).length,
+    accompaniment: measureAccompaniment(frames, HOP_SEC),
+    voiceType: opts.voiceType,
+  });
+  warnings.push(...report.warnings);
+  for (const issue of report.issues) if (!issues.includes(issue)) issues.push(issue);
 
   const analysis: VoiceAnalysis = {
     version: 1,
@@ -230,6 +253,7 @@ export function analyzeTake(
     style,
     quality,
     warnings,
+    issues,
   };
   progress(1);
   return analysis;

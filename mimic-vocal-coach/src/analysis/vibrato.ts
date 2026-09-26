@@ -5,6 +5,9 @@
 // periodogram; it works on the irregular sampling left by unvoiced frames). The best rate wins;
 // the sinusoid's amplitude is the semi-extent. It counts as vibrato when the sinusoid explains at
 // least half of the detrended variance (periodic enough) and the semi-extent is 15-200 cents.
+// A best fit on the edge of the rate grid (3.5 or 8.5 Hz) is not vibrato: the optimum lies outside
+// the vibrato range, which is what a scoop, a slow drift or a speech contour over a short note
+// looks like (such fits gave real takes "3.5 Hz vibrato" on 0.6 s notes and spoken syllables).
 // Long notes are analysed in ~1 s chunks, because real vibrato drifts in rate and a single
 // sinusoid would not fit a long note well.
 
@@ -89,7 +92,10 @@ function fitRss(basis: Float64Array[], y: Float64Array): { rss: number; coef: nu
   return { rss, coef };
 }
 
-/** Best trend-plus-sinusoid fit of cents(t); null when there are too few points. */
+/**
+ * Best trend-plus-sinusoid fit of cents(t); null when there are too few points or when the best
+ * rate is on the edge of the 3.5-8.5 Hz grid (the contour's periodicity lies outside that range).
+ */
 export function fitVibrato(times: ArrayLike<number>, cents: ArrayLike<number>): VibratoFit | null {
   const n = times.length;
   if (n < 12) return null;
@@ -129,15 +135,14 @@ export function fitVibrato(times: ArrayLike<number>, cents: ArrayLike<number>): 
   let best = 0;
   for (let i = 1; i < rss.length; i++) if (rss[i] < rss[best]) best = i;
   if (!Number.isFinite(rss[best])) return null;
+  if (best === 0 || best === rss.length - 1) return null;
   // Parabolic refinement of the rate between grid points.
   let rate = rates[best];
-  if (best > 0 && best < rss.length - 1) {
-    const a = rss[best - 1];
-    const b = rss[best];
-    const c = rss[best + 1];
-    const den = a - 2 * b + c;
-    if (den > 0) rate += Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den)) * RATE_STEP_HZ;
-  }
+  const a = rss[best - 1];
+  const b = rss[best];
+  const c = rss[best + 1];
+  const den = a - 2 * b + c;
+  if (den > 0) rate += Math.max(-0.5, Math.min(0.5, (0.5 * (a - c)) / den)) * RATE_STEP_HZ;
   const refined = rssAt(rate);
   if (!refined) return null;
   return { rateHz: rate, extentCents: refined.amp, explained: 1 - refined.rss / trend.rss };

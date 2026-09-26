@@ -94,20 +94,69 @@ function bandAround(key: StyleKey, value: number, weight: number): TargetBand {
   };
 }
 
+// Safety limits, matching the builtin profiles and the coach's health notes. A full mix (drums,
+// distorted guitars, a louder chorus arrangement) inflates rasp, chest share and loudness climb, and
+// even a clean clip can belt harder than is healthy to copy, so the targets never ask for grit,
+// heavy chest above the passaggio or a climb the health notes call pushing.
+/** Rasp: a clean tone is always on-style and the ideal is at most "slight grit". */
+const MAX_RASP_IDEAL = 0.15;
+/** Rasp above this reads as noticeable; the health notes warn about it. */
+const MAX_RASP_HIGH = 0.4;
+/** Chest share above the passaggio: the health notes call more than 0.6 heavy. */
+const MAX_CHEST_IDEAL = 0.55;
+const MAX_CHEST_HIGH = 0.6;
+const MAX_CHEST_LOW = 0.45;
+/** Loudness climb, dB/semitone: more than 0.8 reads as pushing chest weight up. */
+const MAX_CLIMB_IDEAL = 0.5;
+const MAX_CLIMB_HIGH = 0.8;
+
+function safeBand(key: StyleKey, band: TargetBand, value: number): TargetBand {
+  switch (key) {
+    case 'rasp': {
+      const ideal = Math.min(band.ideal, MAX_RASP_IDEAL);
+      return { ...band, ideal, low: 0, high: clamp(value + BAND_SPECS.rasp.halfWidth, 0.2, MAX_RASP_HIGH) };
+    }
+    case 'chestInUpperRange': {
+      const ideal = Math.min(band.ideal, MAX_CHEST_IDEAL);
+      const half = BAND_SPECS.chestInUpperRange.halfWidth;
+      return { ...band, ideal, low: Math.max(0, Math.min(ideal - half, MAX_CHEST_LOW)), high: Math.min(ideal + half, MAX_CHEST_HIGH) };
+    }
+    case 'loudnessClimbDbPerSemitone': {
+      // A level climb is always on-style, as in every builtin profile.
+      const ideal = Math.min(band.ideal, MAX_CLIMB_IDEAL);
+      const half = BAND_SPECS.loudnessClimbDbPerSemitone.halfWidth;
+      return { ...band, ideal, low: Math.min(ideal - half, 0), high: Math.max(0, Math.min(ideal + half, MAX_CLIMB_HIGH)) };
+    }
+    default:
+      return band;
+  }
+}
+
 function targetsFromStyle(style: StyleVector, base?: SingerProfile): Partial<Record<StyleKey, TargetBand>> {
   const targets: Partial<Record<StyleKey, TargetBand>> = {};
+  const weightOf = (key: StyleKey): number => base?.targets[key]?.weight ?? BAND_SPECS[key].weight;
   for (const key of STYLE_KEYS) {
-    const weight = base?.targets[key]?.weight ?? BAND_SPECS[key].weight;
-    if (key === 'pitchAccuracyCents') {
-      targets[key] = { ...PITCH_ACCURACY_TARGET, tolerance: BAND_SPECS[key].tolerance, weight };
-      continue;
-    }
+    if (key === 'pitchAccuracyCents') continue;
     const value = style[key];
     if (value === null || !Number.isFinite(value)) continue;
     // A short clip without runs says little about whether the singer does runs, so a measured
     // agility of 0 only counts half as much as a positive measurement.
-    const w = key === 'agility' && value === 0 ? weight / 2 : weight;
-    targets[key] = bandAround(key, value, w);
+    const w = key === 'agility' && value === 0 ? weightOf(key) / 2 : weightOf(key);
+    targets[key] = safeBand(key, bandAround(key, value, w), value);
+  }
+  // Chest weight the targets won't ask for goes to mix, the healthy way to keep strength up high,
+  // so the three register targets still describe one coherent sound.
+  const chest = style.chestInUpperRange;
+  const mix = style.mixInUpperRange;
+  if (chest !== null && mix !== null && chest > MAX_CHEST_IDEAL && targets.mixInUpperRange) {
+    targets.mixInUpperRange = bandAround('mixInUpperRange', Math.min(1, mix + (chest - MAX_CHEST_IDEAL)), targets.mixInUpperRange.weight);
+  }
+  // Tuning is always targeted at the clean band (see PITCH_ACCURACY_TARGET), but only when the clip
+  // had held notes to measure and something else was measured too, so a profile can never rest on
+  // this one target alone (a clip with no clear singing would otherwise score every take ~90).
+  const pitch = style.pitchAccuracyCents;
+  if (pitch !== null && Number.isFinite(pitch) && Object.keys(targets).length > 0) {
+    targets.pitchAccuracyCents = { ...PITCH_ACCURACY_TARGET, tolerance: BAND_SPECS.pitchAccuracyCents.tolerance, weight: weightOf('pitchAccuracyCents') };
   }
   return targets;
 }
@@ -125,7 +174,8 @@ const fixed = (x: number, digits: number): string => x.toFixed(digits);
 
 // Word choices follow the anchor meanings documented on StyleVector in types.ts.
 function breathinessWords(v: number): string {
-  if (v < 0.25) return 'pressed, very clean';
+  // A low index alone means a clean, firm tone; it is not evidence of pressed phonation.
+  if (v < 0.25) return 'very clean and firm';
   if (v < 0.55) return 'clear, balanced';
   if (v < 0.85) return 'noticeably airy';
   return 'near-whisper, very breathy';
@@ -228,6 +278,48 @@ function sourceNoteFor(ref: VoiceAnalysis): string {
   if (ref.voicedSec < 15) note += ' With under 15 s of singing, some targets are rough.';
   if (ref.warnings.length) note += ` The clip was flagged: ${ref.warnings.join(' ')}`;
   return note;
+}
+
+/** Seconds of singing below which a reference clip can't give reliable targets. */
+const MIN_REFERENCE_VOICED_SEC = 5;
+
+/**
+ * Whether a reference clip can be used as a target, and if not, why, in plain English that names the
+ * fix. Unusable: under 5 s of singing, singing over instruments (a full song mix), or mostly
+ * speech-like syllables.
+ */
+export function referenceUsability(ref: VoiceAnalysis): { usable: boolean; reason: string | null } {
+  const issues = ref.issues ?? [];
+  const voiced = Number.isFinite(ref.voicedSec) ? Math.max(0, ref.voicedSec) : 0;
+  if (issues.includes('accompaniment')) {
+    return {
+      usable: false,
+      reason:
+        'This clip sounds like a full song mix, so the analysis would follow the instruments or the bass rather than the voice. ' +
+        'Use an isolated vocal (a vocal stem) or an a cappella section instead.',
+    };
+  }
+  if (issues.includes('too-little-singing') || voiced < MIN_REFERENCE_VOICED_SEC) {
+    const heard =
+      voiced < 0.5
+        ? 'No clear singing could be measured in this clip'
+        : `Only ${voiced < 10 ? voiced.toFixed(1) : Math.round(voiced)} s of clear singing could be measured in this clip`;
+    return {
+      usable: false,
+      reason:
+        `${heard}, which is too little to build targets from; backing music or effects may be covering the voice. ` +
+        'Use an isolated vocal or an a cappella section with at least 10 seconds of singing.',
+    };
+  }
+  if (issues.includes('speech-like')) {
+    return {
+      usable: false,
+      reason:
+        'This clip sounds mostly like short, speech-like syllables with few held notes, so it can\'t give reliable singing targets. ' +
+        'Use a sung section with some held notes, ideally an isolated vocal or an a cappella passage.',
+    };
+  }
+  return { usable: true, reason: null };
 }
 
 /** Build a SingerProfile whose targets are centred on a reference clip's measured StyleVector. */

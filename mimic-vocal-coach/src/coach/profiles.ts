@@ -103,8 +103,10 @@ export interface StyleLabel {
 }
 
 function breathinessWords(v: number): string {
-  // Bands follow the StyleVector anchors in src/types.ts.
-  if (v < 0.2) return 'pressed and very clean';
+  // Bands follow the StyleVector anchors in src/types.ts. A low reading on its own means a clean,
+  // firm tone; it only indicates pressed phonation together with a strongly negative H1-H2, which
+  // this label cannot see, so it never says "pressed".
+  if (v < 0.2) return 'very clean and firm';
   if (v < 0.3) return 'clean';
   if (v < 0.5) return 'clear and balanced';
   if (v < 0.6) return 'slightly airy';
@@ -324,16 +326,19 @@ const SHAWN: SingerProfile = {
     mixInUpperRange: band(0.42, 0.28, 0.58, 0.35, 1),
     // Falsetto is a contrast colour on tags and final choruses. The three register ideals sum to 1.
     headInUpperRange: band(0.18, 0.06, 0.32, 0.35, 0.5),
-    // Choruses build in intensity, so some rise with pitch is in style. Above ~0.9 dB/semitone reads
-    // as pushing chest weight up, which also triggers a health note.
-    loudnessClimbDbPerSemitone: band(0.5, 0.1, 0.9, 1, 0.5),
+    // Choruses build in intensity, but the lift comes from brightness, not volume (see the
+    // bright-chest-mix move), so a level climb is on-style too. Above 0.8 dB/semitone reads as pushing
+    // chest weight up, the same threshold as the health note; only top notes that fade away (below
+    // -0.3) get "more" coaching.
+    loudnessClimbDbPerSemitone: band(0.3, -0.3, 0.8, 1, 0.5),
     // Soft verses to strong choruses: the widest dynamics of the three.
     dynamicRangeDb: band(16, 11, 22, 10, 0.45),
     // Speech-like verse onsets, firmer at chorus peaks: few aspirated starts.
     softOnsetRatio: band(0.25, 0.1, 0.42, 0.4, 0.35),
     pitchAccuracyCents: band(5, 0, 15, 25, 0.5),
-    // Occasional sudden drops into falsetto for contrast.
-    flipsPerMinute: band(1.2, 0.3, 2.5, 3, 0.35),
+    // Occasional sudden drops into falsetto for contrast: once or twice a song, so a take without a
+    // flip is still on-style.
+    flipsPerMinute: band(1.2, 0, 2.5, 3, 0.35),
   },
   signatureMoves: [
     {
@@ -355,7 +360,7 @@ const SHAWN: SingerProfile = {
         'Sing the chorus melody on "nay" at a moderate volume until it feels easy and buzzy.',
         'Keep the "nay" placement and swap in the lyrics, narrowing wide vowels on the top notes.',
         'Keep the volume roughly level as the line rises; let brightness carry it, not loudness.',
-        'Check the analysis: loudness climbing more than about 1 dB per semitone means you are pushing.',
+        'Check the analysis: loudness climbing more than about 0.8 dB per semitone means you are pushing.',
       ],
     },
     {
@@ -483,7 +488,7 @@ const DANIEL: SingerProfile = {
       name: 'Hushed close-mic delivery',
       description: 'Sing at or below speaking volume with air in the tone, as if singing to one person in a quiet room.',
       howTo: [
-        'Hold the mic or phone about a hand\'s width from your mouth and sing at speaking volume or softer.',
+        'Keep your usual 20–30 cm from the mic or phone and sing at speaking volume or softer; the intimacy comes from the low volume, not from moving closer.',
         'Start each phrase on a quiet "h" so the air arrives just before the tone.',
         'Keep the jaw loose and the vowels rounded and warm.',
         'Let phrase ends fade out on air instead of cutting them off.',
@@ -612,8 +617,8 @@ const JALEN: SingerProfile = {
     softOnsetRatio: band(0.3, 0.12, 0.5, 0.4, 0.35),
     // "Expertly controlled" falsetto: tuning matters a little more here.
     pitchAccuracyCents: band(5, 0, 15, 25, 0.6),
-    // Stays in falsetto for long stretches, so fewer switches than Daniel.
-    flipsPerMinute: band(1, 0.2, 2.2, 3, 0.3),
+    // Stays in falsetto for long stretches, so fewer switches than Daniel, and none is fine.
+    flipsPerMinute: band(1, 0, 2.2, 3, 0.3),
   },
   signatureMoves: [
     {
@@ -662,21 +667,23 @@ export function getProfile(id: string): SingerProfile | undefined {
 }
 
 /**
- * Style dimensions each signature move exercises; the coaching plan uses them to personalise the
- * signature-move hints. Moves mapped to [] are about things the app does not measure (timing).
+ * Style dimensions each signature move exercises, and which way the move pushes each one ('more' =
+ * raises it). The coaching plan uses them to personalise the signature-move hints, and only
+ * recommends a move for a dimension the take needs to move the same way. Moves mapped to {} are
+ * about things the app does not measure (timing).
  */
-export const MOVE_FOCUS: Record<string, StyleKey[]> = {
-  'shawn-verse-to-chorus-build': ['dynamicRangeDb', 'loudnessClimbDbPerSemitone', 'softOnsetRatio'],
-  'shawn-bright-chest-mix': ['mixInUpperRange', 'chestInUpperRange', 'brightness', 'loudnessClimbDbPerSemitone'],
-  'shawn-falsetto-contrast': ['flipsPerMinute', 'headInUpperRange'],
-  'shawn-rhythmic-phrasing': [],
-  'daniel-hushed-close-mic': ['breathiness', 'softOnsetRatio', 'dynamicRangeDb', 'brightness'],
-  'daniel-falsetto-hook': ['headInUpperRange', 'flipsPerMinute', 'chestInUpperRange'],
-  'daniel-gospel-turn': ['agility'],
-  'daniel-behind-the-beat': [],
-  'jalen-sustained-falsetto': ['headInUpperRange', 'breathiness', 'vibratoPresence', 'vibratoRateHz'],
-  'jalen-chest-wail': ['chestInUpperRange', 'dynamicRangeDb', 'rasp'],
-  'jalen-motown-phrasing': ['softOnsetRatio', 'pitchAccuracyCents', 'vibratoExtentCents'],
+export const MOVE_FOCUS: Record<string, Partial<Record<StyleKey, 'more' | 'less'>>> = {
+  'shawn-verse-to-chorus-build': { dynamicRangeDb: 'more', loudnessClimbDbPerSemitone: 'less' },
+  'shawn-bright-chest-mix': { mixInUpperRange: 'more', chestInUpperRange: 'more', brightness: 'more', loudnessClimbDbPerSemitone: 'less' },
+  'shawn-falsetto-contrast': { flipsPerMinute: 'more', headInUpperRange: 'more' },
+  'shawn-rhythmic-phrasing': {},
+  'daniel-hushed-close-mic': { breathiness: 'more', softOnsetRatio: 'more', dynamicRangeDb: 'less', brightness: 'less' },
+  'daniel-falsetto-hook': { headInUpperRange: 'more', flipsPerMinute: 'more', chestInUpperRange: 'less' },
+  'daniel-gospel-turn': { agility: 'more' },
+  'daniel-behind-the-beat': {},
+  'jalen-sustained-falsetto': { headInUpperRange: 'more', breathiness: 'less', vibratoPresence: 'more', vibratoRateHz: 'more' },
+  'jalen-chest-wail': { chestInUpperRange: 'more', dynamicRangeDb: 'more' },
+  'jalen-motown-phrasing': { pitchAccuracyCents: 'less', dynamicRangeDb: 'less' },
 };
 
 /**

@@ -1,8 +1,10 @@
-// Practice: the exercise library, the plan's focus exercises first, a pattern player transposed to
-// the user's voice type (start note = passaggio low + the exercise's offset) and a reference pitch.
+// Practice: the plan's focus exercises first, then a reference pitch and the rest of the library,
+// with a pattern player transposed to the user's voice type (start note = passaggio low + the
+// exercise's offset). Library cards keep their steps behind a disclosure so the page stays short on
+// phones; the focus cards start open.
 
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
-import { passaggioFor, VOICE_TYPE_LABELS } from '../../analysis/passaggio';
+import { passaggioFor, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { audioSupported, patternSchedule, patternStartMidi, playNote, playPattern, startDrone, type PatternPlayer } from '../../audio/tones';
 import { EXERCISES } from '../../coach/exercises';
 import { STYLE_LABELS } from '../../coach/profiles';
@@ -69,6 +71,8 @@ function ExerciseCard(props: {
   const { ex, now } = props;
   const headingId = `ex-${ex.id}`;
   const playingThis = now?.id === ex.id;
+  // The focus cards are the ones to do now, so their steps start open; the rest start closed.
+  const [open, setOpen] = useState(!!props.focus);
   const span = ex.pattern ? patternSpan(ex.pattern, props.passaggioLow) : null;
   const reps = ex.pattern ? Math.max(1, Math.floor(ex.pattern.repetitions)) : 1;
   return (
@@ -89,11 +93,18 @@ function ExerciseCard(props: {
           ))}
         </ul>
       )}
-      <ol className="ex-steps">
-        {ex.steps.map((s, i) => (
-          <li key={i}>{s}</li>
-        ))}
-      </ol>
+      {ex.steps.length > 0 && (
+        <details className="ex-details" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+          <summary className="ex-details-summary">
+            How to do it <span className="ex-details-count">({ex.steps.length} step{ex.steps.length === 1 ? '' : 's'})</span>
+          </summary>
+          <ol className="ex-steps">
+            {ex.steps.map((s, i) => (
+              <li key={i}>{s}</li>
+            ))}
+          </ol>
+        </details>
+      )}
       {ex.cautions && ex.cautions.length > 0 && (
         <div className="ex-cautions">
           <p className="ex-cautions-title">Take care</p>
@@ -127,7 +138,8 @@ function ExerciseCard(props: {
             >
               <Icon name={playingThis ? 'stop' : 'play'} size={14} /> {playingThis ? 'Stop' : 'Play pattern'}
             </button>
-            <span className="ex-now num" aria-live="polite">
+            {/* Visual only: a screen reader hears the page-level status (rounds, start and stop), not every note. */}
+            <span className="ex-now num" aria-hidden="true">
               {playingThis && now?.midi !== null && now?.midi !== undefined ? `${midiToNoteName(now.midi)} · round ${now.rep + 1} of ${reps}` : ''}
             </span>
           </div>
@@ -208,8 +220,8 @@ function ReferencePitch(props: {
 export function PracticePage(props: { settings: AppSettings; focusExerciseIds?: string[]; onRecordDrill?: (exerciseId: string) => void }): JSX.Element {
   const { settings, onRecordDrill } = props;
   const passaggio = passaggioFor(settings.voiceType);
-  // Labels may carry a gloss ("Baritone (most male pop voices)"); copy here needs the bare name.
-  const voiceLabel = (VOICE_TYPE_LABELS[settings.voiceType] ?? settings.voiceType).split(' (')[0];
+  // Running text needs the bare name ("your baritone voice"), not the option-list gloss.
+  const voiceLabel = VOICE_TYPE_NAMES[settings.voiceType] ?? settings.voiceType;
   const canPlay = audioSupported();
   const [filter, setFilter] = useState<StyleKey | 'all'>('all');
   const [now, setNow] = useState<NowPlaying | null>(null);
@@ -217,6 +229,8 @@ export function PracticePage(props: { settings: AppSettings; focusExerciseIds?: 
   const runRef = useRef(0);
   const droneRef = useRef<{ stop(): void } | null>(null);
   const [droneOn, setDroneOn] = useState(false);
+  // What the screen-reader status says: start, each new round, the end or a stop. Never each note.
+  const [announce, setAnnounce] = useState('');
 
   const byId = useMemo(() => new Map(LIBRARY.map((e) => [e.id, e])), []);
   const focus = useMemo(() => {
@@ -242,10 +256,12 @@ export function PracticePage(props: { settings: AppSettings; focusExerciseIds?: 
   const library = LIBRARY.filter((e) => !focusIds.has(e.id) && (activeFilter === 'all' || e.helps.includes(activeFilter)));
 
   const stopPattern = () => {
+    const wasPlaying = playerRef.current !== null;
     runRef.current++;
     playerRef.current?.stop();
     playerRef.current = null;
     setNow(null);
+    if (wasPlaying) setAnnounce('Pattern stopped.');
   };
   const stopDrone = () => {
     droneRef.current?.stop();
@@ -281,16 +297,27 @@ export function PracticePage(props: { settings: AppSettings; focusExerciseIds?: 
     stopPattern();
     stopDrone();
     const run = runRef.current;
+    const reps = ex.pattern ? Math.max(1, Math.floor(ex.pattern.repetitions)) : 1;
+    let lastRep = -1;
     setNow({ id: ex.id, midi: null, rep: 0 });
+    setAnnounce(`Playing ${ex.name}.`);
     playerRef.current = playPattern(ex, passaggio.lowMidi, {
       a4Hz: settings.a4Hz,
       onStep: (midi, rep) => {
-        if (runRef.current === run) setNow({ id: ex.id, midi, rep });
+        if (runRef.current !== run) return;
+        setNow({ id: ex.id, midi, rep });
+        if (rep !== lastRep) {
+          lastRep = rep;
+          const where = `starting on ${midiToNoteName(midi)}`;
+          const round = reps > 1 ? `round ${rep + 1} of ${reps}, ${where}` : where;
+          setAnnounce(rep === 0 ? `Playing ${ex.name}: ${round}.` : `Round ${rep + 1} of ${reps}, ${where}.`);
+        }
       },
       onEnd: () => {
         if (runRef.current !== run) return;
         playerRef.current = null;
         setNow(null);
+        setAnnounce('Pattern finished.');
       },
     });
   };
@@ -320,25 +347,20 @@ export function PracticePage(props: { settings: AppSettings; focusExerciseIds?: 
           <a href="#settings">Settings</a>.
         </p>
         <p className="practice-safety">
-          Keep every drill light and easy. If anything scratches, tightens or hurts, stop, sip water and rest; skip notes that feel out of
-          reach today.
+          Keep every drill light and easy. If anything scratches, tightens or hurts, stop, sip water and rest. Skip notes that feel out of
+          reach today; you don’t need to finish every round.
         </p>
       </header>
+
+      <p className="visually-hidden" role="status" aria-live="polite">
+        {announce}
+      </p>
 
       {!canPlay && (
         <p className="practice-noaudio" role="status">
           This browser cannot play practice tones, so the pattern player is off. The steps below still work on their own, or with a piano app.
         </p>
       )}
-
-      <ReferencePitch
-        passaggioLow={passaggio.lowMidi}
-        passaggioHigh={passaggio.highMidi}
-        canPlay={canPlay}
-        droneOn={droneOn}
-        onPlay={onPlayNote}
-        onDrone={onDrone}
-      />
 
       {focus.length > 0 && (
         <section className="practice-section" aria-labelledby="practice-focus">
@@ -351,6 +373,15 @@ export function PracticePage(props: { settings: AppSettings; focusExerciseIds?: 
           <div className="ex-grid">{focus.map((ex) => card(ex, true))}</div>
         </section>
       )}
+
+      <ReferencePitch
+        passaggioLow={passaggio.lowMidi}
+        passaggioHigh={passaggio.highMidi}
+        canPlay={canPlay}
+        droneOn={droneOn}
+        onPlay={onPlayNote}
+        onDrone={onDrone}
+      />
 
       <section className="practice-section" aria-labelledby="practice-library">
         <div className="section-head">

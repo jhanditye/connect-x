@@ -17,6 +17,7 @@ import {
   REFERENCE_ID,
   referenceOptions,
   sameOptions,
+  saveKey,
   takeOptions,
   type AppState,
   type ScoringDeps,
@@ -36,6 +37,7 @@ function makeDeps(overrides: Partial<ScoringDeps> = {}): ScoringDeps {
     profileFromReference: vi.fn((_ref, name: string, base?: SingerProfile) =>
       makeFakeProfile({ id: 'reference', name, source: 'reference', color: base?.color ?? '#50606f', studySongs: base?.studySongs ?? [] }),
     ),
+    referenceUsability: vi.fn(() => ({ usable: true, reason: null })),
     compareToReference: vi.fn(() => makeFakeReferenceComparison()),
     ...overrides,
   };
@@ -99,10 +101,14 @@ describe('analysis jobs', () => {
     expect(reduce(state, { type: 'job/progress', value: 0.5 })).toBe(state);
   });
 
-  it('job/fail goes idle and records the error', () => {
+  it('job/fail goes idle and records the error with the job it came from', () => {
     const { reduce, state } = setup();
-    const s = reduce(reduce(state, { type: 'job/start', job: 'take', phase: 'analyzing', label: 'x' }), { type: 'job/fail', message: 'nope' });
-    expect(s).toMatchObject({ status: 'idle', job: null, error: 'nope' });
+    const s = reduce(reduce(state, { type: 'job/start', job: 'reference', phase: 'analyzing', label: 'x' }), { type: 'job/fail', message: 'nope' });
+    expect(s).toMatchObject({ status: 'idle', job: null, error: 'nope', errorJob: 'reference' });
+    // With no job running (a recording that was too short) the action says where it belongs.
+    expect(reduce(state, { type: 'job/fail', message: 'short', job: 'take' }).errorJob).toBe('take');
+    expect(reduce(s, { type: 'error/clear' })).toMatchObject({ error: null, errorJob: null });
+    expect(reduce(s, { type: 'job/start', job: 'take', phase: 'decoding', label: 'y' }).errorJob).toBeNull();
   });
 
   it('take/analyzed stores the take and scores it against the selected singer', () => {
@@ -183,16 +189,79 @@ describe('reference clips', () => {
     expect(activeProfile(s, deps)?.id).toBe(REFERENCE_ID);
     expect(availableProfiles(s, deps).map((p) => p.id)).toEqual(['shawn-mendes', 'daniel-caesar', 'jalen-ngonda', REFERENCE_ID]);
     expect(s.comparison?.profileId).toBe(REFERENCE_ID);
-    expect(s.referenceComparison).not.toBeNull();
+    // The phrase-by-phrase comparison is computed by the provider, outside the reducer.
+    expect(s.referenceComparison).toBeNull();
+    expect(deps.compareToReference).not.toHaveBeenCalled();
   });
 
-  it('computes the reference comparison when a take arrives after the reference', () => {
-    const { reduce, state, deps } = setup();
+  it('applies a reference comparison only to the take and clip it was computed for', () => {
+    const { reduce, state } = setup();
     const withRef = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
-    expect(withRef.referenceComparison).toBeNull();
     const s = reduce(withRef, { type: 'take/analyzed', take: take(), analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
-    expect(s.referenceComparison).not.toBeNull();
-    expect(deps.compareToReference).toHaveBeenCalledTimes(1);
+    expect(s.referenceComparison).toBeNull();
+    const result = makeFakeReferenceComparison();
+    const done = reduce(s, { type: 'reference/compared', user: s.analysis!, ref: s.reference!.analysis, comparison: result });
+    expect(done.referenceComparison).toBe(result);
+    // A result for an older take (or clip) arriving late is dropped.
+    const newer = reduce(done, { type: 'take/analyzed', take: take(), analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
+    expect(newer.referenceComparison).toBeNull();
+    expect(reduce(newer, { type: 'reference/compared', user: s.analysis!, ref: s.reference!.analysis, comparison: result })).toBe(newer);
+    // A failure lands in error.
+    const failed = reduce(newer, { type: 'reference/compared', user: newer.analysis!, ref: newer.reference!.analysis, comparison: null, error: 'dtw' });
+    expect(failed).toMatchObject({ referenceComparison: null, error: 'dtw' });
+  });
+
+  it('re-analysing the reference after a settings change keeps the selection and the original base singer', () => {
+    const { reduce, deps } = setup();
+    let s = createInitialState(SETTINGS, [], deps.builtins);
+    // Reference loaded while Shawn is selected, then the user picks Daniel on Results.
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s) });
+    s = reduce(s, { type: 'take/analyzed', take: take(), analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
+    s = reduce(s, { type: 'profile/select', id: 'daniel-caesar' });
+    const before = s.referenceSerial;
+    s = reduce(s, { type: 'settings/set', settings: { ...SETTINGS, voiceType: 'tenor' } });
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s), reanalysis: true });
+    expect(s.selectedProfileId).toBe('daniel-caesar');
+    expect(s.builtinProfileId).toBe('daniel-caesar');
+    expect(s.reference?.baseProfileId).toBe('shawn-mendes');
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'isolated-vocal', expect.objectContaining({ id: 'shawn-mendes' }));
+    expect(s.comparison?.profileId).toBe('daniel-caesar');
+    expect(s.referenceSerial).toBe(before);
+  });
+
+  it('a clip that cannot be used stays loaded with its reason but is never selected or offered', () => {
+    const { reduce, state, deps } = setup({
+      referenceUsability: vi.fn(() => ({ usable: false, reason: 'Sounds like a full mix. Use an isolated vocal.' })),
+    });
+    let s = reduce(state, { type: 'profile/select', id: 'jalen-ngonda' });
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s) });
+    expect(s.reference).toMatchObject({ name: 'isolated-vocal', usable: false, unusableReason: 'Sounds like a full mix. Use an isolated vocal.' });
+    expect(s.selectedProfileId).toBe('jalen-ngonda');
+    expect(availableProfiles(s, deps).map((p) => p.id)).not.toContain(REFERENCE_ID);
+    expect(reduce(s, { type: 'profile/select', id: REFERENCE_ID })).toBe(s);
+    expect(activeProfile({ ...s, selectedProfileId: REFERENCE_ID }, deps)?.id).toBe('jalen-ngonda');
+  });
+
+  it('replacing the selected reference with an unusable clip falls back to the last builtin', () => {
+    const usability = vi.fn(() => ({ usable: true, reason: null as string | null }));
+    const { reduce, state } = setup({ referenceUsability: usability });
+    let s = reduce(state, { type: 'profile/select', id: 'daniel-caesar' });
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s) });
+    expect(s.selectedProfileId).toBe(REFERENCE_ID);
+    usability.mockReturnValue({ usable: false, reason: 'Too little singing.' });
+    s = reduce(s, { type: 'reference/analyzed', clip: { ...clip, name: 'mix' }, analysis: makeFakeAnalysis(), opts: referenceOptions(s) });
+    expect(s.selectedProfileId).toBe('daniel-caesar');
+    expect(s.reference?.usable).toBe(false);
+  });
+
+  it('a re-analysis that makes the selected clip unusable moves the selection back to the builtin', () => {
+    const usability = vi.fn(() => ({ usable: true, reason: null as string | null }));
+    const { reduce, state } = setup({ referenceUsability: usability });
+    let s = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
+    expect(s.selectedProfileId).toBe(REFERENCE_ID);
+    usability.mockReturnValue({ usable: false, reason: 'Too little singing.' });
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s), reanalysis: true });
+    expect(s.selectedProfileId).toBe('shawn-mendes');
   });
 
   it('a new reference while the reference is selected keeps the last builtin as its base', () => {
@@ -230,7 +299,52 @@ describe('reference clips', () => {
     const next = s.reduce(s.state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s.state) });
     expect(next.reference).toBeNull();
     expect(next.error).toBe('no voiced frames');
+    expect(next.errorJob).toBe('reference');
     expect(next.status).toBe('idle');
+  });
+});
+
+describe('saving and the AI conversation', () => {
+  const clip = { name: 'isolated-vocal', samples: new Float32Array(10), sampleRate: 22050 };
+
+  it('a result is saved once per take and target, and a re-analysis of the same take keeps that', () => {
+    const { reduce, state, deps } = withTake();
+    const shawn = deps.builtins[0];
+    const key = saveKey(state, shawn);
+    let s = reduce(state, { type: 'session/saved', key });
+    expect(s.savedKeys).toEqual([key]);
+    expect(reduce(s, { type: 'session/saved', key })).toBe(s);
+    // Re-analysis (same Take object) keeps the saved marker; a different singer has its own key.
+    s = reduce(s, { type: 'take/analyzed', take: s.take!, analysis: makeFakeAnalysis(), opts: { voiceType: 'tenor', a4Hz: 440 } });
+    expect(s.savedKeys).toContain(saveKey(s, shawn));
+    expect(saveKey(s, deps.builtins[1])).not.toBe(key);
+    // A new take starts fresh.
+    const next = reduce(s, { type: 'take/analyzed', take: take(), analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
+    expect(next.takeSerial).toBe(s.takeSerial + 1);
+    expect(next.savedKeys).toEqual([]);
+    expect(next.savedKeys).not.toContain(saveKey(next, shawn));
+  });
+
+  it('different reference clips get different save keys', () => {
+    const { reduce, state } = withTake();
+    const a = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
+    const b = reduce(a, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(a) });
+    expect(saveKey(a, a.reference!.profile)).not.toBe(saveKey(b, b.reference!.profile));
+  });
+
+  it('keeps the AI conversation until a new take arrives or everything is cleared', () => {
+    const { reduce, state } = withTake();
+    const turns = [
+      { role: 'user' as const, text: 'Q' },
+      { role: 'assistant' as const, text: 'A' },
+    ];
+    let s = reduce(state, { type: 'ai/thread', key: 'k1', turns });
+    expect(s.aiThread).toEqual({ key: 'k1', turns });
+    s = reduce(s, { type: 'profile/select', id: 'daniel-caesar' });
+    expect(s.aiThread?.turns).toBe(turns);
+    expect(reduce(s, { type: 'take/analyzed', take: take(), analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) }).aiThread).toBeNull();
+    expect(reduce(s, { type: 'take/clear' }).aiThread).toBeNull();
+    expect(reduce(s, { type: 'reset', settings: SETTINGS, sessions: [] }).aiThread).toBeNull();
   });
 });
 

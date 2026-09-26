@@ -169,6 +169,21 @@ describe('detectFlips', () => {
     expect(detectFlips(drift.frames, drift.scores, hop)).toHaveLength(0);
   });
 
+  it('ignores octave-sized and larger jumps (tracker octave errors, voice <-> instrument switches)', () => {
+    for (const top of [72, 73, 74, 81]) {
+      const jumpUp = build([
+        { n: 40, midi: 60, reg: 'chest', score: 0.1 },
+        { n: 40, midi: top, reg: 'head', score: 0.7 },
+      ]);
+      expect(detectFlips(jumpUp.frames, jumpUp.scores, hop), `rise ${top - 60}`).toHaveLength(0);
+    }
+    const sixth = build([
+      { n: 40, midi: 60, reg: 'chest', score: 0.1 },
+      { n: 40, midi: 69, reg: 'head', score: 0.7 },
+    ]);
+    expect(detectFlips(sixth.frames, sixth.scores, hop)).toHaveLength(1);
+  });
+
   it('counts a flip across a short gap but not after a pause', () => {
     const gap = build([
       { n: 30, midi: 60, reg: 'chest', score: 0.1 },

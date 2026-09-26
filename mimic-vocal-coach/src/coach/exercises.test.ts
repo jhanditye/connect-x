@@ -87,6 +87,18 @@ describe('EXERCISES', () => {
     expect(text).toMatch(/hoarse/i);
     expect(text).toMatch(/squeez/i);
     expect(text).toMatch(/skip/i);
+    // A sudden loss of voice or notes is a see-someone-now event, not a wait-two-weeks one.
+    expect(text).toMatch(/suddenly cuts out.*laryngologist within a few days/);
+  });
+
+  it('lets singers stop the rising mix drills early and keeps them near the passaggio', () => {
+    for (const id of ['gee-gug-connected-mix', 'vowel-narrowing']) {
+      const ex = getExercise(id)!;
+      expect((ex.cautions ?? []).join(' '), id).toMatch(/don't need to finish every round/);
+      const p = ex.pattern!;
+      // Top of the last round: no more than a perfect fifth above the passaggio's low edge.
+      expect(p.startOffsetFromPassaggio + Math.max(...p.steps) + p.stepUpSemitones * (p.repetitions - 1), id).toBeLessThanOrEqual(7);
+    }
   });
 
   it('getExercise returns undefined for unknown ids', () => {

@@ -3,6 +3,14 @@
 
 /* ---------------------------------------------------------------- shell */
 
+/* Phones: keep focused controls clear of the fixed bottom tab bar (60px + inset) when the browser
+   scrolls them into view. Only the bottom, so the sections' own scroll-margin-top still applies. */
+@media (max-width: 720px) {
+  html {
+    scroll-padding-bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
 .app {
   min-height: 100vh;
   min-height: 100dvh;
@@ -319,7 +327,8 @@
 .button:hover:not(:disabled) {
   border-color: var(--ink-3);
 }
-.button:disabled {
+.button:disabled,
+.button[aria-disabled='true'] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -328,7 +337,7 @@
   border-color: var(--accent);
   color: var(--accent-ink);
 }
-.button--accent:hover:not(:disabled) {
+.button--accent:hover:not(:disabled):not([aria-disabled='true']) {
   background: color-mix(in srgb, var(--accent) 88%, var(--ink));
   border-color: color-mix(in srgb, var(--accent) 88%, var(--ink));
 }
@@ -519,6 +528,13 @@
 
 .analysis-progress {
   margin-top: var(--space-4);
+}
+.analysis-progress--idle {
+  margin-top: 0;
+}
+/* An error scrolled into view next to the control that failed keeps a little room around it. */
+.error-anchor {
+  scroll-margin-block: var(--space-6);
 }
 .analysis-progress-row {
   display: flex;
@@ -1021,6 +1037,10 @@
   border-top: 1px solid var(--line);
   scroll-margin-top: 80px;
 }
+/* "Record this drill" scrolls here; keep the heading clear of the sticky top bar. */
+.capture {
+  scroll-margin-top: 80px;
+}
 .reference-intro {
   margin: var(--space-2) 0 var(--space-3);
   color: var(--ink-2);
@@ -1030,6 +1050,14 @@
 .reference-loaded {
   font-size: var(--fs-sm);
   overflow-wrap: anywhere;
+}
+.reference-notes {
+  margin-top: var(--space-2);
+  color: var(--ink-2);
+  max-width: 72ch;
+}
+.reference-notes .subhead {
+  margin-top: 0;
 }
 .reference-panel .filedrop {
   margin-top: var(--space-4);
@@ -1093,8 +1121,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The number in ink for contrast; the singer's colour stays on the border and underline. */
 .singer-tab-score {
-  color: var(--tab-color);
+  color: var(--ink);
   font-weight: 600;
 }
 
@@ -1114,6 +1143,41 @@
 .results-summary {
   min-width: 0;
   width: 100%;
+}
+
+/* Stands in for the score dial when the take can't be scored. */
+.not-scored {
+  width: 176px;
+  max-width: 100%;
+}
+.not-scored-mark {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--grid-strong);
+  border-radius: 50%;
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  line-height: 1.1;
+  color: var(--ink);
+  text-align: center;
+}
+.not-scored-note {
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  text-align: center;
+}
+
+.results-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+.results-quick-actions .button {
+  flex: 1 1 auto;
 }
 .results-summary .eyebrow {
   overflow-wrap: anywhere;
@@ -1404,6 +1468,12 @@
   .results-headline,
   .range-note {
     margin-inline: 0;
+  }
+  .results-quick-actions {
+    justify-content: flex-start;
+  }
+  .results-quick-actions .button {
+    flex: 0 1 auto;
   }
   .results-headline {
     font-size: var(--fs-lg);

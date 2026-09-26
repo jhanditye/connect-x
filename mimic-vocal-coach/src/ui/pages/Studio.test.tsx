@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRecorder, microphoneUnavailableReason, RecorderError } from '../../audio/recorder';
 import { AppContext, type AppController } from '../../state/context';
-import { createInitialState, type AppState } from '../../state/reducer';
+import { createInitialState, type AppState, type ReferenceClip } from '../../state/reducer';
 import { makeFakeAnalysis, makeFakeProfile } from '../../testing/fixtures';
 import type { AppSettings } from '../../types';
 import { StudioPage } from './Studio';
@@ -12,7 +12,16 @@ import { StudioPage } from './Studio';
 // Other engineers' modules are replaced so this test pins down only the Studio's own behaviour.
 vi.mock('../../analysis/passaggio', () => ({
   passaggioFor: () => ({ lowMidi: 62, highMidi: 67 }),
-  VOICE_TYPE_LABELS: { bass: 'Bass', baritone: 'Baritone', tenor: 'Tenor', alto: 'Alto', mezzo: 'Mezzo-soprano', soprano: 'Soprano' },
+  // The real labels carry a gloss in parentheses; the plain names are for running text.
+  VOICE_TYPE_LABELS: {
+    bass: 'Bass (lowest male voice)',
+    baritone: 'Baritone (most male pop voices)',
+    tenor: 'Tenor (higher male voice)',
+    alto: 'Alto (lowest female voice)',
+    mezzo: 'Mezzo-soprano (most female pop voices)',
+    soprano: 'Soprano (highest female voice)',
+  },
+  VOICE_TYPE_NAMES: { bass: 'Bass', baritone: 'Baritone', tenor: 'Tenor', alto: 'Alto', mezzo: 'Mezzo-soprano', soprano: 'Soprano' },
 }));
 vi.mock('../../audio/recorder', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../audio/recorder')>();
@@ -64,6 +73,24 @@ function controller(overrides: Partial<AppState> = {}, fns: Partial<AppControlle
 
 let container: HTMLDivElement;
 let root: Root;
+
+const nextFrame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())));
+
+function referenceClip(overrides: Partial<ReferenceClip> = {}): ReferenceClip {
+  return {
+    name: 'song-mix',
+    samples: new Float32Array(1),
+    sampleRate: 22050,
+    analysis: makeFakeAnalysis(),
+    profile: makeFakeProfile({ id: 'reference', name: 'song-mix', source: 'reference' }),
+    baseProfileId: 'shawn-mendes',
+    opts: { voiceType: 'baritone', a4Hz: 440 },
+    usable: true,
+    unusableReason: null,
+    notices: [],
+    ...overrides,
+  };
+}
 
 function render(app: AppController) {
   act(() => {
@@ -148,12 +175,21 @@ describe('StudioPage', () => {
     expect(app.go).toHaveBeenCalledWith('results');
   });
 
-  it('shows analysis progress in a live region and disables capture while busy', () => {
+  it('announces the job once in a live region (not every percentage) and disables capture while busy', () => {
     render(controller({ status: 'analyzing', job: 'take', progress: 0.4, progressLabel: 'Analysing Demo take' }));
     const bar = container.querySelector('[role="progressbar"]');
     expect(bar?.getAttribute('aria-valuenow')).toBe('40');
-    expect(container.querySelector('[role="status"][aria-live="polite"]')?.textContent).toContain('Analysing Demo take');
+    const live = container.querySelector('.capture [role="status"][aria-live="polite"]');
+    expect(live?.textContent).toBe('Analysing Demo take');
+    expect(live?.contains(bar)).toBe(false);
     expect(button(/Try a demo take/).disabled).toBe(true);
+  });
+
+  it('keeps the progress live region mounted while idle so the first announcement is not lost', () => {
+    render(controller());
+    const live = container.querySelector('.capture [role="status"][aria-live="polite"]');
+    expect(live).not.toBeNull();
+    expect(live?.textContent).toBe('');
   });
 
   it('shows errors as alerts that can be dismissed', () => {
@@ -163,6 +199,66 @@ describe('StudioPage', () => {
     expect(alert?.textContent).toContain('Could not read song.mp3.');
     act(() => (alert?.querySelector('button') as HTMLButtonElement).click());
     expect(app.dispatch).toHaveBeenCalledWith({ type: 'error/clear' });
+  });
+
+  it('shows an upload error next to the upload control, not at the top of the page', () => {
+    render(controller({ error: '"fake.wav" could not be decoded.', errorJob: 'take' }));
+    const alerts = container.querySelectorAll('[role="alert"]');
+    expect(alerts).toHaveLength(1);
+    const capture = container.querySelector('.capture')!;
+    expect(capture.contains(alerts[0])).toBe(true);
+    // After the demo row, i.e. right under the upload box.
+    const demoRow = capture.querySelector('.demo-row')!;
+    expect(demoRow.compareDocumentPosition(alerts[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('shows a reference-clip error inside the reference panel, opening it if needed', () => {
+    render(controller({ error: 'Could not read clip.mp3.', errorJob: 'reference' }));
+    const panel = container.querySelector('.reference-panel');
+    expect(panel).not.toBeNull();
+    expect(panel?.querySelector('[role="alert"]')?.textContent).toContain('Could not read clip.mp3.');
+  });
+
+  it('shows a rejected reference file in the reference panel', async () => {
+    render(controller({ reference: referenceClip() }));
+    const inputs = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
+    const refInput = inputs[inputs.length - 1];
+    Object.defineProperty(refInput, 'files', { value: [new File(['x'], 'lyrics.txt', { type: 'text/plain' })], configurable: true });
+    await act(async () => refInput.dispatchEvent(new Event('change', { bubbles: true })));
+    const alert = container.querySelector('.reference-panel [role="alert"]');
+    expect(alert?.textContent).toMatch(/does not look like an audio file/);
+    expect(container.querySelector('.capture [role="alert"]')).toBeNull();
+  });
+
+  it('explains why a loaded reference clip cannot be used and does not offer it as a target', () => {
+    const app = controller({
+      reference: referenceClip({ usable: false, unusableReason: 'This clip sounds like a full song mix. Use an isolated vocal.' }),
+    });
+    render(app);
+    const panel = container.querySelector('.reference-panel')!;
+    expect(panel.textContent).toContain('Loaded: song-mix');
+    expect(panel.textContent).toContain('can’t be used as a target');
+    expect(panel.textContent).toContain('This clip sounds like a full song mix. Use an isolated vocal.');
+    expect(Array.from(panel.querySelectorAll('button')).some((b) => /Use as target/.test(b.textContent ?? ''))).toBe(false);
+    act(() => button(/Reference clip/).click());
+    expect(app.selectProfile).not.toHaveBeenCalled();
+    expect(button(/Reference clip/).textContent).toMatch(/can’t be used/);
+  });
+
+  it('lists a usable clip’s recording notes next to it', () => {
+    render(controller({ reference: referenceClip({ analysis: { ...makeFakeAnalysis(), warnings: ['There is a lot of background noise.'] } }) }));
+    expect(container.querySelector('.reference-panel')?.textContent).toContain('There is a lot of background noise.');
+    expect(button(/Use as target/)).toBeTruthy();
+  });
+
+  it('writes voice types without nested parentheses and states the 5-minute clip limit', () => {
+    render(controller({ reference: referenceClip() }));
+    const text = container.textContent ?? '';
+    expect(text).toContain('for a baritone), so there is mix');
+    expect(text).not.toContain('))');
+    expect(container.querySelector('#ref-voice option')?.textContent).toBe('Same as my voice type (Baritone)');
+    expect(text).toContain('up to 5 minutes');
+    expect(text).not.toContain('6 minutes');
   });
 
   it('the reference card opens the reference-clip panel', () => {
@@ -183,9 +279,34 @@ describe('StudioPage', () => {
     expect(app.go).toHaveBeenCalledWith('results');
   });
 
-  it('announces a drill picked on the Practice page', () => {
+  it('announces a drill picked on the Practice page and moves focus to the capture controls', async () => {
     render(controller({ drillExerciseId: 'straw' }));
     expect(container.textContent).toContain('Recording a drill: Straw phonation');
+    expect(container.textContent).toContain('Record or upload it below');
+    await nextFrame();
+    // jsdom has no microphone, so the upload control gets focus instead of Record.
+    expect(document.activeElement).toBe(container.querySelector('.capture input[type="file"]'));
+  });
+
+  it('moves focus to Stop when recording starts and back to Record after Discard, announcing each', async () => {
+    vi.mocked(microphoneUnavailableReason).mockReturnValue(null);
+    vi.mocked(createRecorder).mockReturnValueOnce({
+      start: () => Promise.resolve(),
+      stop: () => Promise.resolve({ samples: new Float32Array(0), sampleRate: 48000 }),
+      cancel: () => undefined,
+      analyser: null,
+    });
+    render(controller());
+    const live = () => container.querySelector('.record-block [role="status"]')?.textContent;
+    await act(async () => button(/^Record$/).click());
+    expect(document.activeElement?.textContent).toMatch(/Stop and analyse/);
+    expect(live()).toMatch(/Recording started/);
+    expect(container.querySelector('[role="timer"]')).not.toBeNull();
+    act(() => button(/Discard/).click());
+    await nextFrame();
+    expect(document.activeElement?.textContent).toBe('Record');
+    expect(live()).toBe('Recording discarded.');
+    vi.mocked(microphoneUnavailableReason).mockReset();
   });
 
   it('explains a refused microphone and points to upload instead of dead-ending', async () => {

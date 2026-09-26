@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { makeFakeAnalysis, makeFakeProfile } from '../testing/fixtures';
 import type { SingerProfile, StyleKey, StyleVector, TargetBand, VoiceAnalysis } from '../types';
-import { compareToProfile, directionFor, scoreDimension } from './compare';
+import { compareToProfile, directionFor, isScoreable, scoreDimension, singerPassaggioLow } from './compare';
 import { SINGERS } from './profiles';
+
+/** Passaggio low notes of the app's voice types (analysis/passaggio.ts). */
+const PASSAGGIO_LOW = { bass: 59, baritone: 62, tenor: 64, alto: 67, mezzo: 69, soprano: 71 } as const;
+
+function withVoiceType(a: VoiceAnalysis, lowMidi: number): VoiceAnalysis {
+  return { ...a, passaggio: { lowMidi, highMidi: lowMidi + 5 } };
+}
 
 const BAND: TargetBand = { ideal: 0.5, low: 0.4, high: 0.7, tolerance: 0.3, weight: 1 };
 
@@ -137,7 +144,8 @@ describe('compareToProfile', () => {
     for (const d of c.dimensions) {
       expect(d.label.length).toBeGreaterThan(0);
       expect(d.summary.length).toBeGreaterThan(10);
-      expect(d.target).toBe(p.targets[d.key]);
+      // The flips band is widened for this short take (see below); every other band is the profile's own.
+      if (d.key !== 'flipsPerMinute') expect(d.target).toBe(p.targets[d.key]);
       expect(Number.isInteger(d.score)).toBe(true);
     }
     const breath = c.dimensions.find((d) => d.key === 'breathiness')!;
@@ -182,35 +190,91 @@ describe('compareToProfile', () => {
     expect(c.dimensions.every((d) => d.direction === 'unknown')).toBe(true);
   });
 
-  it('suggests a transposition from the tessitura centres and explains it with note names', () => {
-    const a = makeFakeAnalysis(); // tessitura 59-65, centre 62 (D4)
-    const shawn = compareToProfile(a, SINGERS[0]); // 52-66, centre 59
-    expect(shawn.suggestedTransposeSemitones).toBe(3);
-    expect(shawn.rangeNote).toContain('B3');
-    expect(shawn.rangeNote).toContain('F4');
-    expect(shawn.rangeNote).toMatch(/3 semitones .*higher/);
-    const daniel = compareToProfile(a, SINGERS[1]); // 55-67, centre 61
-    expect(daniel.suggestedTransposeSemitones).toBe(1);
-    expect(daniel.rangeNote).toMatch(/should suit you/);
+  it('bases the key suggestion on the voice type, not on the take', () => {
+    const [shawn, daniel, jalen] = SINGERS;
+    for (const p of SINGERS) expect(singerPassaggioLow(p)).toBe(64);
+    const a = makeFakeAnalysis(); // baritone zone (D4), tessitura B3-F4
+    const c = compareToProfile(a, shawn);
+    expect(c.suggestedTransposeSemitones).toBe(-2);
+    expect(c.rangeNote).toMatch(/^Based on your voice type, Shawn's songs should sit best about 2 semitones \(a whole step\) lower/);
+    expect(c.rangeNote).toContain('passaggio starts around D4');
+    expect(c.rangeNote).toContain('around E4');
+    // The take's range is reported, but only as information.
+    expect(c.rangeNote).toContain('This take sat mostly between B3 and F4');
+    expect(c.rangeNote).toMatch(/not your whole range/);
 
-    const low = withPitch(a, { tessituraLowMidi: 45, tessituraHighMidi: 52 }); // centre 48.5
-    const jalen = compareToProfile(low, SINGERS[2]); // centre 65.5
-    expect(jalen.suggestedTransposeSemitones).toBe(-17);
-    expect(jalen.rangeNote).toMatch(/lower/);
-    expect(jalen.rangeNote).toContain('A2');
-    const octave = compareToProfile(withPitch(a, { tessituraLowMidi: 48, tessituraHighMidi: 59 }), SINGERS[2]);
-    expect(octave.suggestedTransposeSemitones).toBe(-12);
-    expect(octave.rangeNote).toMatch(/octave/);
+    // Regression: a take that climbs through the passaggio (as the Guide suggests) used to produce
+    // "+6 semitones" for a baritone. The take's pitch no longer moves the suggestion.
+    const climbing = withPitch(a, { tessituraLowMidi: 62, tessituraHighMidi: 68, medianMidi: 65 });
+    for (const p of [shawn, daniel, jalen]) expect(compareToProfile(climbing, p).suggestedTransposeSemitones).toBe(-2);
+    const low = withPitch(a, { tessituraLowMidi: 45, tessituraHighMidi: 52 });
+    expect(compareToProfile(low, jalen).suggestedTransposeSemitones).toBe(-2);
   });
 
-  it('falls back to the median, and to 0 without pitch data', () => {
-    const a = makeFakeAnalysis();
-    const median = withPitch(a, { tessituraLowMidi: null, tessituraHighMidi: null, medianMidi: 55 });
-    expect(compareToProfile(median, SINGERS[0]).suggestedTransposeSemitones).toBe(-4);
-    const none = withPitch(a, { tessituraLowMidi: null, tessituraHighMidi: null, medianMidi: null, lowMidi: null, highMidi: null });
+  it('suggests a key per voice type, within a fifth and without octave jumps', () => {
+    const expected = { bass: -5, baritone: -2, tenor: 0, alto: 3, mezzo: 5, soprano: 7 };
+    for (const [vt, low] of Object.entries(PASSAGGIO_LOW) as [keyof typeof PASSAGGIO_LOW, number][]) {
+      const c = compareToProfile(withVoiceType(makeFakeAnalysis(), low), SINGERS[1]);
+      expect(c.suggestedTransposeSemitones, vt).toBe(expected[vt]);
+      expect(c.rangeNote, vt).not.toMatch(/octave/);
+    }
+    const tenor = compareToProfile(withVoiceType(makeFakeAnalysis(), 64), SINGERS[0]);
+    expect(tenor.rangeNote).toMatch(/Shawn's original keys should suit you/);
+    const mezzo = compareToProfile(withVoiceType(makeFakeAnalysis(), 69), SINGERS[0]);
+    expect(mezzo.rangeNote).toMatch(/about 5 semitones \(a fourth\) higher/);
+    // Extreme zones are capped at a fifth.
+    expect(compareToProfile(withVoiceType(makeFakeAnalysis(), 80), SINGERS[0]).suggestedTransposeSemitones).toBe(7);
+    expect(compareToProfile(withVoiceType(makeFakeAnalysis(), 50), SINGERS[0]).suggestedTransposeSemitones).toBe(-7);
+  });
+
+  it('still gives voice-type advice without pitch data, and just leaves the take out', () => {
+    const none = withPitch(makeFakeAnalysis(), { tessituraLowMidi: null, tessituraHighMidi: null, medianMidi: null, lowMidi: null, highMidi: null });
     const c = compareToProfile(none, SINGERS[0]);
-    expect(c.suggestedTransposeSemitones).toBe(0);
-    expect(c.rangeNote).toMatch(/not enough pitched singing/);
+    expect(c.suggestedTransposeSemitones).toBe(-2);
+    expect(c.rangeNote).not.toMatch(/This take sat/);
+    const median = withPitch(makeFakeAnalysis(), { tessituraLowMidi: null, tessituraHighMidi: null, medianMidi: 55 });
+    expect(compareToProfile(median, SINGERS[0]).rangeNote).toContain('This take sat around G3');
+  });
+
+  it('reports take against clip only as information when no singer voice is known', () => {
+    // A profile with no builtin behind it: the only basis is this take against its range.
+    const custom = makeFakeProfile({ id: 'reference', source: 'reference', name: 'clip.wav', signatureMoves: [] }); // tessitura A3-G4
+    expect(singerPassaggioLow(custom)).toBeNull();
+    const a = withPitch(makeFakeAnalysis(), { tessituraLowMidi: 45, tessituraHighMidi: 52 }); // centre 48.5, clip 62
+    const c = compareToProfile(a, custom);
+    expect(c.suggestedTransposeSemitones).toBe(-13);
+    expect(c.rangeNote).toMatch(/lower than the reference clip \(A3–G4\)/);
+    expect(c.rangeNote).toMatch(/If you sang the same song/);
+    expect(c.rangeNote).not.toMatch(/try them|should suit you/);
+    const none = withPitch(makeFakeAnalysis(), { tessituraLowMidi: null, tessituraHighMidi: null, medianMidi: null });
+    const empty = compareToProfile(none, custom);
+    expect(empty.suggestedTransposeSemitones).toBe(0);
+    expect(empty.rangeNote).toMatch(/not enough pitched singing/);
+  });
+
+  it('widens the flips band on short takes so one flip, or none, is on-style', () => {
+    const [shawn, daniel, jalen] = SINGERS;
+    // 12 s of singing: each flip is 5 per minute.
+    const short = (flips: number) => ({ ...makeFakeAnalysis({ flipsPerMinute: flips }), voicedSec: 12 });
+    for (const p of [shawn, daniel, jalen]) {
+      for (const rate of [0, 5]) {
+        const d = compareToProfile(short(rate), p).dimensions.find((x) => x.key === 'flipsPerMinute')!;
+        expect(d.direction, `${p.id} ${rate}/min`).toBe('ok');
+        expect(d.score).toBeGreaterThanOrEqual(80);
+        expect(d.target.low).toBeLessThanOrEqual(d.target.ideal);
+        expect(d.target.high).toBeGreaterThanOrEqual(d.target.ideal);
+        expect(d.summary).not.toMatch(/Not measured/);
+      }
+      // Three flips in 12 s is still flagged.
+      expect(compareToProfile(short(15), p).dimensions.find((x) => x.key === 'flipsPerMinute')!.direction).toBe('less');
+    }
+    // A long take is scored against the authored band.
+    const long = { ...makeFakeAnalysis({ flipsPerMinute: 0 }), voicedSec: 90 };
+    expect(compareToProfile(long, daniel).dimensions.find((x) => x.key === 'flipsPerMinute')!.target).toBe(daniel.targets.flipsPerMinute);
+    expect(compareToProfile(long, daniel).dimensions.find((x) => x.key === 'flipsPerMinute')!.direction).toBe('more');
+    // Shawn and Jalen flip once or twice a song, so no flip at all is on-style even on a long take.
+    expect(compareToProfile(long, shawn).dimensions.find((x) => x.key === 'flipsPerMinute')!.direction).toBe('ok');
+    expect(compareToProfile(long, jalen).dimensions.find((x) => x.key === 'flipsPerMinute')!.direction).toBe('ok');
   });
 
   it('talks about "the reference" for reference-clip profiles', () => {
@@ -218,7 +282,41 @@ describe('compareToProfile', () => {
     const c = compareToProfile(makeFakeAnalysis(), ref);
     const breath = c.dimensions.find((d) => d.key === 'breathiness')!;
     expect(breath.summary).toContain("the reference's");
-    expect(c.rangeNote).toContain('the reference');
     expect(c.profileId).toBe('reference');
+    // Built on Daniel's profile: key advice from the voice types, the clip's range as information.
+    expect(c.suggestedTransposeSemitones).toBe(-2);
+    expect(c.rangeNote).toMatch(/Daniel's songs should sit best/);
+    expect(c.rangeNote).toMatch(/about 1 semitone \(a half step\) above the reference clip \(G3–G4\)/);
+    // A clip that gave no measurements has only a stand-in range, which is never described as the clip's.
+    const empty: SingerProfile = { ...ref, targets: {} };
+    const e = compareToProfile(makeFakeAnalysis(), empty);
+    expect(e.suggestedTransposeSemitones).toBe(-2);
+    expect(e.rangeNote).not.toMatch(/reference clip/);
+    const bare = compareToProfile(makeFakeAnalysis(), makeFakeProfile({ id: 'reference', source: 'reference', signatureMoves: [], targets: {} }));
+    expect(bare.rangeNote).toBe('There was not enough singing in the reference clip to compare ranges with it.');
+  });
+});
+
+describe('isScoreable', () => {
+  it('rejects takes with too little singing or accompaniment', () => {
+    const a = makeFakeAnalysis();
+    expect(isScoreable(a)).toBe(true);
+    expect(isScoreable({ ...a, issues: ['too-little-singing'] })).toBe(false);
+    expect(isScoreable({ ...a, issues: ['accompaniment', 'noisy'] })).toBe(false);
+    // Recording-quality issues and speech-like takes are scored, with caveats in the plan.
+    expect(isScoreable({ ...a, issues: ['noisy', 'clipping', 'too-quiet', 'speech-like', 'trimmed'] })).toBe(true);
+  });
+
+  it('needs at least four measured dimensions when given a comparison', () => {
+    const p = makeFakeProfile(); // four targets
+    expect(isScoreable(makeFakeAnalysis(), compareToProfile(makeFakeAnalysis(), p))).toBe(true);
+    const three = makeFakeAnalysis({ mixInUpperRange: null });
+    expect(isScoreable(three, compareToProfile(three, p))).toBe(false);
+    const nulls = Object.fromEntries(Object.keys(makeFakeAnalysis().style).map((k) => [k, null])) as Partial<StyleVector>;
+    const empty = makeFakeAnalysis(nulls);
+    expect(isScoreable(empty, compareToProfile(empty, SINGERS[0]))).toBe(false);
+    // A reference profile resting on a single target can't score anything.
+    const thin = makeFakeProfile({ targets: { pitchAccuracyCents: p.targets.pitchAccuracyCents } });
+    expect(isScoreable(makeFakeAnalysis(), compareToProfile(makeFakeAnalysis(), thin))).toBe(false);
   });
 });

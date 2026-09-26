@@ -7,7 +7,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { analyzeInWorker } from './analysis/client';
 import { App } from './App';
 import { SINGERS } from './coach/profiles';
+import { encodeWav } from './audio/wav';
 import { loadSessions } from './storage/history';
+import { makeFakeAnalysis } from './testing/fixtures';
+import type { VoiceAnalysis } from './types';
 
 vi.mock('./analysis/client', async () => {
   const { makeFakeAnalysis } = await import('./testing/fixtures');
@@ -77,6 +80,30 @@ async function runDemo() {
   await tick(10);
 }
 
+async function goTo(route: string) {
+  window.location.hash = `#${route}`;
+  await act(async () => {
+    window.dispatchEvent(new HashChangeEvent('hashchange'));
+  });
+  await tick();
+}
+
+async function uploadReference() {
+  await clickAsync(buttonNamed(/Reference clip/));
+  const inputs = container.querySelectorAll<HTMLInputElement>('input[type="file"]');
+  const input = inputs[inputs.length - 1];
+  const file = new File([encodeWav(new Float32Array(22050).fill(0.1), 22050)], 'isolated-vocal.wav', { type: 'audio/wav' });
+  Object.defineProperty(input, 'files', { value: [file], configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await tick(20);
+}
+
+function h1(): string {
+  return container.querySelector('h1')?.textContent ?? '';
+}
+
 describe('App', () => {
   it('starts in the Studio with Results disabled', () => {
     act(() => root.render(<App />));
@@ -101,13 +128,66 @@ describe('App', () => {
     expect(analyzeInWorker).toHaveBeenCalledTimes(1);
   });
 
-  it('saves the result to progress once per singer', async () => {
+  it('saves the result to progress once per singer, even after leaving Results and coming back', async () => {
     act(() => root.render(<App />));
     await runDemo();
     await clickAsync(buttonNamed(/Save to progress/));
     expect(loadSessions()).toHaveLength(1);
     expect(loadSessions()[0].profileId).toBe(SINGERS[0].id);
-    expect(buttonNamed(/Saved to Progress/).disabled).toBe(true);
+    expect(buttonNamed(/Saved to Progress/).getAttribute('aria-disabled')).toBe('true');
+    await goTo('guide');
+    await goTo('results');
+    expect(buttonNamed(/Saved to Progress/).getAttribute('aria-disabled')).toBe('true');
+    await clickAsync(buttonNamed(/Saved to Progress/));
+    expect(loadSessions()).toHaveLength(1);
+    // Another singer is a separate result.
+    await clickAsync(buttonNamed(new RegExp(SINGERS[1].name)));
+    await clickAsync(buttonNamed(/Save to progress/));
+    expect(loadSessions()).toHaveLength(2);
+  });
+
+  it('shows "Not scored" and refuses to save a take with no measurable singing', async () => {
+    const silent = (): VoiceAnalysis => {
+      const a = makeFakeAnalysis();
+      const style = Object.fromEntries(Object.keys(a.style).map((k) => [k, null])) as unknown as VoiceAnalysis['style'];
+      return { ...a, voicedSec: 0, style, warnings: ['No clear singing was detected.'], issues: ['too-little-singing'] };
+    };
+    vi.mocked(analyzeInWorker).mockImplementationOnce(async () => silent());
+    act(() => root.render(<App />));
+    await runDemo();
+    expect(container.querySelector('.not-scored')?.textContent).toContain('Not scored');
+    await clickAsync(buttonNamed(/Save to progress/));
+    expect(loadSessions()).toHaveLength(0);
+  });
+
+  it('compares with a reference clip after the result paints, and a settings change keeps the chosen singer', async () => {
+    act(() => root.render(<App />));
+    await uploadReference();
+    // A usable clip becomes the target, based on the singer selected when it was loaded (Shawn).
+    expect(container.querySelector('.singer-card--reference')?.getAttribute('aria-pressed')).toBe('true');
+    await runDemo();
+    expect(h1()).toContain('Your take vs isolated-vocal');
+    expect(container.textContent).toContain('Against your reference clip');
+    expect(container.textContent).not.toContain('NaN');
+    await clickAsync(buttonNamed(new RegExp(SINGERS[1].name)));
+    expect(h1()).toContain(`Your take vs ${SINGERS[1].name}`);
+
+    await goTo('settings');
+    const select = container.querySelector<HTMLSelectElement>('select')!;
+    await act(async () => {
+      select.value = 'tenor';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    // Take re-analysis, then reference re-analysis (each debounced).
+    await tick(600);
+    await tick(600);
+    expect(analyzeInWorker).toHaveBeenCalledTimes(4);
+    await goTo('results');
+    expect(h1()).toContain(`Your take vs ${SINGERS[1].name}`);
+    await goTo('studio');
+    // The clip keeps the base it was loaded with (Shawn), not the singer selected when settings changed.
+    await clickAsync(buttonNamed(/Use as target/));
+    expect(container.textContent).toContain(`come from the ${SINGERS[0].name} profile`);
   });
 
   it('re-analyses the take when the voice type changes in Settings', async () => {
@@ -140,6 +220,8 @@ describe('App', () => {
     expect(loadSessions()).toHaveLength(1);
     await clickAsync(buttonNamed(/Yes, delete everything/));
     expect(loadSessions()).toHaveLength(0);
+    // Focus moves to the confirmation instead of falling to the page body.
+    expect(document.activeElement?.textContent).toBe('All data cleared.');
     const resultsLink = Array.from(container.querySelectorAll('a.nav-link')).find((a) => /Results/.test(a.textContent ?? ''));
     expect(resultsLink?.getAttribute('aria-disabled')).toBe('true');
   });

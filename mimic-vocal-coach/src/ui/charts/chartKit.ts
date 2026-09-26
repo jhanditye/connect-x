@@ -116,9 +116,13 @@ const SINGER_VARS: Record<string, string> = {
   reference: 'var(--singer-custom)',
 };
 
-/** Builtin singer ids map to their theme-aware CSS variables; other profiles use their own hex. */
+/**
+ * Builtin singer ids map to their theme-aware CSS variables, and reference clips (saved sessions
+ * use 'reference:<clip name>') to the custom-singer colour; other profiles use their own hex.
+ */
 export function singerVar(id: string | undefined, color?: string): string {
   if (id && SINGER_VARS[id]) return SINGER_VARS[id];
+  if (id?.startsWith('reference:')) return SINGER_VARS.reference;
   return color && color.trim() ? color : 'var(--singer-custom)';
 }
 
