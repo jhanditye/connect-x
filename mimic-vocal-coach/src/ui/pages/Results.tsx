@@ -3,7 +3,7 @@
 // A take that can't be scored (too little singing, singing over a band, too few measures) shows
 // "Not scored" with the reasons and recording advice instead of a number, and can't be saved.
 
-import { useId, useMemo, type CSSProperties } from 'react';
+import { useEffect, useId, useMemo, useState, type CSSProperties } from 'react';
 import { encodeWav } from '../../audio/wav';
 import { forUserVoice } from '../../coach/coach';
 import { getExercise } from '../../coach/exercises';
@@ -22,7 +22,7 @@ import { StyleRadar } from '../charts/StyleRadar';
 import { AiCoachPanel } from '../components/AiCoachPanel';
 import { AnalysisProgress } from '../components/AnalysisProgress';
 import { CoachingItemCard } from '../components/CoachingItemCard';
-import { buildAnalysisExport, downloadBlob, slugify, toJson } from '../components/download';
+import { buildAnalysisExport, hostDownloads, saveFile, slugify, toJson } from '../components/download';
 import { formatCents, formatDuration, formatTranspose, noteName, noteRange, percent } from '../components/format';
 import { Icon } from '../components/Icon';
 import { Notice } from '../components/Notice';
@@ -105,6 +105,16 @@ export function ResultsPage() {
   const { state, profile, profiles } = app;
   const { analysis, comparison, plan, take, referenceComparison: refComp, reference } = state;
   const saveNoteId = useId();
+  // Inside the claude.ai artifact viewer files are saved through its downloads capability, which
+  // takes JSON but not WAV, so the WAV button is hidden there.
+  const [inHostViewer, setInHostViewer] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void hostDownloads().then((host) => live && setInHostViewer(host !== null));
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // Each tab's score, or null when the take can't be scored against that profile.
   const tabScores = useMemo(() => {
@@ -179,11 +189,11 @@ export function ResultsPage() {
       referenceComparison: refComp,
       referenceName: reference?.name,
     });
-    downloadBlob(new Blob([toJson(data)], { type: 'application/json' }), `${slugify(takeName)}-${profile.id}-analysis.json`);
+    void saveFile(new Blob([toJson(data)], { type: 'application/json' }), `${slugify(takeName)}-${profile.id}-analysis.json`);
   };
   const onDownloadWav = () => {
     if (!take) return;
-    downloadBlob(new Blob([encodeWav(take.samples, take.sampleRate)], { type: 'audio/wav' }), `${slugify(takeName)}.wav`);
+    void saveFile(new Blob([encodeWav(take.samples, take.sampleRate)], { type: 'audio/wav' }), `${slugify(takeName)}.wav`);
   };
   // aria-disabled rather than disabled, so keyboard focus stays on the button after saving.
   const saveButton = (
@@ -569,9 +579,11 @@ export function ResultsPage() {
         <button type="button" className="button button--ghost" onClick={onDownloadJson}>
           <Icon name="download" size={16} /> Download analysis (JSON)
         </button>
-        <button type="button" className="button button--ghost" onClick={onDownloadWav} disabled={!take}>
-          <Icon name="download" size={16} /> Download take (WAV)
-        </button>
+        {!inHostViewer && (
+          <button type="button" className="button button--ghost" onClick={onDownloadWav} disabled={!take}>
+            <Icon name="download" size={16} /> Download take (WAV)
+          </button>
+        )}
         {recordAnother}
         <p id={saveNoteId} className="muted results-actions-note" aria-live="polite">
           {saveNote}

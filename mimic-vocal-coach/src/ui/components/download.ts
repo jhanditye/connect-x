@@ -2,6 +2,43 @@
 
 import type { CoachingPlan, Comparison, ReferenceComparison, SingerProfile, VoiceAnalysis } from '../../types';
 
+/**
+ * The claude.ai artifact viewer's `downloads` capability. Inside that viewer a plain <a download>
+ * does nothing, so saves go through `claude.use("downloads")`; everywhere else (GitHub Pages, local
+ * dev) `window.claude` is absent and this resolves null.
+ */
+interface HostDownloads {
+  save(request: { filename: string; data: Blob }): Promise<unknown>;
+}
+type HostWindow = Window & { claude?: { use?: (name: string) => Promise<unknown> } };
+
+let hostDownloadsPromise: Promise<HostDownloads | null> | null = null;
+
+export function hostDownloads(): Promise<HostDownloads | null> {
+  if (!hostDownloadsPromise) {
+    const claude = typeof window === 'undefined' ? undefined : (window as HostWindow).claude;
+    hostDownloadsPromise =
+      claude && typeof claude.use === 'function'
+        ? claude.use('downloads').then(
+            (ns) => (ns as HostDownloads | null) ?? null,
+            () => null,
+          )
+        : Promise.resolve(null);
+  }
+  return hostDownloadsPromise;
+}
+
+/** Save a generated file: through the host viewer when there is one, else a normal browser download. */
+export async function saveFile(blob: Blob, filename: string): Promise<void> {
+  const host = await hostDownloads();
+  if (host) {
+    // The viewer shows its own confirmation; a decline is the viewer's choice, not an error to show.
+    await host.save({ filename, data: blob }).catch(() => undefined);
+    return;
+  }
+  downloadBlob(blob, filename);
+}
+
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
