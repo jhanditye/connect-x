@@ -3,9 +3,9 @@
 // The technique cues come from a content matrix indexed by dimension x direction, with extra cues
 // for each builtin singer. Everything is phrased to be vocally safe: no cue asks for more volume or
 // effort. When a dimension wants "more" (more chest, a steeper climb) the cues work through vowel
-// shape, fold closure and brightness, never pushing. As a backstop, the plan never coaches toward
-// more rasp, or toward chest weight or a loudness climb that its own health notes call pushing,
-// whatever the target profile (reference clips of full mixes can ask for both).
+// shape, how firmly the vocal folds meet, and brightness, never pushing. As a backstop, the plan
+// never coaches toward more rasp, or toward chest weight or a loudness climb that its own health
+// notes call pushing, whatever the target profile (reference clips of full mixes can ask for both).
 
 import { midiToNoteName } from '../dsp/music';
 import type {
@@ -20,7 +20,7 @@ import type {
   TargetBand,
   VoiceAnalysis,
 } from '../types';
-import { describeWithNumber, isScoreable, singerPassaggioLow } from './compare';
+import { describeWithNumber, isScoreable, keyAdviceNames, singerPassaggioLow } from './compare';
 import { getExercise } from './exercises';
 import {
   MOVE_FOCUS,
@@ -35,7 +35,7 @@ import {
   whoseOf,
 } from './profiles';
 
-type Flavour = 'shawn' | 'daniel' | 'jalen' | 'generic';
+export type Flavour = 'shawn' | 'daniel' | 'jalen' | 'generic';
 type FixDirection = 'more' | 'less';
 
 /** Dimensions scoring below this become coaching items (inside the band always scores >= 80). */
@@ -43,6 +43,20 @@ const ITEM_SCORE_THRESHOLD = 78;
 const STRENGTH_SCORE = 80;
 const MAX_DIMENSION_ITEMS = 4;
 const MAX_ITEMS = 5;
+/**
+ * Register items that coach the same move from different sides, so their cues and drills repeat:
+ * releasing the top into falsetto ("more falsetto", "less mix"), or connecting a light top back to
+ * a fuller sound ("more chest", "less falsetto", "more mix"). A plan keeps one item per group.
+ */
+const REGISTER_GROUP: Record<string, 'release' | 'connect'> = {
+  'headInUpperRange-more': 'release',
+  'mixInUpperRange-less': 'release',
+  'chestInUpperRange-more': 'connect',
+  'headInUpperRange-less': 'connect',
+  'mixInUpperRange-more': 'connect',
+};
+/** The only measures a speech-like take can support: tone colour, not registers, vibrato or runs. */
+const SPEECH_RELIABLE = new Set<StyleKey>(['breathiness', 'brightness', 'rasp']);
 /** Transposition (semitones) at which key advice becomes its own item. */
 const RANGE_ITEM_SEMITONES = 3;
 /** Loudness climb (dB/semitone) above which the voice is being pushed; health notes flag it. */
@@ -76,6 +90,21 @@ function compactValue(key: StyleKey, v: number): string {
   return key === 'agility' && v <= 0.05 ? 'no runs' : formatStyleValue(key, v);
 }
 
+/**
+ * A run-speed or flip-rate target of zero (a reference clip without runs or flips): copy says
+ * "no runs" / "no register flips", not "0.0 notes/s" / "0.0 per min".
+ */
+const NONE_WORDS: Partial<Record<StyleKey, string>> = { agility: 'no runs', flipsPerMinute: 'no register flips' };
+
+function noneTarget(key: StyleKey, t: TargetBand): boolean {
+  return key in NONE_WORDS && t.ideal <= 0.05;
+}
+
+/** "62% vs about 38%" / "7.5 notes/s vs no runs": the take against the target, for running text. */
+function versusTarget(d: DimensionResult, take: string): string {
+  return noneTarget(d.key, d.target) ? `${take} vs ${NONE_WORDS[d.key]}` : `${take} vs about ${formatStyleValue(d.key, d.target.ideal)}`;
+}
+
 /** Words plus number without nested brackets: "quite airy, 0.68" / "62% chest". */
 function wordsAndNumber(key: StyleKey, v: number): string {
   const words = STYLE_LABELS[key].describe(v);
@@ -88,13 +117,14 @@ function nameInSentence(name: string): string {
 }
 
 /**
- * What generic copy calls the light upper register. Most teachers call it falsetto in male voices
- * and head voice in female voices (alto and up), so generic cues follow the user's voice type.
- * Singer-specific cues about the three (male) artists keep "falsetto".
+ * What copy addressed to the user calls the light upper register. Most teachers call it falsetto in
+ * male voices and head voice in female voices (alto and up), so every instruction to the user (cues,
+ * singer cues, signature-move steps, drill names) follows the user's voice type. Descriptions of the
+ * three (male) artists' own register ("Jalen's falsetto", "his falsetto") keep "falsetto".
  */
 type LightWord = 'falsetto' | 'head voice';
 
-function lightWordFor(analysis: VoiceAnalysis): LightWord {
+function lightWordFor(analysis: Pick<VoiceAnalysis, 'passaggio'>): LightWord {
   return analysis.passaggio.lowMidi >= 67 ? 'head voice' : 'falsetto';
 }
 
@@ -103,8 +133,17 @@ function withLightWord(text: string, light: LightWord): string {
   return text
     .replace(/falsetto or head voice/g, 'head voice')
     .replace(/falsetto\/head/g, 'head voice')
-    .replace(/\bFalsetto\b/g, 'Head voice')
-    .replace(/\bfalsetto\b/g, 'head voice');
+    .replace(/(?<!(?:'s|his) )\bFalsetto\b/g, 'Head voice')
+    .replace(/(?<!(?:'s|his) )\bfalsetto\b/g, 'head voice');
+}
+
+/**
+ * An instruction worded for the user's voice type: "falsetto" becomes "head voice" for alto,
+ * mezzo and soprano. The Results page applies it to the signature-move steps it lists, so they match
+ * the "Start here" step in the plan's hints.
+ */
+export function forUserVoice(text: string, analysis: Pick<VoiceAnalysis, 'passaggio'>): string {
+  return withLightWord(text, lightWordFor(analysis));
 }
 
 /**
@@ -140,6 +179,12 @@ interface FixCell {
   exercises: string[];
   /** Singer-specific exercise preferences, placed before the general ones. */
   singerExercises?: Partial<Record<Flavour, string[]>>;
+  /**
+   * Cues that would contradict another item while the take needs `key` to go `dir` (for example
+   * "not an 'h'" next to an item asking for airy onsets). Matching cues are dropped and `instead`
+   * goes in after the singer cues.
+   */
+  conflicts?: { key: StyleKey; dir: FixDirection | 'ok'; drop: RegExp; instead: string[] }[];
 }
 
 export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
@@ -161,11 +206,20 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
         jalen: ['In falsetto, allow a soft edge of air as the note starts, then let it clear as the note settles.'],
       },
       exercises: ['aspirate-onsets', 'airy-falsetto-float', 'straw-phonation-slides'],
+      // With phrase starts that need to be cleaner, the air goes into the tone, not in front of it.
+      conflicts: [
+        {
+          key: 'softOnsetRatio',
+          dir: 'less',
+          drop: /quiet "h"|as the note starts/,
+          instead: ['Start phrases cleanly, then let a little air into the tone once the note is going.'],
+        },
+      ],
     },
     less: {
       title: 'Clear up the tone',
       cues: [
-        'Firm up fold closure gently: sing the phrase on "nay" or "nee" first, then go back to the words with the same buzz.',
+        'Let your vocal folds meet a little more fully, without pressing: sing the phrase on "nay" or "nee" first, then go back to the words with the same buzz.',
         'Use less air rather than more push. Picture the tone as a thin, focused line instead of a sigh.',
         'Start notes with a balanced onset (air and sound together), not an "h".',
         'Brighten the vowel slightly (toward "eh" or "ih") so the tone has more of a core.',
@@ -179,6 +233,22 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
       },
       exercises: ['balanced-onsets', 'nay-bright-mix', 'straw-phonation-slides'],
       singerExercises: { jalen: ['soul-falsetto-forward'] },
+      // With phrase starts that need more air, or airy starts that already match the singer, a light
+      // "h" in front of the first word is fine: only the rest of the note needs to clear up.
+      conflicts: [
+        {
+          key: 'softOnsetRatio',
+          dir: 'more',
+          drop: /not an "h"/,
+          instead: ['Keep any "h" to the very start of a phrase; once the note is going, the tone itself should be clear.'],
+        },
+        {
+          key: 'softOnsetRatio',
+          dir: 'ok',
+          drop: /not an "h"/,
+          instead: ['Keep any "h" to the very start of a phrase; once the note is going, the tone itself should be clear.'],
+        },
+      ],
     },
   },
   brightness: {
@@ -198,7 +268,7 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
       singerExercises: { jalen: ['soul-falsetto-forward'] },
     },
     less: {
-      title: 'Warm up and round the tone',
+      title: 'Make the tone warmer and rounder',
       cues: [
         'Round the mouth shape a little, as if there were an "oh" inside the "ah".',
         'Release the smile and the tongue, and let the soft palate lift as at the start of a yawn, without pressing the larynx down.',
@@ -276,7 +346,7 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
     more: {
       title: 'Free up a quicker vibrato',
       cues: [
-        'A slow, wide wobble often comes from too much weight: lighten the note and bring the volume down a little.',
+        'A slow wobble often comes from too much weight: lighten the note and bring the volume down a little.',
         'Do the pulse drill: begin with slow half-step pulses and speed them up gradually to about five or six a second.',
         'Keep the jaw and tongue still. The vibrato should come from a free, balanced voice, not from movement.',
       ],
@@ -328,8 +398,8 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
       title: 'Carry more speech-like strength up top',
       cues: [
         'Speak the high line at a lively speaking pitch first, then sing it with the same connection.',
-        'Use "nay" or "gug" to keep the folds closing as you climb, instead of flipping to a light, airy falsetto.',
-        'Keep the volume moderate: chest colour comes from firmer closure and a brighter vowel, not from shouting.',
+        'Use "nay" or "gug" to keep your vocal folds meeting firmly as you climb, instead of flipping to a light, airy falsetto.',
+        'Keep the volume moderate: chest colour comes from vocal folds that meet a little more firmly and a brighter vowel, not from shouting.',
         'Only go as high as stays comfortable. If it pinches, back off or move the song down.',
       ],
       singerCues: {
@@ -385,6 +455,16 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
       },
       exercises: ['falsetto-flip-leap', 'octave-slide-wee-oo', 'airy-falsetto-float'],
       singerExercises: { jalen: ['soul-falsetto-forward'] },
+      // When flips should not increase (breaks to smooth out, or a target without flips), the release
+      // is a smooth slide, not a practised flip.
+      conflicts: [
+        {
+          key: 'flipsPerMinute',
+          dir: 'less',
+          drop: /deliberate flips/,
+          instead: ['Slide up into falsetto on "hoo" without a break, so the top notes release smoothly rather than flipping.'],
+        },
+      ],
     },
   },
   headInUpperRange: {
@@ -407,7 +487,7 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
       title: 'Connect falsetto back into your mix',
       cues: [
         'Bridge down from falsetto into mix on "hoo" so the two registers meet.',
-        'Use "gug" or "nay" to add a little fold closure without pushing.',
+        'Use "gug" or "nay" to help your vocal folds meet a little more fully, without pushing.',
         'Keep the vowel narrow and the volume moderate so high notes stay connected instead of flipping.',
       ],
       singerCues: {
@@ -510,7 +590,19 @@ export const FIXES: Record<StyleKey, Record<FixDirection, FixCell>> = {
       singerCues: {
         daniel: ['Begin each phrase on a hushed "h", as if the words start mid-breath, the way Daniel does.'],
       },
-      exercises: ['aspirate-onsets', 'airy-falsetto-float'],
+      exercises: ['aspirate-onsets', 'airy-falsetto-float', 'messa-di-voce'],
+      // With a tone that needs to be clearer, only the start of the phrase gets the air.
+      conflicts: [
+        {
+          key: 'breathiness',
+          dir: 'less',
+          drop: /"h"|Sigh into/,
+          instead: [
+            'Let only the first word of a phrase start on a light "h", then keep the tone itself clear.',
+            'Practise just the start: a quiet "h" into the first vowel, then a clear, focused note straight after it.',
+          ],
+        },
+      ],
     },
     less: {
       title: 'Start phrases cleanly',
@@ -678,6 +770,156 @@ export const WHY: Record<StyleKey, Record<Flavour, string>> = {
   },
 };
 
+/**
+ * Reasons for the direction a WHY cell does not argue for. Most WHY texts describe where the singer
+ * sits, which argues for moving one way (Daniel is airy, so "more air"); when the take is past the
+ * singer the other way, the item needs the reason the singer stops short of that too.
+ */
+export const WHY_DIR: Partial<Record<StyleKey, Partial<Record<Flavour, Partial<Record<FixDirection, string>>>>>> = {
+  breathiness: {
+    shawn: {
+      more: 'Shawn\'s tone is clear but never pressed: his quiet verses and falsetto carry a little air, and a tone with none at all sounds harder than his.',
+    },
+    daniel: {
+      less: 'Daniel\'s tone is airy, but it never turns into a whisper: under the air there is always a clear, pitched core, and too much air hides it.',
+    },
+    jalen: {
+      more: 'Jalen\'s falsetto is clear but never hard or pressed: a touch of air is what keeps it sweet.',
+    },
+  },
+  brightness: {
+    shawn: {
+      less: 'Shawn\'s tone is bright but not piercing, over a warm lower range; past a point, brightness turns edgy instead of forward.',
+    },
+    daniel: {
+      more: 'Daniel\'s midrange is warm, but not muffled: a little forward ring keeps his soft tone clear instead of dull.',
+    },
+    jalen: {
+      less: 'Jalen\'s falsetto rings, but it stays sweet rather than sharp; a very bright, twangy tone sounds more like pop belting than \'60s soul.',
+    },
+  },
+  vibratoPresence: {
+    daniel: {
+      more: 'Daniel uses vibrato sparingly, but not never: a small vibrato arriving late on long notes keeps his held notes from sounding stiff.',
+    },
+    jalen: {
+      less: 'Jalen\'s tremble is slight and kept for held falsetto notes; vibrato on every note sounds more operatic than \'60s soul.',
+    },
+  },
+  vibratoRateHz: {
+    daniel: {
+      more: 'Daniel\'s occasional vibrato is gentle and easy; a very slow wobble sounds heavy and theatrical rather than relaxed.',
+    },
+    jalen: {
+      less: 'Jalen\'s vibrato is quick but relaxed; a fast, tight flutter sounds nervy rather than shimmering.',
+    },
+  },
+  vibratoExtentCents: {
+    shawn: {
+      more: 'Shawn\'s vibrato is fairly narrow, but you can hear it at the ends of long notes; a very tight flutter sounds nervy rather than relaxed.',
+    },
+    daniel: {
+      more: 'Daniel\'s vibrato is small but relaxed; a very tight, fast flutter sounds tense against his easy delivery.',
+    },
+    jalen: {
+      more: 'Jalen\'s held-note tremble is narrow but audible; a flutter too small to hear loses the shimmer of his held notes.',
+    },
+  },
+  chestInUpperRange: {
+    shawn: {
+      less: 'Shawn\'s choruses keep a chest colour, but it is lightened into a mix rather than shouted; carrying full chest weight up is what strains the voice.',
+    },
+    daniel: {
+      more: 'Daniel lightens as he climbs, but his upper-middle notes keep a little chest colour, so the line doesn\'t turn thin the moment it passes the passaggio.',
+    },
+    jalen: {
+      more: 'Jalen\'s high lines are mostly falsetto, but he saves a reedy chest sound for the climax; without it there is no contrast when the song peaks.',
+    },
+    generic: {
+      more: 'How much chest weight you carry above the passaggio decides whether high notes sound belted, mixed or light; with too little, they can sound thin and disconnected from the rest of the voice.',
+    },
+  },
+  mixInUpperRange: {
+    shawn: {
+      less: 'Shawn\'s choruses are chest-coloured, and he uses real falsetto for contrast; a lot of in-between mix up high sounds softer and less defined than his sound.',
+    },
+    daniel: {
+      less: 'Daniel\'s mix is only a bridge: above it he floats into falsetto, so holding the high notes in a mix sounds heavier than his hooks.',
+    },
+    jalen: {
+      more: 'Jalen tends to commit to falsetto, but the notes around the passaggio still pass through a light mix; without it, the switch into falsetto becomes a bump.',
+    },
+    generic: {
+      less: 'How much of the top goes into mix, and how much is released into a light falsetto or head voice, is a style choice; holding every high note in a mix can sound effortful where a release would float.',
+    },
+  },
+  headInUpperRange: {
+    shawn: {
+      more: 'Shawn saves falsetto for contrast, on tags and final choruses; with none at all, those moments lose their lift.',
+    },
+    daniel: {
+      less: 'Daniel floats only the hooks and peaks into falsetto; the rest of his upper-middle line sits in a soft, connected mix, so a take that is mostly falsetto loses his warm middle.',
+    },
+    jalen: {
+      less: 'Jalen\'s falsetto is supported and connected: he moves into a fuller chest-mix for climaxes, so a take that never leaves the light register misses that contrast.',
+    },
+  },
+  loudnessClimbDbPerSemitone: {
+    shawn: {
+      more: 'Shawn\'s choruses lift as they climb: the high notes gain intensity from a brighter vowel and more energy, so a line that fades as it rises loses that build.',
+    },
+    daniel: {
+      more: 'Daniel\'s high notes stay level rather than fading away: even his softest falsetto keeps enough breath energy to carry.',
+    },
+    jalen: {
+      more: 'Jalen\'s falsetto lines stay even as they rise: they don\'t fade as they climb, so the top of a phrase carries as well as the bottom.',
+    },
+    generic: {
+      more: 'High notes that fade as you climb often mean the breath energy drops off at the passaggio; a steady, easy intensity keeps the top of the phrase connected to the rest.',
+    },
+  },
+  agility: {
+    shawn: {
+      more: 'Shawn is not mainly a runs singer, but short fills and scoops at phrase ends are part of his phrasing.',
+    },
+    jalen: {
+      more: 'Jalen\'s ornaments are small (scoops, slides and short turns rather than long runs), but those small turns are part of his phrasing.',
+    },
+  },
+  dynamicRangeDb: {
+    shawn: {
+      less: 'Shawn builds from soft verses to fuller choruses, but within a section his level stays steady; very wide swings sound less controlled than his builds.',
+    },
+    daniel: {
+      more: 'Daniel keeps most of a song quiet, but his gospel-style swells at the climax need room to grow; a take that never changes level misses them.',
+    },
+  },
+  softOnsetRatio: {
+    shawn: {
+      more: 'Shawn\'s verse onsets are speech-like but soft: some phrases start on a little air, which keeps his quiet verses intimate rather than clipped.',
+    },
+    daniel: {
+      less: 'Daniel starts many phrases on a soft, breathy onset, but not every one; if every phrase sighs in, the words lose their shape.',
+    },
+    jalen: {
+      more: 'Jalen\'s falsetto entries are gentle: some phrases start on a soft breath, which keeps the falsetto sweet rather than hard.',
+    },
+  },
+  flipsPerMinute: {
+    daniel: {
+      less: 'Daniel flips into falsetto on purpose, on hooks and emotional peaks; flips anywhere else sound like breaks rather than style.',
+    },
+    jalen: {
+      more: 'Jalen mostly stays in falsetto, but his switches out of it for a climax and back are deliberate; a take with none misses that contrast.',
+    },
+  },
+};
+
+/** Why the item matters, argued in the direction the item asks for. */
+export function whyFor(key: StyleKey, flavour: Flavour, direction: FixDirection): string {
+  return WHY_DIR[key]?.[flavour]?.[direction] ?? WHY[key][flavour];
+}
+
 // ---------------------------------------------------------------------------------------------
 // "What we heard" and strengths
 
@@ -714,7 +956,10 @@ function heardText(d: DimensionResult, profile: SingerProfile, analysis: VoiceAn
   const t = d.target;
   const target = profile.source === 'reference' ? 'The reference target' : `${whoseOf(profile)} target`;
   const ideal = formatStyleValue(key, t.ideal);
-  const onStyle = `${target} is about ${ideal}, with ${rangeOf(key, t)} counting as on-style.`;
+  const onStyle =
+    noneTarget(key, t)
+      ? `${capitalize(whoOf(profile))} has ${NONE_WORDS[key]}; up to ${formatStyleValue(key, t.high)} counts as on-style.`
+      : `${target} is about ${ideal}, with ${rangeOf(key, t)} counting as on-style.`;
   const passaggio = midiToNoteName(analysis.passaggio.lowMidi);
   const above = passaggio ? `Above your passaggio (from ${passaggio})` : 'Above your passaggio';
   switch (key) {
@@ -769,7 +1014,8 @@ function strengthText(d: DimensionResult, profile: SingerProfile): string {
     case 'brightness':
       return `Your tone colour is ${desc}, close to where ${whoseOf(profile)} sits.`;
     case 'rasp':
-      return `Your tone is ${desc}, in line with ${who}.`;
+      // Named as grit, so it can't read as "clean" praise next to an item asking for more air.
+      return `Your tone has ${v < 0.15 ? 'no grit' : v < 0.2 ? 'almost no grit' : 'only a little grit'} (rasp ${fixed(v, 2)}), in line with ${who}.`;
     case 'vibratoPresence':
       return `You use vibrato on held notes about as often as ${who} (${percent(v)}).`;
     case 'vibratoRateHz':
@@ -797,9 +1043,21 @@ function strengthText(d: DimensionResult, profile: SingerProfile): string {
   }
 }
 
+/**
+ * A flip rate that "fits" only on paper: no flips at all (the band reaches zero for a singer who
+ * flips about once a song), or a rate outside the profile's own band that counts as on-style only
+ * because short takes get a wider one. Not worth praising, nor building a flip move on.
+ */
+function isHollowMatch(d: DimensionResult, profile: SingerProfile): boolean {
+  if (d.key !== 'flipsPerMinute' || d.direction !== 'ok') return false;
+  const v = d.value ?? 0;
+  const own = profile.targets.flipsPerMinute;
+  return v <= 0.05 || (own !== undefined && (v < Math.min(own.low, own.high) || v > Math.max(own.low, own.high)));
+}
+
 function pickStrengths(measured: DimensionResult[], profile: SingerProfile, light: LightWord): string[] {
   const good = measured
-    .filter((d) => d.score >= STRENGTH_SCORE)
+    .filter((d) => d.score >= STRENGTH_SCORE && !isHollowMatch(d, profile))
     .sort((a, b) => b.target.weight - a.target.weight || b.score - a.score)
     .slice(0, 4);
   if (good.length) return good.map((d) => withLightWord(strengthText(d, profile), light));
@@ -837,7 +1095,8 @@ const EXERCISE_PUSHES: Record<string, Partial<Record<StyleKey, FixDirection>>> =
   'falsetto-flip-leap': { flipsPerMinute: 'more' },
   'blended-leap': { flipsPerMinute: 'less' },
   'airy-falsetto-float': { breathiness: 'more' },
-  'aspirate-onsets': { softOnsetRatio: 'more' },
+  'aspirate-onsets': { softOnsetRatio: 'more', breathiness: 'more' },
+  'balanced-onsets': { softOnsetRatio: 'less' },
 };
 
 function pullsAgainst(exerciseId: string, needs: Map<StyleKey, Direction>): boolean {
@@ -859,22 +1118,56 @@ function dimensionItem(
   light: LightWord,
   needs: Map<StyleKey, Direction>,
 ): CoachingItem {
-  const cell = FIXES[d.key][direction];
-  const singer = (cell.singerCues?.[flavour] ?? []).slice(0, 2);
-  const howToFix = unique([...singer, ...cell.cues.map((c) => withLightWord(c, light))]).slice(0, 5);
-  const candidates = [...(cell.singerExercises?.[flavour] ?? []), ...cell.exercises];
-  const compatible = candidates.filter((id) => !pullsAgainst(id, needs));
+  // A reference clip is worded from the clip itself: the base singer's traits can contradict the
+  // clip's targets (Shawn's "little air" next to a clip that asks for more), so the base singer's cues
+  // and reasons stay out, and the reason points at the recording.
+  const reference = profile.source === 'reference';
+  const textFlavour: Flavour = reference ? 'generic' : flavour;
+  const noRuns = d.key === 'agility' && direction === 'less' && noneTarget(d.key, d.target);
+  const cell = noRuns ? noRunsCell(profile) : FIXES[d.key][direction];
+  const conflicts = (cell.conflicts ?? []).filter((c) => needs.get(c.key) === c.dir);
+  const keep = (cue: string) => !conflicts.some((c) => c.drop.test(cue));
+  const singer = (cell.singerCues?.[textFlavour] ?? []).filter(keep).slice(0, 2);
+  const general = cell.cues.filter(keep);
+  const instead = conflicts.flatMap((c) => c.instead);
+  const howToFix = unique([...singer, ...instead, ...general].map((c) => withLightWord(c, light))).slice(0, 5);
+  const candidates = [...(cell.singerExercises?.[textFlavour] ?? []), ...cell.exercises];
+  const conflictKeys = new Set(conflicts.map((c) => c.key));
+  const touchesConflict = (id: string) => Object.keys(EXERCISE_PUSHES[id] ?? {}).some((k) => conflictKeys.has(k as StyleKey));
+  const compatible = candidates.filter((id) => !pullsAgainst(id, needs) && !touchesConflict(id));
   const exerciseIds = validExercises(compatible.length ? compatible : candidates, 3);
-  const why = WHY[d.key][flavour];
+  let why: string;
+  if (noRuns) {
+    why = `${capitalize(whoOf(profile))} has no runs, so any you add make the take sound like a different arrangement of the song rather than a closer match.`;
+  } else {
+    const base = whyFor(d.key, textFlavour, direction);
+    why = textFlavour === 'generic' ? withLightWord(base, light) : base;
+    if (reference) {
+      why += ` The reference clip measured about ${formatStyleValue(d.key, d.target.ideal)}, so matching it is part of sounding like that recording.`;
+    }
+  }
   return {
     id: `${d.key}-${direction}`,
     priority,
     dimension: d.key,
     title: withLightWord(cell.title, light),
     whatWeHeard: heardText(d, profile, analysis, light),
-    whyItMatters: flavour === 'generic' ? withLightWord(why, light) : why,
+    whyItMatters: why,
     howToFix,
     exerciseIds,
+  };
+}
+
+/** "Slow your runs down" can't reach a target without runs; this cell asks for none instead. */
+function noRunsCell(profile: SingerProfile): FixCell {
+  return {
+    title: 'Leave the runs out',
+    cues: [
+      `Sing the melody straight; ${whoOf(profile)} has no runs, so save ornaments for another song.`,
+      'Hold each note for its full length instead of filling the gaps between notes with extra ones.',
+      'If a run slips in, sing that phrase slowly on one vowel until the plain melody feels natural.',
+    ],
+    exercises: ['drone-tuning'],
   };
 }
 
@@ -884,7 +1177,7 @@ const ISSUE_CUES: [AnalysisIssue, string][] = [
     'accompaniment',
     'Record your voice on its own: sing a cappella, or play the backing track through headphones. In a song mix the analysis can follow the bass or the band instead of you.',
   ],
-  ['too-little-singing', 'Sing for at least 20 to 30 seconds, with a few held notes and at least one phrase above your passaggio.'],
+  ['too-little-singing', 'Sing for at least 10 seconds, with a few held notes and at least one phrase above your passaggio.'],
   ['speech-like', 'Sing a melody with a few held notes of half a second or more; short, spoken syllables don\'t show your singing tone.'],
   [
     'clipping',
@@ -895,7 +1188,10 @@ const ISSUE_CUES: [AnalysisIssue, string][] = [
   ['trimmed', 'Keep takes under 5 minutes: only the first 5 minutes are analysed.'],
 ];
 
-/** Plain-language summary of an issue, for a take that carries the code without warning text. */
+/**
+ * Plain-language summary of each issue. The recording item uses these rather than the warnings,
+ * which the Results page already shows in full above the plan.
+ */
 const ISSUE_SUMMARY: Record<AnalysisIssue, string> = {
   accompaniment: 'It sounds like singing over instruments.',
   'too-little-singing': 'There was very little singing in it.',
@@ -922,6 +1218,18 @@ function seconds(sec: number): string {
   return `${s < 10 ? fixed(s, 1) : Math.round(s)} s`;
 }
 
+/** Below this much voiced sound, copy says "no singing" instead of "about 0.0 s of singing". */
+const NO_SINGING_SEC = 0.5;
+
+function issueSummary(issue: AnalysisIssue, analysis: VoiceAnalysis): string {
+  if (issue === 'too-little-singing') {
+    return analysis.voicedSec < NO_SINGING_SEC
+      ? 'We couldn\'t hear any singing in it.'
+      : `There was very little singing in it (about ${seconds(analysis.voicedSec)}).`;
+  }
+  return ISSUE_SUMMARY[issue];
+}
+
 function recordingItem(analysis: VoiceAnalysis, comparison: Comparison, scoreable: boolean): CoachingItem {
   const issues = issuesOf(analysis);
   // With instruments in the take, "background noise" is the band: the accompaniment cue covers it.
@@ -934,15 +1242,16 @@ function recordingItem(analysis: VoiceAnalysis, comparison: Comparison, scoreabl
     if (issues.includes('accompaniment') && cue === RECORDING_FALLBACK_CUES[0]) continue;
     cues.push(cue);
   }
-  const flagged = analysis.warnings.length
-    ? `The recording itself was flagged: ${analysis.warnings.join(' ')}`
-    : issues.length
-      ? `The recording itself was flagged: ${issues.map((i) => ISSUE_SUMMARY[i]).join(' ')}`
+  // A short summary: the full warnings (with their numbers) are already on the page above the plan.
+  const flagged = issues.length
+    ? `The recording itself was flagged: ${lowerFirst(issues.map((i) => issueSummary(i, analysis)).join(' '))}`
+    : analysis.warnings.length
+      ? `The recording itself was flagged: ${analysis.warnings.join(' ')}`
       : '';
   const measured = comparison.dimensions.filter((d) => d.value !== null).length;
   const counted =
-    `Only ${measured} of the ${comparison.dimensions.length} style measures could be taken from this take ` +
-    `(about ${seconds(analysis.voicedSec)} of singing).`;
+    `Only ${measured} of the ${comparison.dimensions.length} style measures could be taken from this take` +
+    (analysis.voicedSec < NO_SINGING_SEC ? '.' : ` (about ${seconds(analysis.voicedSec)} of singing).`);
   let title = 'Fix the recording first';
   let why =
     'Breathiness, brightness, rasp and the register estimates all come from fine detail in the sound, so noise, ' +
@@ -982,16 +1291,21 @@ function rangeItem(comparison: Comparison, profile: SingerProfile, analysis: Voi
   const lo = midiToNoteName(analysis.passaggio.lowMidi);
   const hi = midiToNoteName(analysis.passaggio.highMidi);
   const zone = lo && hi ? ` (around ${lo}–${hi})` : '';
-  const who = whoOf(builtinBaseOf(profile) ?? profile);
+  // A reference clip is named as such, not after the builtin singer its profile borrowed from.
+  const { songs, whose } = keyAdviceNames(profile);
+  const settings =
+    profile.source === 'reference'
+      ? 'This advice follows your voice type in Settings and the artist\'s voice type set under "Analyse the reference as", not this one take. If it feels wrong, check those first.'
+      : 'This advice follows the voice type in Settings, not this one take. If it feels wrong for your voice, check that setting first.';
   return {
     id: 'range',
     priority: 2,
     dimension: 'range',
-    title: `Try ${who}'s songs about ${semis} ${t < 0 ? 'lower' : 'higher'}`,
+    title: `Try ${songs} about ${semis} ${t < 0 ? 'lower' : 'higher'}`,
     whatWeHeard: comparison.rangeNote,
     whyItMatters: withLightWord(
-      `Your voice type puts your passaggio about ${semis} ${t < 0 ? 'below' : 'above'} ${who}'s. Moving the key by that much lets ` +
-        `the phrases land in the same part of your voice as they do in ${who}'s, so the mix and falsetto moments line up and ` +
+      `Your voice type puts your passaggio about ${semis} ${t < 0 ? 'below' : 'above'} ${whose}. Moving the key by that much lets ` +
+        `the phrases land in the same part of your voice as they do in ${whose}, so the mix and falsetto moments line up and ` +
         'the high notes need no extra push.',
       light,
     ),
@@ -1000,7 +1314,7 @@ function rangeItem(comparison: Comparison, profile: SingerProfile, analysis: Voi
       `Check the new key by ear: the highest chorus notes should sit a little above your passaggio${zone}, not far above it. ` +
         'If they still feel effortful, go down one more semitone.',
       'Record the same section in the new key and compare the scores with this take.',
-      'This advice follows the voice type in Settings, not this one take. If it feels wrong for your voice, check that setting first.',
+      settings,
     ],
     exerciseIds: validExercises(['lip-trill-siren'], 1),
   };
@@ -1024,17 +1338,25 @@ function signatureFocus(profile: SingerProfile, byKey: Map<StyleKey, DimensionRe
   const candidates = profile.signatureMoves.map((move, index) => {
     const wants = MOVE_FOCUS[move.id] ?? {};
     const keys = Object.keys(wants) as StyleKey[];
-    const measured = keys
-      .map((k) => byKey.get(k))
-      .filter((d): d is DimensionResult => d !== undefined && d.value !== null && Number.isFinite(d.value) && d.direction !== 'unknown');
+    // A hollow match (no flips at all "fitting" a singer who flips once a song) is not something to
+    // build a flip move on, so it counts as unmeasured here.
+    const dims = keys.map((k) => byKey.get(k)).filter((d): d is DimensionResult => d !== undefined);
+    const measured = dims.filter(
+      (d) => d.value !== null && Number.isFinite(d.value) && d.direction !== 'unknown' && !isHollowMatch(d, profile),
+    );
+    // A move that adds something the target doesn't do at all (chest or flips for a reference clip
+    // that has none) goes against the target whatever the take measured, unless it also fixes a gap.
+    const absent = dims.filter((d) => lacksTrait(d, wants[d.key]));
     // A move suits a dimension that is on-style (it builds on it) or that needs to go the way the move pushes it.
-    const aligned = measured.filter((d) => d.direction === 'ok' || (d.direction === wants[d.key] && !isUnsafeMore(d)));
+    const aligned = measured.filter(
+      (d) => !absent.includes(d) && (d.direction === 'ok' || (d.direction === wants[d.key] && !isUnsafeMore(d))),
+    );
     const contrary = measured.filter((d) => !aligned.includes(d));
     const helpsGap = aligned.some((d) => d.score < ITEM_SCORE_THRESHOLD);
     const bigContrary = contrary.some((d) => d.score < ITEM_SCORE_THRESHOLD);
     const tier: MoveTier =
-      keys.length === 0 ? 3 : helpsGap ? 0 : measured.length === 0 ? 2 : aligned.length > 0 && !bigContrary ? 1 : 4;
-    return { move, index, tier, aligned, contrary };
+      keys.length === 0 ? 3 : helpsGap ? 0 : absent.length ? 4 : measured.length === 0 ? 2 : aligned.length > 0 && !bigContrary ? 1 : 4;
+    return { move, index, tier, aligned, contrary: absent.length ? absent : contrary };
   });
   const used = new Set<StyleKey>();
   const out: CoachingPlan['signatureFocus'] = [];
@@ -1072,12 +1394,12 @@ function moveHint(
   profile: SingerProfile,
   light: LightWord,
 ): string {
-  const firstStep = move.howTo[0] ? ` Start here: ${lowerFirst(move.howTo[0])}` : '';
+  const firstStep = move.howTo[0] ? ` Start here: ${lowerFirst(withLightWord(move.howTo[0], light))}` : '';
   if (!mapped) return `The app doesn't measure this, so judge it by ear against the original.${firstStep}`;
   if (!focus) return `This take didn't give us enough to measure what this move trains, so record a section built around it.${firstStep}`;
   if (focus.direction === 'more' || focus.direction === 'less') {
     const goal = lowerFirst(withLightWord(FIXES[focus.key][focus.direction].title, light));
-    const now = `${takeValue(focus, light)} vs about ${formatStyleValue(focus.key, focus.target.ideal)} for ${whoOf(profile)}`;
+    const now = `${versusTarget(focus, takeValue(focus, light))} for ${whoOf(profile)}`;
     return `${capitalize(shortLabel(focus.key, light))} in this take: ${now}. Use this move to ${goal}.${firstStep}`;
   }
   const verb = PLURAL_LABELS.has(focus.key) ? 'fit' : 'fits';
@@ -1085,12 +1407,32 @@ function moveHint(
   return `Your ${shortLabel(focus.key, light)} already ${verb} ${whoseOf(profile)} style (${numbers}), so this is a good next layer of the sound.${firstStep}`;
 }
 
+/** Share- and count-like measures where a target of about zero means the singer doesn't do it at all. */
+const ABSENT_KEYS = new Set<StyleKey>([
+  'chestInUpperRange',
+  'mixInUpperRange',
+  'headInUpperRange',
+  'vibratoPresence',
+  'agility',
+  'softOnsetRatio',
+  'flipsPerMinute',
+]);
+
+/** True when a move pushes `d` up but the target has none of it (a reference clip without flips or chest). */
+function lacksTrait(d: DimensionResult, push: FixDirection | undefined): boolean {
+  return push === 'more' && ABSENT_KEYS.has(d.key) && d.target.ideal <= 0.05;
+}
+
 /** Hint for a move that would take the take further from the target (or toward pushing). */
 function holdBackHint(contrary: DimensionResult[], profile: SingerProfile, light: LightWord): string {
   const d = [...contrary].sort((a, b) => gapOf(b) - gapOf(a))[0];
   if (!d) return 'Save this move for later: this take is already past what it trains.';
+  if (d.target.ideal <= 0.05 && ABSENT_KEYS.has(d.key) && d.direction !== 'more') {
+    const none = NONE_WORDS[d.key] ?? `almost no ${shortLabel(d.key, light)} (about ${formatStyleValue(d.key, d.target.ideal)})`;
+    return `${capitalize(whoOf(profile))} has ${none}, and this move adds ${d.key in NONE_WORDS ? 'them' : 'it'}, so save it for another song.`;
+  }
   const label = capitalize(shortLabel(d.key, light));
-  const numbers = `${takeValue(d, light)} vs about ${formatStyleValue(d.key, d.target.ideal)}`;
+  const numbers = versusTarget(d, takeValue(d, light));
   if (isUnsafeMore(d)) {
     return `${label} in this take is below ${whoseOf(profile)} (${numbers}), but getting closer would mean pushing, so leave this move for now.`;
   }
@@ -1106,17 +1448,18 @@ const GENERAL_HEALTH_NOTES = [
     'your voice, and get it checked by a laryngologist (an ENT voice specialist) within a few days rather than waiting for it to pass.',
 ];
 
-function healthNotes(analysis: VoiceAnalysis, flavour: Flavour): string[] {
+function healthNotes(analysis: VoiceAnalysis, flavour: Flavour, speechLike: boolean): string[] {
   const s = analysis.style;
   const notes = [...GENERAL_HEALTH_NOTES];
-  if (s.loudnessClimbDbPerSemitone !== null && s.loudnessClimbDbPerSemitone > PUSHING_CLIMB_DB) {
+  // The climb and register readings need sung notes above the passaggio; speech doesn't have them.
+  if (!speechLike && s.loudnessClimbDbPerSemitone !== null && s.loudnessClimbDbPerSemitone > PUSHING_CLIMB_DB) {
     notes.push(
       `Your volume rose about ${fixed(s.loudnessClimbDbPerSemitone, 1)} dB per semitone above the passaggio, which usually means ` +
         'chest weight is being pushed up. Lighten the note and narrow the vowel rather than singing harder, and if the top ' +
         'notes only work loud, move the song down a few semitones.',
     );
   }
-  if (s.chestInUpperRange !== null && s.chestInUpperRange > HEAVY_CHEST_SHARE) {
+  if (!speechLike && s.chestInUpperRange !== null && s.chestInUpperRange > HEAVY_CHEST_SHARE) {
     notes.push(
       `About ${percent(s.chestInUpperRange)} of your singing above the passaggio read as chest. Carrying heavy chest up for long ` +
         'stretches is tiring, so alternate with lip-trill sirens and lighter takes, and stop before your voice feels tired.',
@@ -1169,14 +1512,21 @@ function headline(
   light: LightWord,
 ): string {
   const target = profile.source === 'reference' ? 'the reference clip' : profile.name;
-  const sentences = [`Overall match with ${target}: ${comparison.overall}/100, ${verdict(comparison.overall)}.`];
+  const issues = issuesOf(analysis);
+  const speechLike = issues.includes('speech-like');
+  // On speech the score is a rough guide at best, so it gets the caveat instead of a verdict.
+  const sentences = [
+    speechLike
+      ? `Overall match with ${target}: ${comparison.overall}/100, but this take sounded mostly like short, speech-like syllables, so treat these numbers with caution.`
+      : `Overall match with ${target}: ${comparison.overall}/100, ${verdict(comparison.overall)}.`,
+  ];
   const close = measured
-    .filter((d) => d.score >= STRENGTH_SCORE)
+    .filter((d) => d.score >= STRENGTH_SCORE && !isHollowMatch(d, profile))
     .sort((a, b) => b.target.weight - a.target.weight)
     .slice(0, 2);
   if (gaps.length) {
     const top = gaps[0];
-    const numbers = `${compactValue(top.key, top.value ?? NaN)} vs about ${formatStyleValue(top.key, top.target.ideal)}`;
+    const numbers = versusTarget(top, compactValue(top.key, top.value ?? NaN));
     const rest = gaps.length > 1 ? `, followed by ${shortLabel(gaps[1].key, light)}` : '';
     const lead = close.length
       ? `Your ${joinLabels(close, light)} already ${close.length > 1 || PLURAL_LABELS.has(close[0].key) ? 'sit' : 'sits'} in ${whoseOf(profile)} zone; the biggest gap is`
@@ -1187,18 +1537,16 @@ function headline(
       `Everything else is close to ${whoseOf(profile)} targets; we won't coach you toward more ${joinLabels(held, light)}, ` +
         'because getting closer there would mean pushing.',
     );
-  } else {
+  } else if (!speechLike) {
     sentences.push(`Every measured dimension is close to ${whoseOf(profile)} targets, so the signature moves below are your next step.`);
   }
-  const issues = issuesOf(analysis);
   const t = comparison.suggestedTransposeSemitones;
-  if (issues.includes('speech-like')) {
-    sentences.push('This take sounded mostly like short, speech-like syllables, so treat these numbers with caution and start with the recording tips.');
+  if (speechLike) {
+    sentences.push('Start with the recording tips: sing a melody with a few held notes.');
   } else if (analysis.warnings.length || issues.length) {
     sentences.push('Some numbers may be skewed by the recording itself, so start with the recording tips.');
   } else if (singerPassaggioLow(profile) !== null && Math.abs(t) >= RANGE_ITEM_SEMITONES) {
-    const who = whoOf(builtinBaseOf(profile) ?? profile);
-    sentences.push(`Based on your voice type, also try ${who}'s songs about ${Math.abs(t)} semitones ${t < 0 ? 'lower' : 'higher'}.`);
+    sentences.push(`Based on your voice type, also try ${keyAdviceNames(profile).songs} about ${Math.abs(t)} semitones ${t < 0 ? 'lower' : 'higher'}.`);
   }
   return sentences.join(' ');
 }
@@ -1210,7 +1558,7 @@ function recordingNextTake(analysis: VoiceAnalysis, scoreable: boolean): string 
     return 'Record the same section with your voice alone (a cappella, or with the backing track in headphones), so the next analysis measures you, not the band.';
   }
   if (!scoreable || issues.includes('too-little-singing')) {
-    return 'Record 20 to 30 seconds of one song, a verse or chorus with a few held notes and at least one phrase above your passaggio, so the next take can be scored.';
+    return 'Record a verse or chorus of one song, at least 10 seconds of singing with a few held notes and at least one phrase above your passaggio, so the next take can be scored.';
   }
   if (issues.includes('speech-like')) {
     return 'Record a sung phrase or two with a few held notes, so the next analysis can measure your singing tone.';
@@ -1224,7 +1572,16 @@ function recordingNextTake(analysis: VoiceAnalysis, scoreable: boolean): string 
   return 'Re-record the same section in a quieter spot with the level set a little lower, so the next analysis can be trusted.';
 }
 
-function nextTake(items: CoachingItem[], profile: SingerProfile, analysis: VoiceAnalysis): string {
+/**
+ * A drill's name for running text. Names are fixed (they match the Practice page), so for a higher
+ * voice a "falsetto" drill is quoted and the register named separately rather than renamed.
+ */
+function drillName(name: string, light: LightWord): string {
+  if (light === 'head voice' && /falsetto/i.test(name)) return `the "${name}" drill (sung in head voice)`;
+  return nameInSentence(name);
+}
+
+function nextTake(items: CoachingItem[], profile: SingerProfile, analysis: VoiceAnalysis, light: LightWord): string {
   const first = items[0];
   if (!first) {
     const move = profile.signatureMoves[0];
@@ -1235,7 +1592,7 @@ function nextTake(items: CoachingItem[], profile: SingerProfile, analysis: Voice
   if (first.dimension === 'recording') return recordingNextTake(analysis, true);
   const ex = first.exerciseIds.map((id) => getExercise(id)).find((e) => e !== undefined);
   const focus = `the same section again with one focus: ${lowerFirst(first.title)}.`;
-  return ex ? `After ${ex.durationMin} minutes of ${nameInSentence(ex.name)}, record ${focus}` : `Record ${focus}`;
+  return ex ? `After ${ex.durationMin} minutes of ${drillName(ex.name, light)}, record ${focus}` : `Record ${focus}`;
 }
 
 /**
@@ -1249,7 +1606,7 @@ function unscoreablePlan(analysis: VoiceAnalysis, comparison: Comparison, profil
   const target = profile.source === 'reference' ? 'the reference clip' : profile.name;
   const from = midiToNoteName(analysis.passaggio.lowMidi);
   const howTo =
-    'Record at least 20 to 30 seconds of singing, with some held notes and a phrase above your passaggio' +
+    'Record at least 10 seconds of singing, with some held notes and a phrase above your passaggio' +
     `${from ? ` (from ${from})` : ''}.`;
   let head: string;
   if (issues.includes('accompaniment')) {
@@ -1257,7 +1614,10 @@ function unscoreablePlan(analysis: VoiceAnalysis, comparison: Comparison, profil
       `This take sounds like singing over instruments, so we can't score it against ${target}: the analysis may be following ` +
       'the band or the bass instead of your voice. Record your voice on its own, a cappella or with the backing track in headphones.';
   } else if (issues.includes('too-little-singing')) {
-    head = `We couldn't hear enough singing in this take to compare it with ${target} (about ${seconds(analysis.voicedSec)} of singing). ${howTo}`;
+    head =
+      analysis.voicedSec < NO_SINGING_SEC
+        ? `We couldn't hear any singing in this take, so we can't compare it with ${target}. ${howTo}`
+        : `We couldn't hear enough singing in this take to compare it with ${target} (about ${seconds(analysis.voicedSec)} of singing). ${howTo}`;
   } else {
     const measured = comparison.dimensions.filter((d) => d.value !== null).length;
     head =
@@ -1317,9 +1677,17 @@ export function buildCoachingPlan(analysis: VoiceAnalysis, comparison: Compariso
   if (!isScoreable(analysis, comparison)) return unscoreablePlan(analysis, comparison, profile);
   const flavour = flavourOf(profile);
   const light = lightWordFor(analysis);
-  const measured = comparison.dimensions.filter((d) => d.value !== null && Number.isFinite(d.value) && d.direction !== 'unknown');
-  const byKey = new Map(comparison.dimensions.map((d) => [d.key, d]));
-  const needs = new Map<StyleKey, Direction>(comparison.dimensions.map((d) => [d.key, d.direction]));
+  // On a speech-like take only the tone measures mean anything; registers, flips, runs, vibrato and
+  // the rest need held, sung notes. The others are left out of items, strengths and move hints.
+  const speechLike = issuesOf(analysis).includes('speech-like');
+  const dimensions = comparison.dimensions.filter((d) => !speechLike || SPEECH_RELIABLE.has(d.key));
+  const measured = dimensions.filter((d) => d.value !== null && Number.isFinite(d.value) && d.direction !== 'unknown');
+  const byKey = new Map(dimensions.map((d) => [d.key, d]));
+  // What each dimension needs. Something the target doesn't do at all (flips or runs in a reference
+  // clip that has none) must not be pushed up either, so drills and cues that add it are left out.
+  const needs = new Map<StyleKey, Direction>(
+    dimensions.map((d) => [d.key, d.direction !== 'more' && lacksTrait(d, 'more') ? 'less' : d.direction]),
+  );
 
   const hasRecording = analysis.warnings.length > 0 || issuesOf(analysis).length > 0;
   const hasRange = singerPassaggioLow(profile) !== null && Math.abs(comparison.suggestedTransposeSemitones) >= RANGE_ITEM_SEMITONES;
@@ -1336,17 +1704,31 @@ export function buildCoachingPlan(analysis: VoiceAnalysis, comparison: Compariso
   // contradict the chest item (or coach toward chest weight the plan holds back), so it is dropped.
   const dirOf = (key: StyleKey): Direction | undefined => byKey.get(key)?.direction;
   const mixWantsChest = dirOf('chestInUpperRange') === 'more' && dirOf('headInUpperRange') !== 'more';
-  const gaps = outside.filter((d) => !isUnsafeMore(d) && !(d.key === 'mixInUpperRange' && d.direction === 'less' && mixWantsChest));
+  const gaps: DimensionResult[] = [];
+  for (const d of outside) {
+    if (isUnsafeMore(d) || (d.key === 'mixInUpperRange' && d.direction === 'less' && mixWantsChest)) continue;
+    // Two items that move the registers the same way would repeat each other: the bigger gap stays.
+    const group = REGISTER_GROUP[`${d.key}-${d.direction}`];
+    if (group && gaps.some((g) => REGISTER_GROUP[`${g.key}-${g.direction}`] === group)) continue;
+    gaps.push(d);
+  }
 
   const items: CoachingItem[] = [];
   if (hasRecording) items.push(recordingItem(analysis, comparison, true));
   gaps.slice(0, dimSlots).forEach((d, rank) => {
-    const priority: 1 | 2 | 3 = rank === 0 ? 1 : rank === 1 ? 2 : 3;
+    // On speech the recording is the only thing to work on first.
+    const priority: 1 | 2 | 3 = speechLike && hasRecording ? (rank === 0 ? 2 : 3) : rank === 0 ? 1 : rank === 1 ? 2 : 3;
     items.push(dimensionItem(d, d.direction as FixDirection, priority, profile, analysis, flavour, light, needs));
   });
   if (hasRange) items.push(rangeItem(comparison, profile, analysis, light));
   // Stable sort keeps the recording item ahead of an equal-priority dimension item.
   items.sort((a, b) => a.priority - b.priority);
+
+  // A plan that suggests a higher key must not also say "move the song down" without saying from
+  // where: those cues become relative to the suggested key.
+  const keyUp = comparison.suggestedTransposeSemitones > 0;
+  const rel = (text: string) => (keyUp ? relativeToSuggestedKey(text) : text);
+  for (const item of items) item.howToFix = item.howToFix.map(rel);
 
   return {
     profileId: profile.id,
@@ -1354,7 +1736,15 @@ export function buildCoachingPlan(analysis: VoiceAnalysis, comparison: Compariso
     strengths: pickStrengths(measured, profile, light),
     items,
     signatureFocus: signatureFocus(profile, byKey, light),
-    healthNotes: healthNotes(analysis, flavour),
-    nextTake: nextTake(items, profile, analysis),
+    healthNotes: healthNotes(analysis, profile.source === 'reference' ? 'generic' : flavour, speechLike).map(rel),
+    nextTake: nextTake(items, profile, analysis, light),
   };
+}
+
+/** Rewords "take the song lower" advice so it reads as lower than the suggested (higher) key. */
+function relativeToSuggestedKey(text: string): string {
+  return text
+    .replace('try the song a little lower.', 'try it a semitone or two below the suggested key.')
+    .replace('back off or move the song down.', 'back off or sing it a semitone or two below the suggested key.')
+    .replace('move the song down a few semitones.', 'sing it a few semitones below the suggested key.');
 }

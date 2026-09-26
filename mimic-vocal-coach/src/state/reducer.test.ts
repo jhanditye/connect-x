@@ -181,7 +181,9 @@ describe('reference clips', () => {
     state = reduce(state, { type: 'profile/select', id: 'jalen-ngonda' });
     const refAnalysis = makeFakeAnalysis({ breathiness: 0.7 });
     const s = reduce(state, { type: 'reference/analyzed', clip, analysis: refAnalysis, opts: referenceOptions(state) });
-    expect(deps.profileFromReference).toHaveBeenCalledWith(refAnalysis, 'isolated-vocal', expect.objectContaining({ id: 'jalen-ngonda' }));
+    expect(deps.profileFromReference).toHaveBeenCalledWith(refAnalysis, 'isolated-vocal', expect.objectContaining({ id: 'jalen-ngonda' }), {
+      artistVoiceType: null,
+    });
     expect(s.selectedProfileId).toBe(REFERENCE_ID);
     expect(s.builtinProfileId).toBe('jalen-ngonda');
     expect(s.reference?.baseProfileId).toBe('jalen-ngonda');
@@ -224,7 +226,9 @@ describe('reference clips', () => {
     expect(s.selectedProfileId).toBe('daniel-caesar');
     expect(s.builtinProfileId).toBe('daniel-caesar');
     expect(s.reference?.baseProfileId).toBe('shawn-mendes');
-    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'isolated-vocal', expect.objectContaining({ id: 'shawn-mendes' }));
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'isolated-vocal', expect.objectContaining({ id: 'shawn-mendes' }), {
+      artistVoiceType: null,
+    });
     expect(s.comparison?.profileId).toBe('daniel-caesar');
     expect(s.referenceSerial).toBe(before);
   });
@@ -269,7 +273,9 @@ describe('reference clips', () => {
     let s = reduce(state, { type: 'profile/select', id: 'daniel-caesar' });
     s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s) });
     s = reduce(s, { type: 'reference/analyzed', clip: { ...clip, name: 'second' }, analysis: makeFakeAnalysis(), opts: referenceOptions(s) });
-    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'second', expect.objectContaining({ id: 'daniel-caesar' }));
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'second', expect.objectContaining({ id: 'daniel-caesar' }), {
+      artistVoiceType: null,
+    });
     expect(s.reference?.name).toBe('second');
   });
 
@@ -290,6 +296,45 @@ describe('reference clips', () => {
     expect(referenceOptions(s)).toEqual({ voiceType: 'tenor', a4Hz: 440 });
   });
 
+  it('passes the artist voice type the user chose to the reference profile, so key advice can use the clip', () => {
+    const { reduce, state, deps } = withTake();
+    // Left at the user's own voice type: no artist voice type (key advice assumes the base singer).
+    let s = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
+    expect(s.reference?.artistVoiceType).toBeNull();
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'isolated-vocal', expect.anything(), { artistVoiceType: null });
+    // Chosen as mezzo: the provider re-analyses with the new options and the profile carries the choice.
+    s = reduce(s, { type: 'reference/voiceType', voiceType: 'mezzo' });
+    expect(s.reference?.artistVoiceType).toBeNull();
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s), reanalysis: true });
+    expect(s.reference?.artistVoiceType).toBe('mezzo');
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(expect.anything(), 'isolated-vocal', expect.anything(), { artistVoiceType: 'mezzo' });
+    expect(s.comparison?.profileId).toBe(REFERENCE_ID);
+  });
+
+  it('naming the artist voice type as the user own rebuilds the profile without a re-analysis, and back', () => {
+    const { reduce, state, deps } = withTake();
+    let s = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
+    const analysis = s.reference!.analysis;
+    const plans = vi.mocked(deps.plan).mock.calls.length;
+    // Baritone is also the user's voice type, so the analysis options do not change.
+    s = reduce(s, { type: 'reference/voiceType', voiceType: 'baritone' });
+    expect(s.reference?.analysis).toBe(analysis);
+    expect(s.reference?.artistVoiceType).toBe('baritone');
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(analysis, 'isolated-vocal', expect.objectContaining({ id: 'shawn-mendes' }), {
+      artistVoiceType: 'baritone',
+    });
+    // The reference is the target, so its key advice is re-scored.
+    expect(vi.mocked(deps.plan).mock.calls.length).toBe(plans + 1);
+    s = reduce(s, { type: 'reference/voiceType', voiceType: null });
+    expect(s.reference?.artistVoiceType).toBeNull();
+    expect(deps.profileFromReference).toHaveBeenLastCalledWith(analysis, 'isolated-vocal', expect.anything(), { artistVoiceType: null });
+    // A choice that changes the options waits for the re-analysis.
+    const calls = vi.mocked(deps.profileFromReference).mock.calls.length;
+    s = reduce(s, { type: 'reference/voiceType', voiceType: 'tenor' });
+    expect(vi.mocked(deps.profileFromReference).mock.calls.length).toBe(calls);
+    expect(s.reference?.artistVoiceType).toBeNull();
+  });
+
   it('a failing profile build reports an error and keeps the previous state', () => {
     const s = setup({
       profileFromReference: () => {
@@ -307,17 +352,26 @@ describe('reference clips', () => {
 describe('saving and the AI conversation', () => {
   const clip = { name: 'isolated-vocal', samples: new Float32Array(10), sampleRate: 22050 };
 
-  it('a result is saved once per take and target, and a re-analysis of the same take keeps that', () => {
+  it('a result is saved once per take, analysis options and target', () => {
     const { reduce, state, deps } = withTake();
     const shawn = deps.builtins[0];
     const key = saveKey(state, shawn);
     let s = reduce(state, { type: 'session/saved', key });
     expect(s.savedKeys).toEqual([key]);
     expect(reduce(s, { type: 'session/saved', key })).toBe(s);
-    // Re-analysis (same Take object) keeps the saved marker; a different singer has its own key.
-    s = reduce(s, { type: 'take/analyzed', take: s.take!, analysis: makeFakeAnalysis(), opts: { voiceType: 'tenor', a4Hz: 440 } });
-    expect(s.savedKeys).toContain(saveKey(s, shawn));
+    // A different singer has its own key.
     expect(saveKey(s, deps.builtins[1])).not.toBe(key);
+    // A re-analysis with the same options (same Take object) is the same result: still saved.
+    s = reduce(s, { type: 'take/analyzed', take: s.take!, analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
+    expect(s.savedKeys).toContain(saveKey(s, shawn));
+    // A settings change re-analyses to different numbers, which have not been saved...
+    s = reduce(s, { type: 'take/analyzed', take: s.take!, analysis: makeFakeAnalysis(), opts: { voiceType: 'tenor', a4Hz: 440 } });
+    expect(s.savedKeys).not.toContain(saveKey(s, shawn));
+    const tuned = reduce(s, { type: 'take/analyzed', take: s.take!, analysis: makeFakeAnalysis(), opts: { voiceType: 'tenor', a4Hz: 442 } });
+    expect(saveKey(tuned, shawn)).not.toBe(saveKey(s, shawn));
+    // ...and switching back to the saved settings gives the saved result again.
+    s = reduce(s, { type: 'take/analyzed', take: s.take!, analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
+    expect(s.savedKeys).toContain(saveKey(s, shawn));
     // A new take starts fresh.
     const next = reduce(s, { type: 'take/analyzed', take: take(), analysis: makeFakeAnalysis(), opts: takeOptions(SETTINGS) });
     expect(next.takeSerial).toBe(s.takeSerial + 1);
@@ -330,6 +384,34 @@ describe('saving and the AI conversation', () => {
     const a = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
     const b = reduce(a, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(a) });
     expect(saveKey(a, a.reference!.profile)).not.toBe(saveKey(b, b.reference!.profile));
+  });
+
+  it('re-analysing the reference with another voice type changes the save key for the reference target', () => {
+    const { reduce, state, deps } = withTake();
+    let s = reduce(state, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(state) });
+    const key = saveKey(s, s.reference!.profile);
+    const shawnKey = saveKey(s, deps.builtins[0]);
+    s = reduce(s, { type: 'session/saved', key });
+    s = reduce(s, { type: 'reference/voiceType', voiceType: 'mezzo' });
+    s = reduce(s, { type: 'reference/analyzed', clip, analysis: makeFakeAnalysis(), opts: referenceOptions(s), reanalysis: true });
+    expect(s.savedKeys).not.toContain(saveKey(s, s.reference!.profile));
+    // Builtin targets do not depend on the reference.
+    expect(saveKey(s, deps.builtins[0])).toBe(shawnKey);
+  });
+
+  it('a settings re-analysis whose score differs is not shown as already saved (review repro)', () => {
+    const { deps, reduce, state } = setup({
+      compare: vi.fn((a, p: SingerProfile) => ({ ...makeFakeComparison(p.id), overall: a.passaggio.lowMidi })),
+    });
+    const t = take();
+    let s = reduce(state, { type: 'take/analyzed', take: t, analysis: { ...makeFakeAnalysis(), passaggio: { lowMidi: 62, highMidi: 67 } }, opts: takeOptions(SETTINGS) });
+    const savedOverall = s.comparison!.overall;
+    s = reduce(s, { type: 'session/saved', key: saveKey(s, activeProfile(s, deps)!) });
+    const tenor = { ...SETTINGS, voiceType: 'tenor' as const };
+    s = reduce(s, { type: 'settings/set', settings: tenor });
+    s = reduce(s, { type: 'take/analyzed', take: t, analysis: { ...makeFakeAnalysis(), passaggio: { lowMidi: 64, highMidi: 69 } }, opts: takeOptions(tenor) });
+    expect(s.comparison!.overall).not.toBe(savedOverall);
+    expect(s.savedKeys.includes(saveKey(s, activeProfile(s, deps)!))).toBe(false);
   });
 
   it('keeps the AI conversation until a new take arrives or everything is cleared', () => {

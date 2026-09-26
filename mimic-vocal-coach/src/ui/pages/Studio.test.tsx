@@ -85,6 +85,7 @@ function referenceClip(overrides: Partial<ReferenceClip> = {}): ReferenceClip {
     profile: makeFakeProfile({ id: 'reference', name: 'song-mix', source: 'reference' }),
     baseProfileId: 'shawn-mendes',
     opts: { voiceType: 'baritone', a4Hz: 440 },
+    artistVoiceType: null,
     usable: true,
     unusableReason: null,
     notices: [],
@@ -256,7 +257,7 @@ describe('StudioPage', () => {
     const text = container.textContent ?? '';
     expect(text).toContain('for a baritone), so there is mix');
     expect(text).not.toContain('))');
-    expect(container.querySelector('#ref-voice option')?.textContent).toBe('Same as my voice type (Baritone)');
+    expect(container.querySelector('#ref-voice option')?.textContent).toBe('Not sure (analyse as baritone, like my voice)');
     expect(text).toContain('up to 5 minutes');
     expect(text).not.toContain('6 minutes');
   });

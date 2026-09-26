@@ -41,3 +41,45 @@ describe('decodeWav options', () => {
     expect(out.channels[0][123]).toBeCloseTo(x[123], 3);
   });
 });
+
+/** A WAV as a recorder that never finalised its header leaves it: the data chunk size is 0. */
+function unfinalised(buf: ArrayBuffer): ArrayBuffer {
+  new DataView(buf).setUint32(40, 0, true);
+  return buf;
+}
+
+describe('decodeWav data chunk size', () => {
+  it('reads a data chunk whose size was left at 0 to the end of the file', () => {
+    const x = ramp(1200, 0.8);
+    const out = decodeWav(unfinalised(encodeWav(x, 8000)));
+    expect(out.channels[0].length).toBe(1200);
+    expect(out.totalFrames).toBe(1200);
+    expect(out.channels[0][321]).toBeCloseTo(x[321], 3);
+  });
+
+  it('still honours maxSeconds and mono on such a file', () => {
+    const out = decodeWav(unfinalised(encodeWav([ramp(8000, 1), ramp(8000, 0.5)], 8000)), { maxSeconds: 0.5, mono: true });
+    expect(out.channels).toHaveLength(1);
+    expect(out.channels[0].length).toBe(4000);
+    expect(out.totalFrames).toBe(8000);
+  });
+
+  it('cuts a size that runs past the end (truncated or streamed 0xFFFFFFFF) to what is there', () => {
+    const buf = encodeWav(ramp(1000, 1), 8000);
+    new DataView(buf).setUint32(40, 0xffffffff, true);
+    expect(decodeWav(buf).channels[0].length).toBe(1000);
+  });
+
+  it('keeps a genuinely empty data chunk empty, even when another chunk follows it', () => {
+    expect(decodeWav(encodeWav(new Float32Array(0), 8000)).channels[0].length).toBe(0);
+    // Empty data chunk, then a 4-byte LIST chunk.
+    const empty = encodeWav(new Float32Array(0), 8000);
+    const buf = new Uint8Array(empty.byteLength + 12);
+    buf.set(new Uint8Array(empty));
+    const v = new DataView(buf.buffer);
+    [...'LIST'].forEach((c, i) => v.setUint8(44 + i, c.charCodeAt(0)));
+    v.setUint32(48, 4, true);
+    [...'INFO'].forEach((c, i) => v.setUint8(52 + i, c.charCodeAt(0)));
+    expect(decodeWav(buf.buffer).channels[0].length).toBe(0);
+  });
+});

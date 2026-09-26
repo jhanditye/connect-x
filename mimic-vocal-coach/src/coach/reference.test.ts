@@ -180,6 +180,14 @@ describe('profileFromReference', () => {
     expect(bare.signatureMoves).toEqual([]);
   });
 
+  it('carries the clip\'s passaggio only when the user chose the artist\'s voice type', () => {
+    const clip = { ...makeFakeAnalysis(), passaggio: { lowMidi: 69, highMidi: 76 } };
+    expect(profileFromReference(clip, 'Clip', SINGERS[0], { artistVoiceType: 'mezzo' }).passaggioLowMidi).toBe(69);
+    expect(profileFromReference(clip, 'Clip', SINGERS[0], { artistVoiceType: null }).passaggioLowMidi).toBeUndefined();
+    expect(profileFromReference(clip, 'Clip', SINGERS[0]).passaggioLowMidi).toBeUndefined();
+    expect('passaggioLowMidi' in profileFromReference(clip, 'Clip')).toBe(false);
+  });
+
   it('uses the clip range, falling back to the base profile', () => {
     const ref = makeFakeAnalysis();
     expect(profileFromReference(ref, 'Clip').typicalRange).toEqual({ lowMidi: 55, highMidi: 69, tessituraLowMidi: 59, tessituraHighMidi: 65 });

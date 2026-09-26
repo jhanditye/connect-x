@@ -201,6 +201,10 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
     setConfirmId(null);
     deleteButtons.current.get(id)?.focus();
   };
+  const cancelClear = () => {
+    focusRequest.current = { kind: 'clear-button' };
+    setConfirming(false);
+  };
 
   return (
     <div className="page page--progress">
@@ -345,7 +349,14 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
               Clear history
             </button>
           ) : (
-            <div className="confirm" role="group" aria-labelledby="hist-clear-q">
+            <div
+              className="confirm"
+              role="group"
+              aria-labelledby="hist-clear-q"
+              onKeyDown={(e: KeyboardEvent) => {
+                if (e.key === 'Escape') cancelClear();
+              }}
+            >
               <p id="hist-clear-q">
                 Delete all {sessions.length} saved take{sessions.length === 1 ? '' : 's'}? This cannot be undone.
               </p>
@@ -362,15 +373,7 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
                 >
                   Delete all
                 </button>
-                <button
-                  type="button"
-                  className="button button--ghost button--small"
-                  onClick={() => {
-                    focusRequest.current = { kind: 'clear-button' };
-                    setConfirming(false);
-                  }}
-                  autoFocus
-                >
+                <button type="button" className="button button--ghost button--small" onClick={cancelClear} autoFocus>
                   Cancel
                 </button>
               </div>

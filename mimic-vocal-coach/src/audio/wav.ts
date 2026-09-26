@@ -53,6 +53,16 @@ export function encodeWav(input: Float32Array | Float32Array[], sampleRate: numb
   return buf;
 }
 
+/** Whether a well-formed RIFF chunk header (four printable ASCII characters and a size that fits) starts at `off`. */
+function chunkStartsAt(v: DataView, off: number): boolean {
+  if (off + 8 > v.byteLength) return false;
+  for (let i = 0; i < 4; i++) {
+    const c = v.getUint8(off + i);
+    if (c < 0x20 || c > 0x7e) return false;
+  }
+  return v.getUint32(off + 4, true) <= v.byteLength - off - 8;
+}
+
 /**
  * Decode a PCM (8/16/24/32-bit int) or IEEE float (32/64-bit) WAV file.
  * Throws an Error with a readable message for anything else.
@@ -81,7 +91,12 @@ export function decodeWav(buffer: ArrayBuffer, opts: DecodeWavOptions = {}): Dec
       if (format === 0xfffe && size >= 40) format = v.getUint16(body + 24, true); // WAVE_FORMAT_EXTENSIBLE sub-format
     } else if (id === 'data') {
       dataOff = body;
-      dataLen = Math.min(size, buffer.byteLength - body);
+      const remain = buffer.byteLength - body;
+      // A recorder that crashed or streamed its output leaves the size at 0 (it never went back to
+      // fill it in). Like FFmpeg and the browsers, read such a chunk to the end of the file, unless
+      // another chunk starts right there (then the data really is empty). A size past the end (a
+      // truncated file, or a streamed 0xFFFFFFFF) is cut to what is there.
+      dataLen = size === 0 && !chunkStartsAt(v, body) ? remain : Math.min(size, remain);
       break;
     }
     off = body + size + (size % 2);

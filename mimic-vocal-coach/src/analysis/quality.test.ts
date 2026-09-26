@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { concat, mix, silence, synthMelody, synthVoice, whiteNoise } from '../testing/synth';
 import { analyzeTake } from './analyze';
-import { clippingRatio, qualityReport, qualityWarnings, type AccompanimentCues } from './quality';
+import type { FrameFeatures } from '../types';
+import { clippingRatio, measureAccompaniment, qualityReport, qualityWarnings, type AccompanimentCues } from './quality';
 
 const SR = 22050;
 const OPTS = { voiceType: 'baritone' as const };
@@ -145,13 +146,31 @@ describe('accompaniment (singing over instruments)', () => {
   const voiceRms = rms(phrase(1));
 
   /** A sustained four-note chord under the whole take, `dropDb` below the voice. */
-  function withBand(dropDb: number): Float32Array {
-    const dur = voice.length / SR;
-    let band: Float32Array = new Float32Array(voice.length);
+  function withBand(dropDb: number, v = voice, vRms = voiceRms): Float32Array {
+    const dur = v.length / SR;
+    let band: Float32Array = new Float32Array(v.length);
     [110, 138.59, 164.81, 220].forEach((hz, k) => {
       band = mix(band, synthVoice({ sampleRate: SR, durationSec: dur, f0: hz, vowel: 'none', tiltDbPerOct: -9, jitter: 0.002, seed: 10 + k, amplitude: 0.2 }));
     });
-    return mix(voice, scaled(band, (voiceRms / rms(band)) * Math.pow(10, -dropDb / 20)));
+    return mix(v, scaled(band, (vRms / rms(band)) * Math.pow(10, -dropDb / 20)));
+  }
+
+  /**
+   * Airy (Daniel-Caesar-like) singing: aspiration nearly as strong as the tone, so the voicing
+   * gate drops out mid-phrase at the singing level, with mix-like periodicity (about 0.36).
+   */
+  const airyPhrase = (seed: number, midi: number[], breathNoise = 0.8) =>
+    synthMelody(midi.map((m) => ({ midi: m, durSec: 0.55 })), {
+      sampleRate: SR, vowel: 'a', tiltDbPerOct: -12, breathNoise, vibrato: { rateHz: 5.5, extentCents: 30, delaySec: 0.3 },
+      jitter: 0.004, shimmer: 0.03, releaseSec: 0.12, attackSec: 0.06, seed,
+    });
+  const lineA = [60, 62, 64, 65, 67, 65, 64, 62];
+  const lineB = [64, 65, 67, 69, 67, 65, 64, 60];
+  function airyTake(breathSec: number, roomDb = -65, breathNoise = 0.8): Float32Array {
+    const parts: Float32Array[] = [silence(0.5, SR)];
+    for (let i = 0; i < 4; i++) parts.push(airyPhrase(i + 1, i % 2 ? lineB : lineA, breathNoise), silence(breathSec, SR));
+    const x = concat(...parts);
+    return mix(x, whiteNoise(x.length / SR, Math.pow(10, roomDb / 20), SR, 5));
   }
 
   it('flags a song mix and replaces the quieter-room advice with the isolated-vocal fix', () => {
@@ -172,5 +191,58 @@ describe('accompaniment (singing over instruments)', () => {
     const noisy = analyzeTake(mix(voice, whiteNoise(voice.length / SR, voiceRms * 0.3, SR, 4)), SR, OPTS);
     expect(noisy.issues).toContain('noisy');
     expect(noisy.issues).not.toContain('accompaniment');
+  });
+
+  it('does not flag airy a cappella singing whose aspiration misses the voicing gate', () => {
+    // With breaths between phrases (the aspiration frames count as singing, not as pauses).
+    const breaths = analyzeTake(airyTake(0.7), SR, { voiceType: 'tenor' });
+    expect(breaths.style.breathiness).toBeGreaterThan(0.55);
+    expect(breaths.issues).toEqual([]);
+    // Very airy and sung without breaths: too little silence to measure the room from, so the
+    // aspiration is told apart from tonal accompaniment by its zero-crossing rate.
+    const legato = analyzeTake(airyTake(0, -65, 1.2), SR, { voiceType: 'tenor' });
+    expect(legato.voicedSec).toBeGreaterThan(3);
+    expect(legato.issues).not.toContain('accompaniment');
+  });
+
+  it('still flags airy singing over a band', () => {
+    const a = analyzeTake(withBand(6, airyTake(0.7, -80), rms(airyPhrase(1, lineA))), SR, { voiceType: 'tenor' });
+    expect(a.issues).toContain('accompaniment');
+  });
+});
+
+describe('measureAccompaniment', () => {
+  const frame = (voiced: boolean, rmsDb: number, periodicity: number): FrameFeatures => ({
+    t: 0, f0: voiced ? 220 : NaN, midi: voiced ? 57 : NaN, voiced, periodicity, rmsDb,
+    h1h2Db: NaN, alphaRatioDb: NaN, centroidHz: NaN, tiltDbPerOct: NaN, cppDb: NaN, hnrDb: NaN, register: null,
+  });
+  // 1 s singing, 0.6 s loud and partly periodic pause, 1 s singing.
+  const frames = [
+    ...Array.from({ length: 100 }, () => frame(true, -20, 0.95)),
+    ...Array.from({ length: 60 }, () => frame(false, -26, 0.36)),
+    ...Array.from({ length: 100 }, () => frame(true, -20, 0.95)),
+  ];
+  const pause = (k: number) => k >= 100 && k < 160;
+
+  it('measures loud, pitched pauses', () => {
+    const c = measureAccompaniment(frames, 0.01);
+    expect(c.pauseSec).toBeCloseTo(0.6, 5);
+    expect(c.pauseLevelDb).toBeCloseTo(-6, 5);
+    expect(c.pausePeriodicity).toBeCloseTo(0.36, 5);
+  });
+
+  it('does not count frames marked as singing as pauses', () => {
+    const singing = Uint8Array.from(frames, (_, k) => (pause(k) && k % 4 === 0 ? 1 : 0));
+    const c = measureAccompaniment(frames, 0.01, singing);
+    // Every fourth frame is singing, so no unvoiced stretch reaches 0.25 s.
+    expect(c.pauseSec).toBe(0);
+    expect(c.pauseLevelDb).toBeNaN();
+  });
+
+  it('leaves noise-like pause frames out, keeps tonal ones', () => {
+    const noiseLike = Float32Array.from(frames, (_, k) => (pause(k) ? 0.45 : NaN));
+    expect(measureAccompaniment(frames, 0.01, undefined, noiseLike).pauseSec).toBe(0);
+    const tonal = Float32Array.from(frames, (_, k) => (pause(k) ? 0.05 : NaN));
+    expect(measureAccompaniment(frames, 0.01, undefined, tonal).pauseSec).toBeCloseTo(0.6, 5);
   });
 });

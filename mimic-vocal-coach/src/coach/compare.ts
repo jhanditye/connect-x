@@ -2,7 +2,17 @@
 
 import { midiToNoteName } from '../dsp/music';
 import type { Comparison, DimensionResult, Direction, SingerProfile, StyleKey, TargetBand, VoiceAnalysis } from '../types';
-import { STYLE_KEYS, STYLE_LABELS, builtinBaseOf, describeIncludesNumber, formatStyleValue, signedFixed, whoOf, whoseOf } from './profiles';
+import {
+  STYLE_KEYS,
+  STYLE_LABELS,
+  builtinBaseOf,
+  describeIncludesNumber,
+  formatStyleValue,
+  signedFixed,
+  whoOf,
+  whoseOf,
+  type ReferenceProfileExtras,
+} from './profiles';
 
 // Inside the band the score falls linearly from 100 at the ideal to this value at the band edge,
 // then from here to 0 across `tolerance` outside the band.
@@ -63,7 +73,7 @@ const SUMMARY_WORDS: Record<StyleKey, SummaryWords> = {
   chestInUpperRange: { below: 'less chest than', above: 'more chest than', noun: 'high notes' },
   mixInUpperRange: { below: 'less mix than', above: 'more mix than', noun: 'high notes' },
   headInUpperRange: { below: 'less falsetto than', above: 'more falsetto than', noun: 'high notes' },
-  loudnessClimbDbPerSemitone: { below: 'flatter than', above: 'steeper than', noun: 'usual climb' },
+  loudnessClimbDbPerSemitone: { below: 'less lift than', above: 'a steeper rise than', noun: 'usual climb' },
   agility: { below: 'slower than', above: 'faster than', noun: 'runs' },
   dynamicRangeDb: { below: 'more even than', above: 'more contrasting than', noun: 'dynamics' },
   softOnsetRatio: { below: 'fewer airy starts than', above: 'more airy starts than', noun: 'phrases' },
@@ -81,15 +91,21 @@ export function describeWithNumber(key: StyleKey, v: number): string {
   return describeIncludesNumber(key) ? d : `${d} (${formatStyleValue(key, v)})`;
 }
 
+/** Run speeds and flip rates at or below this read as "none" (a take or target without any is 0). */
+const NONE_MAX = 0.05;
+
 function unmeasuredReason(key: StyleKey, analysis: VoiceAnalysis): string {
   switch (key) {
     case 'breathiness':
     case 'brightness':
     case 'rasp':
       return 'there was not enough clear, steady singing to measure the tone';
-    case 'vibratoPresence':
     case 'vibratoRateHz':
     case 'vibratoExtentCents':
+      // Held notes without any vibrato leave its speed and width unmeasured for a different reason.
+      if (analysis.style.vibratoPresence === 0) return 'none of the held notes had vibrato';
+      return 'no notes were held long enough (about half a second or more)';
+    case 'vibratoPresence':
     case 'pitchAccuracyCents':
       return 'no notes were held long enough (about half a second or more)';
     case 'chestInUpperRange':
@@ -131,9 +147,35 @@ function summarize(
   if (key === 'agility' && value <= 0.05 && direction === 'more') {
     return `No runs in this take; ${whoOf(profile)} tends to use short runs at about ${formatStyleValue(key, band.ideal)}.`;
   }
+  if (key === 'agility' && band.ideal <= NONE_MAX) {
+    // A target without runs (a reference clip that has none) reads "no runs", not "0.0 notes/s".
+    if (value <= NONE_MAX) return `${heard}, like ${whoOf(profile)}.`;
+    return direction === 'ok' ? `${heard}: close to ${whoOf(profile)}, which has no runs.` : `${heard}, where ${whoOf(profile)} has no runs.`;
+  }
+  if (key === 'flipsPerMinute') {
+    const who = whoOf(profile);
+    if (band.ideal <= NONE_MAX) {
+      // Likewise a target without flips reads "none", not "about 0.0 per min".
+      if (value <= NONE_MAX) return `${heard}, like ${who}.`;
+      return direction === 'ok'
+        ? `${heard}. ${capitalize(who)} has none, but on a take this short a single flip reaches that rate.`
+        : `${heard}, where ${who} has none.`;
+    }
+    // On-style only because short takes get a wider band: say so rather than "close to".
+    const own = profile.targets.flipsPerMinute;
+    if (direction === 'ok' && own && (value < Math.min(own.low, own.high) || value > Math.max(own.low, own.high))) {
+      const above = value > Math.max(own.low, own.high);
+      return (
+        `${heard}: ${above ? 'above' : 'below'} ${whose} usual rate (about ${formatStyleValue(key, band.ideal)}), ` +
+        `but on a take this short that is only one flip ${above ? 'more' : 'fewer'}.`
+      );
+    }
+  }
   if (key === 'loudnessClimbDbPerSemitone') {
     const ideal = `${signedFixed(band.ideal, 1)} dB/semitone`;
     if (direction === 'ok') return `${heard}: in line with ${whose} usual climb (about ${ideal}).`;
+    // A falling slope is not "flatter" than a rising one; say where the singer is instead.
+    if (direction === 'more' && value < 0) return `${heard}, where ${whose} usual climb is about ${ideal}.`;
     const words = SUMMARY_WORDS[key];
     return `${heard}: ${direction === 'more' ? words.below : words.above} ${whose} usual climb (about ${ideal}).`;
   }
@@ -210,8 +252,39 @@ const MAX_VOICE_TYPE_SHIFT = 7;
  * reading one take's pitch.
  */
 export function singerPassaggioLow(profile: SingerProfile): number | null {
+  const chosen = referencePassaggioLow(profile);
+  if (chosen !== null) return chosen;
   const base = builtinBaseOf(profile);
   return base ? (SINGER_PASSAGGIO_LOW[base.id] ?? null) : null;
+}
+
+/**
+ * For a reference profile whose artist voice type the user chose ("Analyse the reference as"), the
+ * passaggio low note the clip was analysed with; null otherwise (key advice then assumes the base
+ * singer's voice).
+ */
+export function referencePassaggioLow(profile: SingerProfile): number | null {
+  if (profile.source !== 'reference') return null;
+  const v = (profile as SingerProfile & ReferenceProfileExtras).passaggioLowMidi;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+/** How key advice names what to transpose and whose voice it is compared with. */
+export interface KeyAdviceNames {
+  /** "Shawn's songs" / "the reference song". */
+  songs: string;
+  /** "Shawn's original keys" / "the reference song's original key". */
+  keys: string;
+  /** "Shawn's" / "the reference singer's" (whose passaggio). */
+  whose: string;
+}
+
+export function keyAdviceNames(profile: SingerProfile): KeyAdviceNames {
+  if (profile.source === 'reference') {
+    return { songs: 'the reference song', keys: "the reference song's original key", whose: "the reference singer's" };
+  }
+  const who = whoOf(builtinBaseOf(profile) ?? profile);
+  return { songs: `${who}'s songs`, keys: `${who}'s original keys`, whose: `${who}'s` };
 }
 
 /**
@@ -250,22 +323,33 @@ function voiceTypeFit(
   singerLow: number,
   profile: SingerProfile,
 ): { transpose: number; note: string } {
-  const singer = builtinBaseOf(profile);
-  const who = singer ? whoOf(singer) : capitalize(whoOf(profile));
+  const { songs, keys, whose } = keyAdviceNames(profile);
   // Normalise -0 so the stored number reads cleanly.
   const transpose = Math.max(-MAX_VOICE_TYPE_SHIFT, Math.min(MAX_VOICE_TYPE_SHIFT, Math.round(userLow - singerLow))) || 0;
   const yours = midiToNoteName(userLow);
   const theirs = midiToNoteName(singerLow);
+  // A reference clip's singer is compared by the voice type the user chose for it, or else assumed
+  // to have the base singer's voice; say which, so the advice can be corrected.
+  let basis = '';
+  if (profile.source === 'reference') {
+    const base = builtinBaseOf(profile);
+    basis =
+      referencePassaggioLow(profile) !== null
+        ? ' (from the voice type you chose for the clip)'
+        : base
+          ? `, assuming a voice like ${whoseOf(base)} (if the artist's voice type differs, set it under "Analyse the reference as")`
+          : '';
+  }
   const sentences: string[] = [];
   if (transpose === 0) {
     sentences.push(
-      `Based on your voice type, ${who}'s original keys should suit you: your passaggio starts around ${yours}, about where ${who}'s voice changes gear.`,
+      `Based on your voice type, ${keys} should suit you: your passaggio starts around ${yours}, about where ${whose} voice changes gear${basis}.`,
     );
   } else {
     const dir = transpose < 0 ? 'lower' : 'higher';
     sentences.push(
-      `Based on your voice type, ${who}'s songs should sit best about ${semitoneWords(transpose)} ${dir}: ` +
-        `your passaggio starts around ${yours}, and ${who}'s voice changes gear around ${theirs}.`,
+      `Based on your voice type, ${songs} should sit best about ${semitoneWords(transpose)} ${dir}: ` +
+        `your passaggio starts around ${yours}, and ${whose} voice changes gear around ${theirs}${basis}.`,
     );
   }
   const sat = takeSentence(user);

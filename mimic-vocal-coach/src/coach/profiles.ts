@@ -106,8 +106,10 @@ function breathinessWords(v: number): string {
   // Bands follow the StyleVector anchors in src/types.ts. A low reading on its own means a clean,
   // firm tone; it only indicates pressed phonation together with a strongly negative H1-H2, which
   // this label cannot see, so it never says "pressed".
+  // 0.2-0.3 reads 'clear' rather than 'clean': the rasp scale says 'clean' for a tone without grit,
+  // and a plan should not praise a clean tone while asking for more air in the same words.
   if (v < 0.2) return 'very clean and firm';
-  if (v < 0.3) return 'clean';
+  if (v < 0.3) return 'clear';
   if (v < 0.5) return 'clear and balanced';
   if (v < 0.6) return 'slightly airy';
   if (v < 0.8) return 'quite airy';
@@ -696,6 +698,16 @@ export function builtinBaseOf(profile: Pick<SingerProfile, 'id' | 'signatureMove
   if (direct) return direct;
   const moveIds = new Set(profile.signatureMoves.map((m) => m.id));
   return SINGERS.find((s) => s.signatureMoves.some((m) => moveIds.has(m.id)));
+}
+
+/**
+ * Optional extra a reference profile can carry (coach/reference.ts profileFromReference): the
+ * passaggio low note (MIDI) of the voice type the user chose for the artist under "Analyse the
+ * reference as". Key advice then compares voice types with the clip's singer instead of assuming the
+ * base singer's voice. Absent when the user left the clip at their own voice type.
+ */
+export interface ReferenceProfileExtras {
+  passaggioLowMidi?: number;
 }
 
 /** How copy refers to the profile: "Shawn" for builtins, "the reference" for reference-clip profiles. */

@@ -79,27 +79,38 @@ function progressReporter(cb?: (fraction: number) => void): (fraction: number) =
   };
 }
 
-/**
- * Unvoiced frames that sound like near-whisper singing: clearly above the noise floor and not far
- * below the singing, partly periodic (0.25-0.55; white noise and fricatives read < 0.2), and
- * noise-like in spectrum (zero-crossing rate >= 0.12 per sample; voiced rasp or a quiet voiced
- * frame stays well below). Used only for the breathiness index.
- */
-function findWhisperFrames(x: Float32Array, sampleRate: number, frames: FrameFeatures[], noiseFloorDb: number): Uint8Array {
-  const out = new Uint8Array(frames.length);
-  const voicedLevels = frames.filter((f) => f.voiced).map((f) => f.rmsDb);
-  const loud = voicedLevels.length > 0 ? median(voicedLevels) : percentile(frames.map((f) => f.rmsDb), 90);
-  const gate = Math.max(-60, noiseFloorDb + 12, loud - 25);
+/** Zero-crossing rate per sample over ~23 ms around each unvoiced frame; NaN for voiced frames. */
+function unvoicedZcr(x: Float32Array, sampleRate: number, frames: FrameFeatures[]): Float32Array {
+  const out = new Float32Array(frames.length).fill(NaN);
   const half = Math.round(0.0115 * sampleRate);
   for (let i = 0; i < frames.length; i++) {
-    const f = frames[i];
-    if (f.voiced || f.rmsDb < gate || f.periodicity < 0.25 || f.periodicity >= 0.55) continue;
-    const c = Math.round(f.t * sampleRate);
+    if (frames[i].voiced) continue;
+    const c = Math.round(frames[i].t * sampleRate);
     const a = Math.max(1, c - half);
     const b = Math.min(x.length, c + half);
     let crossings = 0;
     for (let k = a; k < b; k++) if (x[k - 1] < 0 !== x[k] < 0) crossings++;
-    if (b - a > 0 && crossings / (b - a) >= 0.12) out[i] = 1;
+    if (b - a > 0) out[i] = crossings / (b - a);
+  }
+  return out;
+}
+
+/**
+ * Unvoiced frames that sound like near-whisper singing: clearly above the noise floor and not far
+ * below the singing, partly periodic (0.25-0.55; white noise and fricatives read < 0.2), and
+ * noise-like in spectrum (zero-crossing rate >= 0.12 per sample; voiced rasp or a quiet voiced
+ * frame stays well below). Used for the breathiness index, and as singing (not pauses) when the
+ * gaps between phrases are checked for accompaniment.
+ */
+function findWhisperFrames(frames: FrameFeatures[], zcr: Float32Array, noiseFloorDb: number): Uint8Array {
+  const out = new Uint8Array(frames.length);
+  const voicedLevels = frames.filter((f) => f.voiced).map((f) => f.rmsDb);
+  const loud = voicedLevels.length > 0 ? median(voicedLevels) : percentile(frames.map((f) => f.rmsDb), 90);
+  const gate = Math.max(-60, noiseFloorDb + 12, loud - 25);
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (f.voiced || f.rmsDb < gate || f.periodicity < 0.25 || f.periodicity >= 0.55) continue;
+    if (zcr[i] >= 0.12) out[i] = 1;
   }
   return out;
 }
@@ -209,7 +220,8 @@ export function analyzeTake(
 
   const voicedCount = frames.reduce((n, f) => n + (f.voiced ? 1 : 0), 0);
   const voicedSec = voicedCount * HOP_SEC;
-  const whisperFrames = findWhisperFrames(x, ANALYSIS_RATE, frames, quality.noiseFloorDb);
+  const zcr = unvoicedZcr(x, ANALYSIS_RATE, frames);
+  const whisperFrames = findWhisperFrames(frames, zcr, quality.noiseFloorDb);
   const style = computeStyle({ track, whisperFrames, zone, notes, runs, onsets, flipCount: flips.length, voicedSec });
   progress(0.97);
 
@@ -221,7 +233,7 @@ export function analyzeTake(
     medianVoicedDb,
     levelP95Db: frames.length > 0 ? percentile(frames.map((f) => f.rmsDb), 95) : -120,
     heldNotes: notes.filter((n) => n.end - n.start >= SUSTAINED_NOTE_SEC - 1e-9).length,
-    accompaniment: measureAccompaniment(frames, HOP_SEC),
+    accompaniment: measureAccompaniment(frames, HOP_SEC, whisperFrames, zcr),
     voiceType: opts.voiceType,
   });
   warnings.push(...report.warnings);

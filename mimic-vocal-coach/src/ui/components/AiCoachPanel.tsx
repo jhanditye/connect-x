@@ -5,7 +5,7 @@
 // Results, e.g. to follow a coaching card's exercise link, does not throw away answers the user paid
 // for. Only the in-flight stream belongs to this component.
 
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { AiCoachError, askAiCoach, type AiCoachInput } from '../../coach/ai';
 import type { AppSettings } from '../../types';
 import { Icon } from './Icon';
@@ -35,6 +35,7 @@ export function AiCoachPanel(props: {
   const inputId = useId();
   const stopRef = useRef<HTMLButtonElement>(null);
   const followupRef = useRef<HTMLInputElement>(null);
+  const askRef = useRef<HTMLButtonElement>(null);
   const wasBusy = useRef(false);
 
   useEffect(() => {
@@ -52,10 +53,12 @@ export function AiCoachPanel(props: {
   const hasKey = !!props.settings.anthropicApiKey?.trim();
 
   // The button that was pressed disappears while Claude answers, so keep keyboard focus on the
-  // controls that replace it: Stop while streaming, then the follow-up field.
-  useEffect(() => {
+  // controls that replace it: Stop while streaming, then the follow-up field, or the Ask button again
+  // when the first question failed or was stopped before any answer (there is no conversation yet).
+  // A layout effect, so focus moves in the same commit that removes the pressed button.
+  useLayoutEffect(() => {
     if (busy && !wasBusy.current) stopRef.current?.focus();
-    if (!busy && wasBusy.current) followupRef.current?.focus();
+    if (!busy && wasBusy.current) (followupRef.current ?? askRef.current)?.focus();
     wasBusy.current = busy;
   }, [busy]);
 
@@ -132,7 +135,7 @@ export function AiCoachPanel(props: {
           <p className="muted">
             Claude reads the numbers from this take and the {props.singerName} comparison (never the audio) and talks you through them.
           </p>
-          <button type="button" className="button button--accent" onClick={() => void ask(FIRST_QUESTION)}>
+          <button ref={askRef} type="button" className="button button--accent" onClick={() => void ask(FIRST_QUESTION)}>
             <Icon name="spark" size={18} /> Ask the AI coach
           </button>
         </div>

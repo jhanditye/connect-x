@@ -224,6 +224,8 @@
 .page-title {
   font-size: var(--fs-2xl);
   letter-spacing: -0.01em;
+  /* Results names the target, and a reference clip is named after its file, which can be long. */
+  overflow-wrap: anywhere;
 }
 .lede {
   margin-top: var(--space-2);
@@ -246,6 +248,7 @@
   color: var(--ink-2);
   font-size: var(--fs-sm);
   max-width: 70ch;
+  overflow-wrap: anywhere;
 }
 .subhead {
   font-family: var(--font-body);
@@ -272,6 +275,7 @@
   color: var(--ink-3);
   margin-top: var(--space-2);
   max-width: 75ch;
+  overflow-wrap: anywhere;
 }
 .plain-list {
   margin: 0;
@@ -1707,6 +1711,10 @@
 }
 .guide-table tr[aria-current='true'] {
   background: var(--accent-soft);
+}
+/* --ink-3 is too faint on the highlighted row in dark mode. */
+.guide-table tr[aria-current='true'] .muted {
+  color: var(--ink-2);
 }
 .measure-list {
   margin: var(--space-4) 0;

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeFakeAnalysis, makeFakeProfile } from '../testing/fixtures';
 import { makeRng } from '../testing/synth';
 import type { CoachingPlan, SingerProfile, StyleKey, StyleVector, TargetBand, VoiceAnalysis } from '../types';
-import { FIXES, WHY, buildCoachingPlan } from './coach';
+import { FIXES, WHY, WHY_DIR, buildCoachingPlan, forUserVoice, whyFor } from './coach';
 import { compareToProfile } from './compare';
 import { EXERCISES, getExercise } from './exercises';
 import { MOVE_FOCUS, SINGERS, STYLE_KEYS } from './profiles';
@@ -220,7 +220,11 @@ describe('buildCoachingPlan', () => {
     const plan = planFor(a, shawn);
     expect(plan.items[0].dimension).toBe('recording');
     expect(plan.items[0].priority).toBe(1);
-    expect(plan.items[0].whatWeHeard).toContain('clips');
+    // A short summary: the Results page already shows the full warnings above the plan.
+    expect(plan.items[0].whatWeHeard).toBe(
+      'The recording itself was flagged: the loudest notes clipped (distorted). There was a lot of background noise.',
+    );
+    expect(plan.items[0].whatWeHeard).not.toContain('The recording clips in places.');
     expect(plan.items[0].howToFix.join(' ')).toMatch(/clip/);
     expect(plan.items[0].howToFix.join(' ')).toMatch(/quiet/);
     expect(plan.items.length).toBeLessThanOrEqual(5);
@@ -301,7 +305,9 @@ describe('buildCoachingPlan', () => {
     expect(plan.strengths).toEqual([]);
     expect(plan.signatureFocus).toEqual([]);
     expect(plan.healthNotes).toHaveLength(2);
-    expect(plan.nextTake).toMatch(/20 to 30 seconds/);
+    // One length everywhere, matching the recording warning ("Record at least 10 seconds of singing").
+    expect(plan.nextTake).toMatch(/at least 10 seconds/);
+    expect(allText(plan)).not.toMatch(/20 to 30 seconds/);
   });
 
   it('turns an unscoreable take into a re-record plan that says why', () => {
@@ -326,7 +332,9 @@ describe('buildCoachingPlan', () => {
     const shortPlan = planFor(short, jalen);
     expect(shortPlan.headline).toMatch(/couldn't hear enough singing in this take to compare it with Jalen Ngonda \(about 1\.4 s of singing\)/);
     expect(shortPlan.items.map((i) => i.id)).toEqual(['recording']);
-    expect(shortPlan.items[0].howToFix[0]).toMatch(/20 to 30 seconds/);
+    expect(shortPlan.items[0].howToFix[0]).toMatch(/at least 10 seconds/);
+    expect(allText(shortPlan)).not.toMatch(/20 to 30 seconds/);
+    expect(shortPlan.items[0].whatWeHeard).toBe('The recording itself was flagged: there was very little singing in it (about 1.4 s).');
   });
 
   it('blames the reference clip, not the take, when the clip gave almost no targets', () => {
@@ -351,14 +359,17 @@ describe('buildCoachingPlan', () => {
     expect(plan.nextTake).toMatch(/held notes/);
   });
 
-  it('treats a reference profile built on a builtin as that singer, but names it "the reference"', () => {
+  it('words a reference profile from the clip, not from the builtin singer it borrowed from', () => {
     const ref: SingerProfile = { ...daniel, id: 'reference', name: 'best-part-vocals.wav', source: 'reference' };
     const plan = planFor(makeFakeAnalysis({ breathiness: 0.25 }), ref);
     expect(plan.profileId).toBe('reference');
     expect(plan.headline).toContain('the reference clip');
     const item = plan.items.find((i) => i.dimension === 'breathiness')!;
     expect(item.whatWeHeard).toContain('The reference target');
-    expect(item.howToFix.join(' ')).toMatch(/Daniel/);
+    // The base singer's traits can contradict the clip's targets, so cues and reasons leave him out.
+    expect(item.howToFix.join(' ')).not.toMatch(/Daniel/);
+    expect(item.whyItMatters).not.toMatch(/Daniel/);
+    expect(item.whyItMatters).toMatch(/The reference clip measured about 0\.68,/);
   });
 
   it('works for profiles without signature moves or builtin base', () => {
@@ -515,7 +526,11 @@ describe('buildCoachingPlan', () => {
     for (const key of STYLE_KEYS) {
       for (const dir of ['more', 'less'] as const) {
         for (const [flavour, cues] of Object.entries(FIXES[key][dir].singerCues ?? {}) as [keyof (typeof WHY)[StyleKey], string[]][]) {
-          for (const cue of cues) expect(shared(cue, WHY[key][flavour]), `${key}/${dir}/${flavour}: ${cue}`).toBeNull();
+          for (const cue of cues) {
+            expect(shared(cue, WHY[key][flavour]), `${key}/${dir}/${flavour}: ${cue}`).toBeNull();
+            const own = WHY_DIR[key]?.[flavour]?.[dir];
+            if (own) expect(shared(cue, own), `${key}/${dir}/${flavour} (directional): ${cue}`).toBeNull();
+          }
         }
       }
     }
@@ -535,5 +550,222 @@ describe('buildCoachingPlan', () => {
     expect(hook).toBeDefined();
     expect(hook!.hint).toMatch(/5%/);
     expect(hook!.hint).toMatch(/50%/);
+  });
+});
+
+describe('coaching copy never contradicts itself', () => {
+  const FLAVOURS = ['shawn', 'daniel', 'jalen', 'generic'] as const;
+
+  it('argues "why it matters" in the direction the item asks for', () => {
+    // Phrases that argue for one direction. The reason on an item for the other direction must not use them.
+    const argues: [StyleKey, 'more' | 'less', RegExp][] = [
+      ['breathiness', 'less', /with little air|sweet and clear rather than breathy/],
+      ['breathiness', 'more', /most recognisable part of Daniel/],
+      ['brightness', 'more', /brightness lets chorus notes carry|A dull or covered falsetto/],
+      ['brightness', 'less', /Too much brightness pulls/],
+      ['vibratoPresence', 'less', /uses vibrato sparingly\. His falsetto/],
+      ['vibratoPresence', 'more', /tremble on Jalen's held falsetto notes is part/],
+      ['vibratoRateHz', 'less', /a fast flutter would sound tense/],
+      ['vibratoRateHz', 'more', /quick and shimmering \(a listening/],
+      ['vibratoExtentCents', 'less', /a wide wobble|a wide vibrato/],
+      ['chestInUpperRange', 'more', /choruses are chest-dominant/],
+      ['chestInUpperRange', 'less', /rather than carrying chest weight up|saves chest for emphatic|Carrying too much is/],
+      ['mixInUpperRange', 'more', /core of Shawn's chorus sound|lets him float into falsetto|lets high notes keep some strength/],
+      ['mixInUpperRange', 'less', /a lot of mix sounds more pop/],
+      ['headInUpperRange', 'more', /instead of belting them|Falsetto is the centre/],
+      ['headInUpperRange', 'less', /rather than for whole lines/],
+      ['loudnessClimbDbPerSemitone', 'less', /getting louder as you climb|pushing the volume up|Keeping the volume in check|Getting louder with every semitone/],
+      ['agility', 'less', /not mainly a runs singer;|rather than long runs\./],
+      ['dynamicRangeDb', 'more', /contrast is a big part of the lift/],
+      ['dynamicRangeDb', 'less', /narrow, quiet range and saves/],
+      ['softOnsetRatio', 'less', /sound more like R&B|too many airy starts/],
+      ['softOnsetRatio', 'more', /often start on a soft, breathy onset/],
+      ['flipsPerMinute', 'more', /the flip itself is part of the style/],
+      ['flipsPerMinute', 'less', /accidental breaks stand out/],
+    ];
+    for (const [key, dir, phrase] of argues) {
+      const other = dir === 'more' ? 'less' : 'more';
+      for (const f of FLAVOURS) expect(whyFor(key, f, other), `${key}/${f}/${other}`).not.toMatch(phrase);
+    }
+    // The reviewer's cases, end to end.
+    const quiet = { ...withZone(makeFakeAnalysis({ ...idealStyle(daniel), loudnessClimbDbPerSemitone: -1.3 }), 69), voicedSec: 90 };
+    const bloom = planFor(quiet, daniel).items.find((i) => i.id === 'loudnessClimbDbPerSemitone-more')!;
+    expect(bloom.whyItMatters).not.toMatch(/getting louder as you climb pulls/);
+    expect(bloom.whyItMatters).toMatch(/fading/);
+    const clearJalen = planFor(makeFakeAnalysis({ ...idealStyle(jalen), breathiness: 0.2 }), jalen).items.find((i) => i.id === 'breathiness-more')!;
+    expect(clearJalen.whyItMatters).not.toMatch(/rather than breathy/);
+  });
+
+  it('never tells the singer to start on an "h" and not on an "h" in the same plan', () => {
+    // Too airy a tone, but too few airy phrase starts (the user-take.wav case for Shawn).
+    const a = makeFakeAnalysis({ ...idealStyle(shawn), breathiness: 0.62, softOnsetRatio: 0, dynamicRangeDb: 6 });
+    const plan = planFor(a, shawn);
+    const clear = plan.items.find((i) => i.id === 'breathiness-less')!;
+    const onset = plan.items.find((i) => i.id === 'softOnsetRatio-more')!;
+    expect(clear).toBeDefined();
+    expect(onset).toBeDefined();
+    expect(clear.howToFix.join(' ')).not.toMatch(/not an "h"/);
+    expect(onset.howToFix.join(' ')).not.toMatch(/air first, then tone|Sigh into/);
+    expect(onset.howToFix.join(' ')).toMatch(/only the first word/);
+    expect(onset.howToFix.length).toBeGreaterThanOrEqual(3);
+    const ids = plan.items.flatMap((i) => i.exerciseIds);
+    expect(ids).not.toContain('aspirate-onsets');
+    expect(ids).not.toContain('airy-falsetto-float');
+    expect(ids).not.toContain('balanced-onsets');
+    expect(onset.exerciseIds.length).toBeGreaterThan(0);
+
+    // The mirror case: more air wanted, but cleaner phrase starts.
+    const b = makeFakeAnalysis({ ...idealStyle(jalen), breathiness: 0.2, softOnsetRatio: 0.8 });
+    const airy = planFor(b, jalen).items.find((i) => i.id === 'breathiness-more')!;
+    expect(airy.howToFix.join(' ')).not.toMatch(/quiet "h"|as the note starts/);
+    expect(airy.howToFix.join(' ')).toMatch(/Start phrases cleanly/);
+  });
+
+  it('words reference plans from the clip and bases their key advice on the voice type chosen for it', () => {
+    // A clip that is airy, dark and mostly head voice, loaded while Shawn (clear, bright, chest-mix) was selected.
+    const clip = withZone(
+      makeFakeAnalysis({ breathiness: 0.73, brightness: 0.17, chestInUpperRange: 0, mixInUpperRange: 0.17, headInUpperRange: 0.83, agility: 0, flipsPerMinute: 0 }),
+      69,
+    );
+    const user = { ...makeFakeAnalysis({ breathiness: 0.4, brightness: 0.45, chestInUpperRange: 0.35, mixInUpperRange: 0.55, headInUpperRange: 0.1, agility: 7.5 }), voicedSec: 90 };
+    for (const chosen of [undefined, 'mezzo'] as const) {
+      const ref = profileFromReference(clip, 'clip.wav', shawn, { artistVoiceType: chosen });
+      const plan = planFor(user, ref);
+      for (const item of plan.items.filter((i) => i.dimension !== 'range')) {
+        expect(`${item.whyItMatters} ${item.howToFix.join(' ')}`, item.id).not.toMatch(/Shawn/);
+      }
+      expect(plan.items.find((i) => i.id === 'breathiness-more')!.whyItMatters).toMatch(/reference clip measured about 0\.73/);
+      // A clip without runs: no "slow your runs" toward 0.0 notes/s.
+      const runs = plan.items.find((i) => i.dimension === 'agility');
+      if (runs) expect(runs.title).toBe('Leave the runs out');
+      expect(allText(plan)).not.toMatch(/0\.0 notes\/s|0\.0 per min/);
+      const c = compareToProfile(user, ref);
+      expect(c.dimensions.map((d) => d.summary).join(' ')).not.toMatch(/0\.0 notes\/s|0\.0 per min/);
+      // Key advice names the reference, never the base singer's songs.
+      expect(c.rangeNote).not.toMatch(/Shawn's songs|Shawn's original keys/);
+      if (chosen) {
+        // Baritone user (D4) against a clip analysed as a mezzo (A4): the clip's own passaggio.
+        expect(c.suggestedTransposeSemitones).toBe(-7);
+        expect(c.rangeNote).toMatch(/the reference song should sit best about 7 semitones \(a fifth\) lower/);
+        expect(c.rangeNote).toMatch(/changes gear around A4 \(from the voice type you chose for the clip\)/);
+        expect(plan.items.find((i) => i.dimension === 'range')?.title).toBe('Try the reference song about 7 semitones lower');
+      } else {
+        // Nothing chosen: the base singer's voice is assumed, and the note says how to change that.
+        expect(c.suggestedTransposeSemitones).toBe(-2);
+        expect(c.rangeNote).toMatch(/assuming a voice like Shawn's/);
+      }
+    }
+  });
+
+  it('calls it head voice in every instruction to an alto, mezzo or soprano', () => {
+    const rng = makeRng(31);
+    // Bare "falsetto" in an instruction; descriptions of the artist ("Jalen's falsetto") and quoted drill names are fine.
+    const bare = (t: string) => t.replace(/"[^"]*"/g, '').match(/(?<!(?:'s|his) )\bfalsetto\b/i);
+    let checked = 0;
+    for (let n = 0; n < 90; n++) {
+      const p = SINGERS[n % 3];
+      const a = { ...withZone(makeFakeAnalysis(randomStyle(rng)), [67, 69, 71][n % 3]), voicedSec: 90 };
+      const plan = planFor(a, p);
+      const instructions = [
+        ...plan.items.flatMap((i) => [i.title, i.whatWeHeard, ...i.howToFix]),
+        ...plan.signatureFocus.map((f) => f.hint),
+        plan.nextTake,
+        plan.headline,
+        ...plan.strengths,
+      ];
+      for (const t of instructions) expect(bare(t), `${p.id}: ${t}`).toBeNull();
+      checked += instructions.length;
+    }
+    expect(checked).toBeGreaterThan(500);
+    // The Results page words the signature-move steps it lists the same way.
+    const mezzo = withZone(makeFakeAnalysis(), 69);
+    expect(forUserVoice('Find falsetto on a light "ng" hum.', mezzo)).toBe('Find head voice on a light "ng" hum.');
+    expect(forUserVoice("Keep Jalen's falsetto in mind.", mezzo)).toBe("Keep Jalen's falsetto in mind.");
+    expect(forUserVoice('Find falsetto on a light "ng" hum.', makeFakeAnalysis())).toBe('Find falsetto on a light "ng" hum.');
+  });
+
+  it('coaches only the tone on a speech-like take, and puts the recording first', () => {
+    const a: VoiceAnalysis = { ...makeFakeAnalysis(ROUGH), warnings: ['We heard only short, speech-like sounds.'], issues: ['speech-like'] };
+    for (const p of SINGERS) {
+      const plan = planFor(a, p);
+      expect(plan.items[0].dimension).toBe('recording');
+      for (const item of plan.items.slice(1)) {
+        expect(['breathiness', 'brightness', 'rasp', 'range'], item.id).toContain(item.dimension);
+        expect(item.priority, item.id).toBeGreaterThan(1);
+      }
+      expect(plan.strengths.join(' ')).not.toMatch(/passaggio|flips|runs|vibrato|climb/);
+      for (const f of plan.signatureFocus) expect(f.hint).not.toMatch(/already fits? .*(register flips|falsetto|chest|mix|vibrato|run)/);
+      expect(plan.headline).not.toMatch(/a good way there|very close/);
+    }
+  });
+
+  it('never praises what an item asks to change, or a flip rate that only fits on paper', () => {
+    // No grit and too little air: the rasp strength must not call the tone "clean" next to "more air".
+    const plan = planFor(makeFakeAnalysis({ ...idealStyle(daniel), breathiness: 0.25, rasp: 0 }), daniel);
+    expect(plan.items.find((i) => i.id === 'breathiness-more')).toBeDefined();
+    expect(allText(plan)).not.toMatch(/\bclean\b/);
+    const gritless = makeFakeProfile({
+      targets: {
+        breathiness: { ideal: 0.68, low: 0.55, high: 0.82, tolerance: 0.3, weight: 1 },
+        rasp: { ideal: 0.06, low: 0, high: 0.2, tolerance: 0.25, weight: 0.3 },
+        pitchAccuracyCents: { ideal: 5, low: 0, high: 15, tolerance: 25, weight: 0.5 },
+        brightness: { ideal: 0.48, low: 0.4, high: 0.56, tolerance: 0.3, weight: 0.5 },
+      },
+    });
+    const both = planFor(makeFakeAnalysis({ breathiness: 0.25, rasp: 0, pitchAccuracyCents: 8 }), gritless);
+    expect(both.items.find((i) => i.id === 'breathiness-more')).toBeDefined();
+    expect(both.strengths.join(' ')).toMatch(/Your tone has no grit \(rasp 0\.00\), in line with Test\./);
+    expect(allText(both)).not.toMatch(/\bclean\b/);
+
+    // No flips at all is in Shawn's band, but it is not praised or built on.
+    const none = planFor({ ...makeFakeAnalysis({ ...idealStyle(shawn), flipsPerMinute: 0 }), voicedSec: 40 }, shawn);
+    expect(none.strengths.join(' ')).not.toMatch(/flips/);
+    expect(none.headline).not.toMatch(/register flips already sit/);
+    for (const f of none.signatureFocus) expect(f.hint).not.toMatch(/register flips already fit/);
+
+    // A clip without flips: a short take's widened band isn't praise either, and flip moves are held back.
+    const clip = makeFakeAnalysis({ flipsPerMinute: 0, headInUpperRange: 0.2, mixInUpperRange: 0.3, chestInUpperRange: 0.5 });
+    const ref = profileFromReference(clip, 'clip.wav', daniel);
+    const short = { ...makeFakeAnalysis({ flipsPerMinute: 5.1 }), voicedSec: 11.8 };
+    const refPlan = planFor(short, ref);
+    expect(refPlan.strengths.join(' ')).not.toMatch(/flips/);
+    for (const f of refPlan.signatureFocus) expect(f.hint).not.toMatch(/register flips already fit/);
+  });
+
+  it('keeps one item per register move (release into falsetto, or connect back to a fuller sound)', () => {
+    const rng = makeRng(41);
+    for (let n = 0; n < 200; n++) {
+      const p = SINGERS[n % 3];
+      const ids = planFor({ ...makeFakeAnalysis(randomStyle(rng)), voicedSec: 90 }, p).items.map((i) => i.id);
+      expect(ids.includes('headInUpperRange-more') && ids.includes('mixInUpperRange-less'), ids.join()).toBe(false);
+      const connect = ids.filter((id) => ['chestInUpperRange-more', 'headInUpperRange-less', 'mixInUpperRange-more'].includes(id));
+      expect(connect.length, ids.join()).toBeLessThanOrEqual(1);
+    }
+    // The user-take.wav case for Jalen: more falsetto wanted, and far too much mix.
+    const ids = planFor({ ...makeFakeAnalysis({ ...idealStyle(jalen), headInUpperRange: 0.1, mixInUpperRange: 0.55, chestInUpperRange: 0.35 }), voicedSec: 90 }, jalen).items.map((i) => i.id);
+    expect(ids).toContain('headInUpperRange-more');
+    expect(ids).not.toContain('mixInUpperRange-less');
+  });
+
+  it('explains jargon, and says "no singing" rather than "0.0 s of singing"', () => {
+    const cues = STYLE_KEYS.flatMap((k) => (['more', 'less'] as const).flatMap((d) => [FIXES[k][d].title, ...FIXES[k][d].cues, ...Object.values(FIXES[k][d].singerCues ?? {}).flat()]));
+    for (const t of cues) expect(t).not.toMatch(/fold closure|firmer closure|Warm up and round/);
+    expect(FIXES.brightness.less.title).toBe('Make the tone warmer and rounder');
+    for (const e of EXERCISES) expect(e.goal, e.id).not.toMatch(/fold closure/);
+
+    const nulls = Object.fromEntries(STYLE_KEYS.map((k) => [k, null])) as Partial<StyleVector>;
+    const silent: VoiceAnalysis = { ...makeFakeAnalysis(nulls), voicedSec: 0, warnings: ['No clear singing was detected.'], issues: ['too-little-singing', 'too-quiet'] };
+    const plan = planFor(silent, shawn);
+    expect(plan.headline).toMatch(/^We couldn't hear any singing in this take, so we can't compare it with Shawn Mendes\./);
+    expect(allText(plan)).not.toMatch(/0\.0 s/);
+    expect(plan.items[0].whatWeHeard).toBe("The recording itself was flagged: we couldn't hear any singing in it. The level was very low.");
+  });
+
+  it('summarises the recording warning instead of repeating it on a not-scored take', () => {
+    const warning =
+      'This sounds like singing over instruments or a backing track (between phrases the music is about as loud as the voice). The analysis follows the loudest pitched sound.';
+    const plan = planFor({ ...makeFakeAnalysis(), warnings: [warning], issues: ['accompaniment'] }, jalen);
+    expect(plan.items[0].whatWeHeard).toBe('The recording itself was flagged: it sounds like singing over instruments.');
+    expect(allText(plan)).not.toContain(warning);
   });
 });

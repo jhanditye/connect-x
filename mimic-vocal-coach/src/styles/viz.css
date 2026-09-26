@@ -55,6 +55,9 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  /* A reference clip's legend entry is its file name, which can be long. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .viz-key {
   display: inline-block;
@@ -269,6 +272,7 @@
   text-align: center;
   font-size: var(--fs-sm);
   color: var(--ink-2);
+  overflow-wrap: anywhere;
 }
 
 /* ---------------------------------------------------------------- dimension meter */

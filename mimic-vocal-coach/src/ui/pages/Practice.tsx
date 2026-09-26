@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { passaggioFor, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { audioSupported, patternSchedule, patternStartMidi, playNote, playPattern, startDrone, type PatternPlayer } from '../../audio/tones';
+import { forUserVoice } from '../../coach/coach';
 import { EXERCISES } from '../../coach/exercises';
 import { STYLE_LABELS } from '../../coach/profiles';
 import { midiToNoteName } from '../../dsp/music';
@@ -58,6 +59,12 @@ export function patternSpan(p: Pattern, passaggioLowMidi: number): [number, numb
   return [lo, hi];
 }
 
+function wordedForVoice(ex: Exercise, passaggioLow: number): Exercise {
+  const voice = { passaggio: { lowMidi: passaggioLow, highMidi: passaggioLow + 5 } };
+  const w = (t: string) => forUserVoice(t, voice);
+  return { ...ex, name: w(ex.name), goal: w(ex.goal), steps: ex.steps.map(w), cautions: ex.cautions?.map(w) };
+}
+
 function ExerciseCard(props: {
   ex: Exercise;
   passaggioLow: number;
@@ -68,7 +75,9 @@ function ExerciseCard(props: {
   onRecordDrill?: (id: string) => void;
   focus?: boolean;
 }): JSX.Element {
-  const { ex, now } = props;
+  const { now } = props;
+  // Exercises are worded for male voices ("falsetto"); alto, mezzo and soprano get "head voice".
+  const ex = useMemo(() => wordedForVoice(props.ex, props.passaggioLow), [props.ex, props.passaggioLow]);
   const headingId = `ex-${ex.id}`;
   const playingThis = now?.id === ex.id;
   // The focus cards are the ones to do now, so their steps start open; the rest start closed.

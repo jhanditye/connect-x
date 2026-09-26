@@ -14,7 +14,9 @@ import type {
   StyleVector,
   TargetBand,
   VoiceAnalysis,
+  VoiceType,
 } from '../types';
+import type { ReferenceProfileExtras } from './profiles';
 
 const STYLE_KEYS: StyleKey[] = [
   'breathiness',
@@ -322,9 +324,26 @@ export function referenceUsability(ref: VoiceAnalysis): { usable: boolean; reaso
   return { usable: true, reason: null };
 }
 
+export interface ReferenceProfileOptions {
+  /**
+   * The artist's voice type as the user chose it under "Analyse the reference as" (null or absent
+   * when left at the user's own voice type). When set, key advice compares the user's passaggio with
+   * the one the clip was analysed with (`ref.passaggio`) instead of assuming the base singer's voice.
+   */
+  artistVoiceType?: VoiceType | null;
+}
+
 /** Build a SingerProfile whose targets are centred on a reference clip's measured StyleVector. */
-export function profileFromReference(ref: VoiceAnalysis, name: string, base?: SingerProfile): SingerProfile {
+export function profileFromReference(
+  ref: VoiceAnalysis,
+  name: string,
+  base?: SingerProfile,
+  opts?: ReferenceProfileOptions,
+): SingerProfile & ReferenceProfileExtras {
+  const low = ref.passaggio?.lowMidi;
+  const extras: ReferenceProfileExtras = opts?.artistVoiceType && typeof low === 'number' && Number.isFinite(low) ? { passaggioLowMidi: low } : {};
   return {
+    ...extras,
     id: 'reference',
     name,
     tagline: 'Targets measured from your own reference clip',

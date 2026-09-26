@@ -39,6 +39,12 @@ export interface ReferenceClip {
   /** Options the reference was analysed with. */
   opts: AnalysisOptions;
   /**
+   * The artist's voice type as the user chose it under "Analyse the reference as", or null when left
+   * at their own voice type. When set, key advice uses the clip's own passaggio instead of assuming
+   * the base singer's voice.
+   */
+  artistVoiceType: VoiceType | null;
+  /**
    * False when the clip cannot give targets (a full song mix, too little singing, speech). An
    * unusable clip stays loaded so the Studio can say why, but it is never offered as a target.
    */
@@ -104,7 +110,7 @@ export interface ScoringDeps {
   builtins: SingerProfile[];
   compare(analysis: VoiceAnalysis, profile: SingerProfile): Comparison;
   plan(analysis: VoiceAnalysis, comparison: Comparison, profile: SingerProfile): CoachingPlan;
-  profileFromReference(ref: VoiceAnalysis, name: string, base?: SingerProfile): SingerProfile;
+  profileFromReference(ref: VoiceAnalysis, name: string, base?: SingerProfile, opts?: { artistVoiceType?: VoiceType | null }): SingerProfile;
   /** Whether a reference clip can serve as a target (coach/reference.ts referenceUsability). */
   referenceUsability(ref: VoiceAnalysis): { usable: boolean; reason: string | null };
   /** Used by the provider after an analysis lands (it is too slow to run inside the reducer). */
@@ -185,13 +191,23 @@ export function resolveProfile(state: AppState, deps: Pick<ScoringDeps, 'builtin
   return deps.builtins.find((p) => p.id === id) ?? deps.builtins[0] ?? null;
 }
 
+/** "baritone@440": the options an analysis was computed with, as part of a save key. */
+function optionsTag(opts: AnalysisOptions | null | undefined): string {
+  return opts ? `${opts.voiceType}@${opts.a4Hz ?? 440}` : '-';
+}
+
 /**
- * Identifies "this take scored against this target", so a result is saved to Progress at most once
- * however often the user leaves and returns to Results.
+ * Identifies "this take, analysed with these options, scored against this target", so a result is
+ * saved to Progress at most once however often the user leaves and returns to Results. A re-analysis
+ * with other settings (voice type, tuning) changes the numbers, so it is a different result.
  */
-export function saveKey(state: Pick<AppState, 'takeSerial' | 'referenceSerial'>, profile: Pick<SingerProfile, 'id' | 'source'>): string {
-  const target = profile.source === 'reference' ? `${REFERENCE_ID}#${state.referenceSerial}` : profile.id;
-  return `${state.takeSerial}|${target}`;
+export function saveKey(
+  state: Pick<AppState, 'takeSerial' | 'takeOpts' | 'referenceSerial' | 'reference'>,
+  profile: Pick<SingerProfile, 'id' | 'source'>,
+): string {
+  const target =
+    profile.source === 'reference' ? `${REFERENCE_ID}#${state.referenceSerial}/${optionsTag(state.reference?.opts)}` : profile.id;
+  return `${state.takeSerial}/${optionsTag(state.takeOpts)}|${target}`;
 }
 
 export function activeProfile(state: AppState, deps: Pick<ScoringDeps, 'builtins'>): SingerProfile | null {
@@ -209,6 +225,14 @@ export function referenceOptions(state: Pick<AppState, 'settings' | 'referenceVo
 
 export function sameOptions(a: AnalysisOptions | null | undefined, b: AnalysisOptions): boolean {
   return !!a && a.voiceType === b.voiceType && (a.a4Hz ?? 440) === (b.a4Hz ?? 440);
+}
+
+/**
+ * The artist voice type a reference analysed with `opts` stands for: the user's explicit choice when
+ * the analysis used it, else null (the clip was analysed as the user's own voice type).
+ */
+function artistVoiceTypeFor(state: Pick<AppState, 'referenceVoiceType'>, opts: AnalysisOptions): VoiceType | null {
+  return state.referenceVoiceType !== null && state.referenceVoiceType === opts.voiceType ? state.referenceVoiceType : null;
 }
 
 function errorText(err: unknown, fallback: string): string {
@@ -297,9 +321,10 @@ export function createReducer(deps: ScoringDeps) {
         // A new clip borrows from the singer selected now; a re-analysis keeps the clip's original base.
         const baseId = reanalysis ? (state.reference?.baseProfileId ?? null) : refSelected ? state.builtinProfileId : state.selectedProfileId;
         const base = baseId ? deps.builtins.find((p) => p.id === baseId) : undefined;
+        const artistVoiceType = artistVoiceTypeFor(state, action.opts);
         let profile: SingerProfile;
         try {
-          profile = deps.profileFromReference(action.analysis, action.clip.name, base);
+          profile = deps.profileFromReference(action.analysis, action.clip.name, base, { artistVoiceType });
         } catch (err) {
           return { ...state, ...IDLE, error: errorText(err, 'Could not build a profile from the reference clip.'), errorJob: 'reference' };
         }
@@ -328,6 +353,7 @@ export function createReducer(deps: ScoringDeps) {
             profile,
             baseProfileId: base?.id ?? null,
             opts: action.opts,
+            artistVoiceType,
             usable,
             unusableReason: usable ? null : (reason ?? UNUSABLE_FALLBACK),
           },
@@ -353,8 +379,25 @@ export function createReducer(deps: ScoringDeps) {
       case 'ai/thread':
         return { ...state, aiThread: { key: action.key, turns: action.turns } };
 
-      case 'reference/voiceType':
-        return { ...state, referenceVoiceType: action.voiceType };
+      case 'reference/voiceType': {
+        const next: AppState = { ...state, referenceVoiceType: action.voiceType };
+        const ref = state.reference;
+        // A choice that changes the analysis options is picked up by the provider's re-analysis. One
+        // that does not (the artist's voice type named explicitly, but the same as the user's own)
+        // only changes the key advice, so the profile is rebuilt from the analysis already here.
+        if (!ref || !sameOptions(ref.opts, referenceOptions(next))) return next;
+        const artistVoiceType = artistVoiceTypeFor(next, ref.opts);
+        if (artistVoiceType === ref.artistVoiceType) return next;
+        const base = ref.baseProfileId ? deps.builtins.find((p) => p.id === ref.baseProfileId) : undefined;
+        let profile: SingerProfile;
+        try {
+          profile = deps.profileFromReference(ref.analysis, ref.name, base, { artistVoiceType });
+        } catch (err) {
+          return { ...next, error: errorText(err, 'Could not build a profile from the reference clip.'), errorJob: 'reference' };
+        }
+        const rebuilt: AppState = { ...next, reference: { ...ref, profile, artistVoiceType } };
+        return state.selectedProfileId === REFERENCE_ID && ref.usable ? rescore({ ...rebuilt, practiceFocus: null }, deps) : rebuilt;
+      }
 
       case 'reference/clear': {
         const next: AppState = {

@@ -5,12 +5,13 @@
 
 import { useId, useMemo, type CSSProperties } from 'react';
 import { encodeWav } from '../../audio/wav';
+import { forUserVoice } from '../../coach/coach';
 import { getExercise } from '../../coach/exercises';
 import { compareToProfile, isScoreable, singerPassaggioLow } from '../../coach/compare';
 import { STYLE_LABELS } from '../../coach/profiles';
 import { useApp } from '../../state/context';
 import { REFERENCE_ID, saveKey } from '../../state/reducer';
-import type { CoachingItem, StyleKey } from '../../types';
+import type { CoachingItem, StyleKey, VoiceAnalysis } from '../../types';
 import { DimensionMeter } from '../charts/DimensionMeter';
 import { PitchPlot } from '../charts/PitchPlot';
 import { RangeKeyboard } from '../charts/RangeKeyboard';
@@ -48,6 +49,15 @@ function takeVsClip(semitones: number): string {
   return `${n} semitone${n === 1 ? '' : 's'} ${r > 0 ? 'higher' : 'lower'}`;
 }
 
+/**
+ * The take's tuning offset, or null when nothing measured it. The analysis reports 0 when there was
+ * no pitched singing or under a second of held notes, which must not read as "in tune".
+ */
+export function measuredTuningCents(analysis: Pick<VoiceAnalysis, 'notes' | 'pitch'>): number | null {
+  const noteSec = analysis.notes.reduce((sum, n) => sum + Math.max(0, n.end - n.start), 0);
+  return analysis.pitch.medianMidi === null || noteSec < 1 ? null : analysis.pitch.tuningOffsetCents;
+}
+
 /** The coach may end a move hint with "Start here: <first step>", which the numbered steps repeat. */
 export function hintWithoutFirstStep(hint: string, firstStep: string | undefined): string {
   const marker = ' Start here: ';
@@ -57,7 +67,8 @@ export function hintWithoutFirstStep(hint: string, firstStep: string | undefined
   return norm(hint.slice(i + marker.length)) === norm(firstStep) ? hint.slice(0, i) : hint;
 }
 
-// Stable ids per analysis object, used to key the AI conversation to this take and target.
+// Stable ids per analysis or profile object, used to key the AI conversation to this take and target
+// (a reference profile is rebuilt when the artist's voice type changes, which changes its key advice).
 const analysisIds = new WeakMap<object, number>();
 let nextAnalysisId = 1;
 function analysisId(a: object): number {
@@ -137,6 +148,7 @@ export function ResultsPage() {
   const saved = state.savedKeys.includes(saveKey(state, profile));
   const canSave = scoreable && !saved;
   const takeName = take?.name ?? 'Take';
+  const tuning = measuredTuningCents(analysis);
   // The header range note is repeated word for word by a range coaching card when there is one.
   const showRangeNote = scoreable && !items.some((i) => i.dimension === 'range');
   // Key advice for builtin singers comes from the voice types; a reference clip with no singer
@@ -146,7 +158,7 @@ export function ResultsPage() {
   const aligned = !!refComp && refComp.path.length > 0 && Number.isFinite(refComp.meanAbsCents);
   // The comparison runs just after the result paints; say so rather than leave a gap.
   const comparingReference = !!reference?.usable && !refComp;
-  const aiKey = `${analysisId(analysis)}|${profile.id}|${reference?.usable ? analysisId(reference.analysis) : 0}`;
+  const aiKey = `${analysisId(analysis)}|${profile.id}#${analysisId(profile)}|${reference?.usable ? analysisId(reference.analysis) : 0}`;
   const saveNote = !scoreable
     ? 'This take can’t be scored, so there is nothing to save yet. Record another take using the advice above.'
     : saved
@@ -261,7 +273,16 @@ export function ResultsPage() {
             </div>
             <div>
               <dt>Tuning</dt>
-              <dd className="num">{formatCents(analysis.pitch.tuningOffsetCents)}</dd>
+              <dd className="num">
+                {tuning === null ? (
+                  <>
+                    <span aria-hidden="true">–</span>
+                    <span className="visually-hidden">not measured</span>
+                  </>
+                ) : (
+                  formatCents(tuning)
+                )}
+              </dd>
             </div>
           </dl>
           {showRangeNote && <p className="range-note">{comparison.rangeNote}</p>}
@@ -415,20 +436,25 @@ export function ResultsPage() {
             </h2>
           </div>
           <div className="moves">
-            {moves.map(({ focus, move }) => (
-              <article key={focus.moveId} className="move">
-                <h3 className="move-name">{move!.name}</h3>
-                <p>{move!.description}</p>
-                <p className="move-hint">{hintWithoutFirstStep(focus.hint, move!.howTo[0])}</p>
-                {move!.howTo.length > 0 && (
-                  <ol className="move-steps">
-                    {move!.howTo.map((h) => (
-                      <li key={h}>{h}</li>
-                    ))}
-                  </ol>
-                )}
-              </article>
-            ))}
+            {moves.map(({ focus, move }) => {
+              // Steps are instructions to the user, so they follow the user's voice type
+              // ("head voice" rather than "falsetto" for alto, mezzo and soprano), like the plan's hints.
+              const steps = move!.howTo.map((h) => forUserVoice(h, analysis));
+              return (
+                <article key={focus.moveId} className="move">
+                  <h3 className="move-name">{move!.name}</h3>
+                  <p>{move!.description}</p>
+                  <p className="move-hint">{hintWithoutFirstStep(focus.hint, steps[0])}</p>
+                  {steps.length > 0 && (
+                    <ol className="move-steps">
+                      {steps.map((h) => (
+                        <li key={h}>{h}</li>
+                      ))}
+                    </ol>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </section>
       )}

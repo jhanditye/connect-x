@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { makeFakeAnalysis, makeFakeProfile } from '../testing/fixtures';
 import type { SingerProfile, StyleKey, StyleVector, TargetBand, VoiceAnalysis } from '../types';
-import { compareToProfile, directionFor, isScoreable, scoreDimension, singerPassaggioLow } from './compare';
+import { compareToProfile, directionFor, isScoreable, referencePassaggioLow, scoreDimension, singerPassaggioLow } from './compare';
 import { SINGERS } from './profiles';
+import { profileFromReference } from './reference';
 
 /** Passaggio low notes of the app's voice types (analysis/passaggio.ts). */
 const PASSAGGIO_LOW = { bass: 59, baritone: 62, tenor: 64, alto: 67, mezzo: 69, soprano: 71 } as const;
@@ -285,7 +286,10 @@ describe('compareToProfile', () => {
     expect(c.profileId).toBe('reference');
     // Built on Daniel's profile: key advice from the voice types, the clip's range as information.
     expect(c.suggestedTransposeSemitones).toBe(-2);
-    expect(c.rangeNote).toMatch(/Daniel's songs should sit best/);
+    // Named as the reference, with the assumption about the singer's voice spelled out.
+    expect(c.rangeNote).toMatch(/the reference song should sit best about 2 semitones \(a whole step\) lower/);
+    expect(c.rangeNote).toMatch(/assuming a voice like Daniel's \(if the artist's voice type differs, set it under "Analyse the reference as"\)/);
+    expect(c.rangeNote).not.toMatch(/Daniel's songs/);
     expect(c.rangeNote).toMatch(/about 1 semitone \(a half step\) above the reference clip \(G3–G4\)/);
     // A clip that gave no measurements has only a stand-in range, which is never described as the clip's.
     const empty: SingerProfile = { ...ref, targets: {} };
@@ -294,6 +298,75 @@ describe('compareToProfile', () => {
     expect(e.rangeNote).not.toMatch(/reference clip/);
     const bare = compareToProfile(makeFakeAnalysis(), makeFakeProfile({ id: 'reference', source: 'reference', signatureMoves: [], targets: {} }));
     expect(bare.rangeNote).toBe('There was not enough singing in the reference clip to compare ranges with it.');
+  });
+});
+
+describe('summaries that could contradict the rest of the page', () => {
+  const [shawn, daniel] = SINGERS;
+  const dim = (a: VoiceAnalysis, p: SingerProfile, key: StyleKey) => compareToProfile(a, p).dimensions.find((d) => d.key === key)!;
+
+  it('says why vibrato speed and width are missing when held notes had no vibrato', () => {
+    const straight = makeFakeAnalysis({ vibratoPresence: 0, vibratoRateHz: null, vibratoExtentCents: null });
+    for (const key of ['vibratoRateHz', 'vibratoExtentCents'] as const) {
+      expect(dim(straight, shawn, key).summary).toBe('Not measured in this take: none of the held notes had vibrato.');
+    }
+    const noHeld = makeFakeAnalysis({ vibratoPresence: null, vibratoRateHz: null, vibratoExtentCents: null });
+    expect(dim(noHeld, shawn, 'vibratoRateHz').summary).toMatch(/no notes were held long enough/);
+  });
+
+  it('never calls a falling loudness slope "flatter" than a rising one', () => {
+    const falling = dim(makeFakeAnalysis({ loudnessClimbDbPerSemitone: -1.3 }), shawn, 'loudnessClimbDbPerSemitone');
+    expect(falling.direction).toBe('more');
+    expect(falling.summary).toBe('-1.3 dB per semitone, getting quieter as you climb, where Shawn\'s usual climb is about +0.3 dB/semitone.');
+    const steep = dim(makeFakeAnalysis({ loudnessClimbDbPerSemitone: 1.4 }), shawn, 'loudnessClimbDbPerSemitone');
+    expect(steep.summary).toMatch(/a steeper rise than Shawn's usual climb/);
+    for (const p of SINGERS) {
+      for (const v of [-1.5, -0.8, 0, 1.2, 2]) {
+        expect(dim(makeFakeAnalysis({ loudnessClimbDbPerSemitone: v }), p, 'loudnessClimbDbPerSemitone').summary).not.toMatch(/flatter/);
+      }
+    }
+  });
+
+  it('says "no runs" and "no register flips" for a clip that has none, not "0.0"', () => {
+    const clip = makeFakeAnalysis({ agility: 0, flipsPerMinute: 0 });
+    const ref = profileFromReference(clip, 'clip.wav', daniel);
+    const fast = dim({ ...makeFakeAnalysis({ agility: 7.5, flipsPerMinute: 9 }), voicedSec: 90 }, ref, 'agility');
+    expect(fast.summary).toBe('About 7.5 notes per second in runs, where the reference has no runs.');
+    expect(dim(clip, ref, 'agility').summary).toBe('No runs, like the reference.');
+    expect(dim(clip, ref, 'flipsPerMinute').summary).toBe('No register flips, like the reference.');
+    const many = dim({ ...makeFakeAnalysis({ flipsPerMinute: 9 }), voicedSec: 90 }, ref, 'flipsPerMinute');
+    expect(many.summary).toBe('About 9.0 flips per minute, where the reference has none.');
+    // On a short take the band widens: one flip is on-style, and the summary says why.
+    const one = dim({ ...makeFakeAnalysis({ flipsPerMinute: 5.1 }), voicedSec: 11.8 }, ref, 'flipsPerMinute');
+    expect(one.direction).toBe('ok');
+    expect(one.summary).toMatch(/The reference has none, but on a take this short a single flip reaches that rate\./);
+    const aboveDaniel = dim({ ...makeFakeAnalysis({ flipsPerMinute: 5.1 }), voicedSec: 11.8 }, daniel, 'flipsPerMinute');
+    expect(aboveDaniel.summary).toMatch(/above Daniel's usual rate \(about 2\.5 per min\), but on a take this short that is only one flip more/);
+  });
+
+  it('bases reference key advice on the voice type chosen for the clip, and names it the reference', () => {
+    // The clip analysed as a mezzo (passaggio A4).
+    const clip = withVoiceType(makeFakeAnalysis(), PASSAGGIO_LOW.mezzo);
+    const chosen = profileFromReference(clip, 'clip.wav', shawn, { artistVoiceType: 'mezzo' });
+    const assumed = profileFromReference(clip, 'clip.wav', shawn);
+    expect(referencePassaggioLow(chosen)).toBe(69);
+    expect(singerPassaggioLow(chosen)).toBe(69);
+    expect(referencePassaggioLow(assumed)).toBeNull();
+    expect(singerPassaggioLow(assumed)).toBe(64);
+    // A builtin never carries a clip's passaggio.
+    expect(referencePassaggioLow(shawn)).toBeNull();
+
+    const mezzo = compareToProfile(withVoiceType(makeFakeAnalysis(), PASSAGGIO_LOW.mezzo), chosen);
+    expect(mezzo.suggestedTransposeSemitones).toBe(0);
+    expect(mezzo.rangeNote).toMatch(/^Based on your voice type, the reference song's original key should suit you/);
+    const baritone = compareToProfile(makeFakeAnalysis(), chosen);
+    expect(baritone.suggestedTransposeSemitones).toBe(-7);
+    expect(baritone.rangeNote).toMatch(/the reference singer's voice changes gear around A4 \(from the voice type you chose for the clip\)/);
+    for (const c of [mezzo, baritone]) expect(c.rangeNote).not.toMatch(/Shawn/);
+    // Without a choice, the base singer's voice is assumed, and the note says how to change it.
+    const fallback = compareToProfile(withVoiceType(makeFakeAnalysis(), PASSAGGIO_LOW.mezzo), assumed);
+    expect(fallback.suggestedTransposeSemitones).toBe(5);
+    expect(fallback.rangeNote).toMatch(/assuming a voice like Shawn's/);
   });
 });
 

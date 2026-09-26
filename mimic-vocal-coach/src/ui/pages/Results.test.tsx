@@ -9,7 +9,7 @@ import { AppContext, type AppController } from '../../state/context';
 import { createInitialState, saveKey, type Action, type AppState, type ReferenceClip } from '../../state/reducer';
 import { makeFakeAnalysis, makeFakeProfile, makeFakeReferenceComparison } from '../../testing/fixtures';
 import type { AppSettings, VoiceAnalysis } from '../../types';
-import { hintWithoutFirstStep, ResultsPage } from './Results';
+import { hintWithoutFirstStep, measuredTuningCents, ResultsPage } from './Results';
 
 vi.mock('../../coach/ai', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../coach/ai')>();
@@ -132,6 +132,7 @@ function usableReference(): ReferenceClip {
     profile: makeFakeProfile({ id: 'reference', name: 'isolated-vocal', source: 'reference' }),
     baseProfileId: 'shawn-mendes',
     opts: { voiceType: 'baritone', a4Hz: 440 },
+    artistVoiceType: null,
     usable: true,
     unusableReason: null,
     notices: [],
@@ -174,6 +175,31 @@ describe('ResultsPage', () => {
     }
     expect(app.saveSession).not.toHaveBeenCalled();
     expect(container.textContent).toMatch(/can’t be scored, so there is nothing to save/);
+  });
+
+  it('shows a not-scored take’s recording warning once (in the notice), not again in the coaching card', () => {
+    const warning = 'No clear singing was detected. Sing at least 10 seconds of sustained notes and try again.';
+    render(controller({ ...silentAnalysis(), warnings: [warning] }));
+    expect(container.querySelector('.notice')?.textContent).toContain(warning);
+    expect(container.textContent!.split(warning).length - 1).toBe(1);
+  });
+
+  it('shows tuning as not measured, not 0¢, for a take with no pitched singing', () => {
+    const silent: VoiceAnalysis = {
+      ...silentAnalysis(),
+      notes: [],
+      pitch: { medianMidi: null, lowMidi: null, highMidi: null, tessituraLowMidi: null, tessituraHighMidi: null, tuningOffsetCents: 0 },
+    };
+    render(controller(silent));
+    const tuning = Array.from(container.querySelectorAll('.facts > div')).find((d) => d.querySelector('dt')?.textContent === 'Tuning');
+    expect(tuning?.querySelector('dd')?.textContent).toBe('–not measured');
+    expect(container.querySelector('.results-head')?.textContent).not.toContain('0¢');
+  });
+
+  it('shows the measured tuning offset for a sung take', () => {
+    render(controller(makeFakeAnalysis()));
+    const tuning = Array.from(container.querySelectorAll('.facts > div')).find((d) => d.querySelector('dt')?.textContent === 'Tuning');
+    expect(tuning?.querySelector('dd')?.textContent).toBe('+6¢');
   });
 
   it('lists the take’s own decode notes with the recording warnings, even after other jobs cleared state notices', () => {
@@ -243,6 +269,15 @@ describe('ResultsPage', () => {
     root = createRoot(container);
     render(controller(analysis, { settings: withKey, aiThread: { key: 'another-take', turns: last.turns } }));
     expect(container.querySelector('.ai-thread')).toBeNull();
+  });
+});
+
+describe('measuredTuningCents', () => {
+  it('is null without pitched singing or with under a second of held notes, where the analysis reports 0', () => {
+    const a = makeFakeAnalysis();
+    expect(measuredTuningCents(a)).toBe(6);
+    expect(measuredTuningCents({ ...a, pitch: { ...a.pitch, medianMidi: null } })).toBeNull();
+    expect(measuredTuningCents({ ...a, notes: a.notes.slice(0, 1).map((n) => ({ ...n, end: n.start + 0.6 })) })).toBeNull();
   });
 });
 

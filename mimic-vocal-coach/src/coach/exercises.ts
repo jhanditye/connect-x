@@ -35,7 +35,7 @@ export const EXERCISES: Exercise[] = [
   {
     id: 'straw-phonation-slides',
     name: 'Straw phonation slides',
-    goal: 'Balance airflow and fold closure with a semi-occluded vocal tract (SOVT), so high notes need less effort.',
+    goal: 'Balance airflow against how firmly your vocal folds meet, using a semi-occluded vocal tract (SOVT: sound through a narrowed opening such as a straw), so high notes need less effort.',
     helps: ['loudnessClimbDbPerSemitone', 'mixInUpperRange', 'breathiness', 'rasp'],
     steps: [
       'Seal your lips around a drinking straw. A regular straw is easiest; a narrow coffee stirrer gives more back-pressure.',
@@ -66,7 +66,7 @@ export const EXERCISES: Exercise[] = [
   {
     id: 'nay-bright-mix',
     name: '"Nay" five-tone scales',
-    goal: 'Build a bright, forward mix with firm but easy fold closure: the buzzy core of a pop chorus.',
+    goal: 'Build a bright, forward mix with vocal folds that meet firmly but easily: the buzzy core of a pop chorus.',
     helps: ['brightness', 'mixInUpperRange', 'breathiness', 'chestInUpperRange'],
     steps: [
       'Say "nay" in a slightly bratty, nasal way, like imitating a whiny child.',
@@ -129,7 +129,7 @@ export const EXERCISES: Exercise[] = [
     id: 'messa-di-voce',
     name: 'Messa di voce (swell and fade)',
     goal: 'Control dynamics on one note: grow from soft to fuller and back without the tone cracking, wobbling or changing pitch.',
-    helps: ['dynamicRangeDb', 'loudnessClimbDbPerSemitone', 'mixInUpperRange', 'pitchAccuracyCents', 'vibratoPresence'],
+    helps: ['dynamicRangeDb', 'loudnessClimbDbPerSemitone', 'mixInUpperRange', 'pitchAccuracyCents', 'vibratoPresence', 'softOnsetRatio'],
     steps: [
       'Start a comfortable note just below your passaggio very softly on "ah" or "oh", with an easy onset.',
       'Over about four seconds, let it grow to a medium-full sound, never a shout.',

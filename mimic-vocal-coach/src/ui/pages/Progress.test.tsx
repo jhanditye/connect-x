@@ -151,6 +151,14 @@ describe('ProgressPage', () => {
     act(() => button(/Clear history/).click());
     act(() => button(/Cancel/).click());
     expect(document.activeElement).toBe(button(/Clear history/));
+    // Escape cancels too, like the row prompt.
+    act(() => button(/Clear history/).click());
+    expect(document.activeElement?.textContent).toBe('Cancel');
+    act(() => {
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(container.textContent).not.toContain('Delete all');
+    expect(document.activeElement).toBe(button(/Clear history/));
     act(() => button(/Clear history/).click());
     act(() => button(/Delete all/).click());
     expect(container.textContent).toContain('History cleared');

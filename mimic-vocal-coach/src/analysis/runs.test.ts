@@ -101,6 +101,15 @@ describe('detectRuns: glides and speed', () => {
     expect(withSliver[0].noteCount).toBe(5);
     expect(withSliver[0].notesPerSec).toBeGreaterThan(7);
   });
+
+  it('keeps the short notes of a long-short (dotted) run', () => {
+    // 150/70 ms: each short note sits between notes twice its length, like a glide sliver.
+    const midis = [72, 70, 67, 65, 63, 60, 58, 55, 53];
+    const dotted = detectRuns(chain(midis.map((m, k) => [k % 2 ? 0.07 : 0.15, m])));
+    expect(dotted).toHaveLength(1);
+    expect(dotted[0].noteCount).toBe(9);
+    expect(dotted[0].notesPerSec).toBeCloseTo(9 / 1.03, 5);
+  });
 });
 
 describe('runs on synthesised takes', () => {
@@ -111,6 +120,17 @@ describe('runs on synthesised takes', () => {
     expect(a.runs[0].noteCount).toBeGreaterThanOrEqual(7);
     expect(a.runs[0].notesPerSec).toBeGreaterThan(7);
     expect(a.runs[0].notesPerSec).toBeLessThan(9.5);
+  });
+
+  it('a dotted 9-note run (150/70 ms, 8.7 notes/s) is read at about its real speed', () => {
+    const midis = [74, 72, 70, 67, 65, 63, 60, 58, 55, 53];
+    const line = [...midis.map((midi, k) => ({ midi, durSec: k === 0 ? 0.8 : k % 2 ? 0.15 : 0.07 })), { midi: 53, durSec: 0.9 }];
+    const phrase = (seed: number) => synthMelody(line, { sampleRate: SR, glideSec: 0.02, seed });
+    const a = analyzeTake(concat(pad(), phrase(1), pad(), phrase(2), pad()), SR, OPTS);
+    expect(a.runs).toHaveLength(2);
+    for (const r of a.runs) expect(r.noteCount).toBeGreaterThanOrEqual(8);
+    expect(a.style.agility).toBeGreaterThan(7.5);
+    expect(a.style.agility).toBeLessThan(10);
   });
 
   it('a slow scale (0.6 s notes) has no run', () => {

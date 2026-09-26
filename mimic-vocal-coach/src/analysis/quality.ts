@@ -33,6 +33,14 @@ const ACC_MAX_PAUSE_DROP_DB = 12;
 const ACC_MIN_PAUSE_PERIODICITY = 0.25;
 const ACC_MAX_PAUSE_PERIODICITY = 0.7;
 /**
+ * Airy singing looks like a mix on level and periodicity alone: its aspiration often drops below
+ * the voicing gate mid-phrase, at the singing level with periodicity 0.3-0.45. What differs is the
+ * spectrum. Accompaniment in a pause is tonal (bass, chords, pads): zero-crossing rate 0.02-0.06
+ * per sample at the median in real mixes, 0.2 or less for 90% of frames. Aspiration and breath
+ * noise read 0.35-0.5. Pause frames at or above this rate are left out of the pause measurements.
+ */
+const ACC_MAX_TONAL_ZCR = 0.3;
+/**
  * A second cue for the higher (female) voice types: a pitch track mostly below C3 means the
  * tracker followed a bass line (not used for male voices: low baritones really sing there). With
  * it, fainter pitched pauses (down to 20 dB below the voice) also count as accompaniment; without
@@ -80,7 +88,7 @@ export function measureQuality(frames: FrameFeatures[], clipping: number): Audio
 
 /** What the pauses between phrases sound like, and where the pitch track sits (see ACC_* above). */
 export interface AccompanimentCues {
-  /** Seconds of pauses of at least 0.25 s between the first and last voiced frame. */
+  /** Seconds of pauses of at least 0.25 s between the first and last voiced frame (tonal frames only). */
   pauseSec: number;
   /** Median frame RMS in those pauses minus the median voiced RMS, dB; NaN without pauses. */
   pauseLevelDb: number;
@@ -90,7 +98,14 @@ export interface AccompanimentCues {
   belowC3Share: number;
 }
 
-export function measureAccompaniment(frames: FrameFeatures[], hopSec: number): AccompanimentCues {
+/**
+ * `singing` marks unvoiced frames that are still the singer (analyze.ts's near-whisper frames:
+ * aspiration clearly above the noise floor, partly periodic, noise-like); they are not pauses.
+ * `zcr` is each unvoiced frame's zero-crossing rate per sample: noise-like pause frames (see
+ * ACC_MAX_TONAL_ZCR) are left out, which also covers airy takes with no silence to measure the
+ * noise floor from (where the whisper gate is too high).
+ */
+export function measureAccompaniment(frames: FrameFeatures[], hopSec: number, singing?: Uint8Array, zcr?: Float32Array): AccompanimentCues {
   let first = -1;
   let last = -1;
   const voicedLevels: number[] = [];
@@ -106,16 +121,18 @@ export function measureAccompaniment(frames: FrameFeatures[], hopSec: number): A
   const pauseLevels: number[] = [];
   const pausePeriodicity: number[] = [];
   const minPause = Math.round(PHRASE_MERGE_GAP_SEC / hopSec);
+  const sung = (k: number) => frames[k].voiced || singing?.[k] === 1;
   let i = first;
   while (first >= 0 && i <= last) {
-    if (frames[i].voiced) {
+    if (sung(i)) {
       i++;
       continue;
     }
     let j = i;
-    while (j <= last && !frames[j].voiced) j++;
+    while (j <= last && !sung(j)) j++;
     if (j - i >= minPause) {
       for (let k = i; k < j; k++) {
+        if (zcr !== undefined && zcr[k] >= ACC_MAX_TONAL_ZCR) continue;
         pauseLevels.push(frames[k].rmsDb);
         pausePeriodicity.push(frames[k].periodicity);
       }

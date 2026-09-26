@@ -50,6 +50,15 @@ describe('decodeAudioFile (WAV path)', () => {
     expect((err as Error).message).toBe('"silent.wav" contains no audio.');
   });
 
+  it('decodes a WAV whose data size was never written (0), as the browsers do, instead of calling it empty', async () => {
+    const x = sine(220, 2, 8000, 0.5);
+    const buf = encodeWav(x, 8000);
+    new DataView(buf).setUint32(40, 0, true);
+    const out = await decodeAudioFile(new File([buf], 'crashed-recorder.wav', { type: 'audio/wav' }));
+    expect(out.samples.length).toBe(x.length);
+    expect(out.durationSec).toBeCloseTo(2, 6);
+  });
+
   it('decodes only up to maxSeconds and reports the full length', async () => {
     const x = sine(220, 3, 8000, 0.5);
     const out = await decodeAudioFile(wavBlob(x, 8000), { maxSeconds: 2 });

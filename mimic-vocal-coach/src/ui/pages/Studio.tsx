@@ -483,7 +483,7 @@ export function StudioPage() {
               onChange={(e) => app.setReferenceVoiceType((e.currentTarget.value || null) as VoiceType | null)}
               disabled={busy}
             >
-              <option value="">Same as my voice type ({voiceName})</option>
+              <option value="">Not sure (analyse as {voiceName.toLowerCase()}, like my voice)</option>
               {VOICE_TYPES.map((v) => (
                 <option key={v} value={v}>
                   {VOICE_TYPE_LABELS[v]}
