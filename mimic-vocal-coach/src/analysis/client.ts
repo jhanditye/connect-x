@@ -25,6 +25,9 @@ function analyzeOnMainThread(
   });
 }
 
+/** A worker that has not said anything for this long (it pings as soon as its script runs) is treated as dead. */
+const WORKER_START_TIMEOUT_MS = 6000;
+
 function createWorker(): Worker | null {
   if (typeof Worker === 'undefined') return null;
   try {
@@ -47,10 +50,17 @@ export function analyzeInWorker(
   return new Promise((resolve, reject) => {
     let settled = false;
     let started = false;
+    let startTimer: ReturnType<typeof setTimeout> | undefined;
     const finish = () => {
       settled = true;
+      clearTimeout(startTimer);
       worker.terminate();
     };
+    startTimer = setTimeout(() => {
+      if (started || settled) return;
+      finish();
+      analyzeOnMainThread(samples, sampleRate, opts, onProgress).then(resolve, reject);
+    }, WORKER_START_TIMEOUT_MS);
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       if (settled) return;
       const msg = event.data;

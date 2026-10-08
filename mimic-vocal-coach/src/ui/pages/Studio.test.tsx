@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRecorder, microphoneUnavailableReason, RecorderError } from '../../audio/recorder';
+import { createRecorder, microphoneUnavailableReason, RecorderError, type InterruptionReason } from '../../audio/recorder';
 import { AppContext, type AppController } from '../../state/context';
 import { createInitialState, type AppState, type ReferenceClip } from '../../state/reducer';
 import { makeFakeAnalysis, makeFakeProfile } from '../../testing/fixtures';
@@ -365,5 +365,51 @@ describe('StudioPage', () => {
     expect(container.textContent).toMatch(/record a voice memo on your phone, then upload it/i);
     expect(button(/^Record$/).disabled).toBe(false);
     expect(container.querySelector('input[type="file"]')).not.toBeNull();
+  });
+  it('warns when the system interrupts the microphone and passes that on with the take', async () => {
+    vi.mocked(microphoneUnavailableReason).mockReturnValue(null);
+    let handler: ((reason: InterruptionReason) => void) | null = null;
+    const rec = {
+      start: () => Promise.resolve(),
+      stop: () => Promise.resolve({ samples: new Float32Array(48000), sampleRate: 48000, interrupted: 'hidden' as const }),
+      cancel: () => undefined,
+      analyser: null,
+      info: { inputLabel: 'iPhone Microphone', inputSampleRate: 48000, contextSampleRate: 48000, bluetooth: false, lowBandwidth: false },
+      get onInterruption() {
+        return handler;
+      },
+      set onInterruption(fn: ((reason: InterruptionReason) => void) | null | undefined) {
+        handler = fn ?? null;
+      },
+    };
+    vi.mocked(createRecorder).mockReturnValueOnce(rec);
+    const app = controller();
+    render(app);
+    await act(async () => button(/^Record$/).click());
+    expect(container.textContent).not.toContain('The recording was interrupted');
+    act(() => handler?.('hidden'));
+    expect(container.textContent).toContain('The recording was interrupted');
+    expect(container.textContent).toContain('sent to the background');
+    await act(async () => button(/Stop and analyse/).click());
+    const input = vi.mocked(app.analyzeSamples).mock.calls[0][0];
+    expect(input.notices?.[0]).toMatch(/interrupted.*background/);
+    vi.mocked(microphoneUnavailableReason).mockReset();
+  });
+
+  it('warns about a Bluetooth microphone while recording', async () => {
+    vi.mocked(microphoneUnavailableReason).mockReturnValue(null);
+    vi.mocked(createRecorder).mockReturnValueOnce({
+      start: () => Promise.resolve(),
+      stop: () => Promise.resolve({ samples: new Float32Array(0), sampleRate: 48000 }),
+      cancel: () => undefined,
+      analyser: null,
+      info: { inputLabel: 'AirPods', inputSampleRate: 16000, contextSampleRate: 48000, bluetooth: true, lowBandwidth: true },
+    });
+    render(controller());
+    await act(async () => button(/^Record$/).click());
+    expect(container.textContent).toContain('Bluetooth microphone in use');
+    expect(container.textContent).toContain('AirPods · 16 kHz');
+    act(() => button(/Discard/).click());
+    vi.mocked(microphoneUnavailableReason).mockReset();
   });
 });

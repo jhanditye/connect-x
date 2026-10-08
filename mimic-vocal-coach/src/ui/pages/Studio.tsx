@@ -4,13 +4,15 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { MAX_ANALYSIS_SEC } from '../../analysis/analyze';
 import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
-import { createRecorder, MAX_RECORD_SEC, microphoneUnavailableReason, type Recorder } from '../../audio/recorder';
+import { createRecorder, MAX_RECORD_SEC, microphoneUnavailableReason, type InterruptionReason, type Recorder, type RecorderInfo } from '../../audio/recorder';
 import { getExercise } from '../../coach/exercises';
+import { isIos } from '../../pwa/platform';
 import { useApp } from '../../state/context';
 import { REFERENCE_ID } from '../../state/reducer';
 import type { SingerProfile, VoiceType } from '../../types';
 import { AnalysisProgress } from '../components/AnalysisProgress';
 import { FileDrop } from '../components/FileDrop';
+import { InstallCard } from '../components/InstallCard';
 import { formatClock, noteRange } from '../components/format';
 import { Icon } from '../components/Icon';
 import { LiveMonitor } from '../components/LiveMonitor';
@@ -22,6 +24,20 @@ import { shortName, singerColor } from '../components/singer';
 type RecPhase = 'idle' | 'starting' | 'recording' | 'stopping';
 
 const UPLOAD_HINT = 'WAV, MP3, M4A, AAC, OGG, WebM or FLAC. Drag a file here or choose one.';
+/** iPhone: where a Voice Memo has to be before the file picker can see it. */
+const IOS_UPLOAD_HINT = 'WAV, MP3, M4A, AAC or FLAC from the Files app. For a Voice Memo: open it, tap ••• then Share, Save to Files, and choose it here.';
+
+/** Plain-English reasons a take lost its microphone (iPhone suspends capture when the app is not in front). */
+const INTERRUPTION_TEXT: Record<InterruptionReason, string> = {
+  hidden: 'Mimic was sent to the background, and iPhone pauses the microphone when that happens. Stay in the app while you sing.',
+  muted: 'The system muted the microphone (a call, Siri or another app using it).',
+  ended: 'The microphone stopped delivering sound.',
+  'context-stopped': 'iPhone paused the audio engine.',
+  'no-audio': 'No sound has reached the app yet. Check that the microphone is not covered or in use by another app.',
+};
+
+const LOW_BANDWIDTH_TEXT =
+  'This take was recorded through a Bluetooth microphone, which iOS runs in a low-quality phone-call mode (8-24 kHz). Breathiness and brightness read differently; use the iPhone’s own microphone (Settings) for takes you want to compare.';
 const VOICE_TYPES = Object.keys(VOICE_TYPE_LABELS) as VoiceType[];
 
 /** Smooth scrolling only when the user has not asked for reduced motion. */
@@ -105,6 +121,8 @@ export function StudioPage() {
   const [startedAt, setStartedAt] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [micError, setMicError] = useState<string | null>(null);
+  const [interruption, setInterruption] = useState<InterruptionReason | null>(null);
+  const [micInfo, setMicInfo] = useState<RecorderInfo | null>(null);
   const [refOpen, setRefOpen] = useState(false);
   const [rejectMsg, setRejectMsg] = useState<string | null>(null);
   const [refRejectMsg, setRefRejectMsg] = useState<string | null>(null);
@@ -170,9 +188,17 @@ export function StudioPage() {
     setPhase('stopping');
     setRecAnnounce('Recording stopped. Analysing your take.');
     setAnalyser(null);
-    const { samples, sampleRate } = await r.stop();
+    const lowBandwidth = r.info?.lowBandwidth ?? false;
+    const { samples, sampleRate, interrupted } = await r.stop();
     setPhase('idle');
-    const ok = await app.analyzeSamples({ samples, sampleRate, source: 'recording', name: recordingName() });
+    setInterruption(null);
+    setMicInfo(null);
+    // Tell the Results page what the take went through, so a gap or a phone-call-quality microphone is not a mystery.
+    const notices = [
+      ...(interrupted ? [`This take was interrupted: ${INTERRUPTION_TEXT[interrupted]} Only the audio that arrived was analysed.`] : []),
+      ...(lowBandwidth ? [LOW_BANDWIDTH_TEXT] : []),
+    ];
+    const ok = await app.analyzeSamples({ samples, sampleRate, source: 'recording', name: recordingName(), ...(notices.length ? { notices } : {}) });
     if (!ok && mountedRef.current) {
       setRecAnnounce('');
       focusRecord();
@@ -183,7 +209,9 @@ export function StudioPage() {
   useEffect(() => {
     if (phase !== 'recording') return;
     const id = setInterval(() => {
-      const sec = (performance.now() - startedAt) / 1000;
+      // Seconds of audio actually received: iOS keeps wall time running while it suspends the microphone.
+      const captured = recRef.current?.capturedSec;
+      const sec = typeof captured === 'number' && Number.isFinite(captured) ? captured : (performance.now() - startedAt) / 1000;
       setElapsed(sec);
       if (sec >= MAX_RECORD_SEC) void stopRecording();
     }, 250);
@@ -197,7 +225,11 @@ export function StudioPage() {
     setRejectMsg(null);
     app.dispatch({ type: 'error/clear' });
     const r = createRecorder();
+    r.onInterruption = (reason) => {
+      if (recRef.current === r) setInterruption(reason);
+    };
     recRef.current = r;
+    setInterruption(null);
     setPhase('starting');
     setRecAnnounce('Waiting for the microphone.');
     try {
@@ -215,6 +247,7 @@ export function StudioPage() {
       return;
     }
     setAnalyser(r.analyser);
+    setMicInfo(r.info ?? null);
     setStartedAt(performance.now());
     setElapsed(0);
     setPhase('recording');
@@ -225,6 +258,8 @@ export function StudioPage() {
     recRef.current?.cancel();
     recRef.current = null;
     setAnalyser(null);
+    setInterruption(null);
+    setMicInfo(null);
     setPhase('idle');
     setRecAnnounce('Recording discarded.');
     focusRecord();
@@ -279,6 +314,8 @@ export function StudioPage() {
           on this device.
         </p>
       </header>
+
+      <InstallCard />
 
       {drill && (
         <Notice tone="info" title={`Recording a drill: ${drill.name}`} onDismiss={() => app.dispatch({ type: 'drill/set', exerciseId: null })}>
@@ -336,6 +373,22 @@ export function StudioPage() {
                     <span className="muted"> / {formatClock(MAX_RECORD_SEC)}</span>
                   </span>
                 </div>
+                {micInfo && (micInfo.inputLabel || micInfo.inputSampleRate) && (
+                  <p className="record-help num">
+                    {[micInfo.inputLabel, micInfo.inputSampleRate ? `${(micInfo.inputSampleRate / 1000).toFixed(micInfo.inputSampleRate % 1000 ? 1 : 0)} kHz` : null].filter(Boolean).join(' · ')}
+                  </p>
+                )}
+                {interruption && (
+                  <Notice tone="warn" title="The recording was interrupted">
+                    <p>{INTERRUPTION_TEXT[interruption]}</p>
+                    <p>The take has a gap or ends there. Choose Stop and analyse to use what was captured, or Discard and record again.</p>
+                  </Notice>
+                )}
+                {micInfo?.lowBandwidth && (
+                  <Notice tone="warn" title="Bluetooth microphone in use">
+                    <p>{LOW_BANDWIDTH_TEXT}</p>
+                  </Notice>
+                )}
                 {analyser && <LiveMonitor analyser={analyser} a4Hz={state.settings.a4Hz} centreMidi={(passaggio.lowMidi + passaggio.highMidi) / 2} />}
                 <div className="record-actions">
                   <button ref={stopRef} type="button" className="button button--rec" onClick={() => void stopRecording()} disabled={phase === 'stopping'}>
@@ -370,6 +423,13 @@ export function StudioPage() {
           {(micUnavailable || micError) && (
             <Notice tone={micError ? 'error' : 'warn'} title={micError ? 'The microphone did not start' : 'Recording is not available here'}>
               <p>{micError ?? micUnavailable}</p>
+              {micError && isIos() && (
+                <p>
+                  On iPhone, check the microphone setting for this site (Safari: the aA button, then Website Settings; or Settings, then Safari, then
+                  Microphone). If it already says Allow, close Mimic completely in the app switcher and open it again: after iOS restarts its audio
+                  service, the microphone can stay blocked until the app is relaunched.
+                </p>
+              )}
               <p>
                 You can still get coached: record a voice memo on your phone, then upload it below. Or try the demo take to see how the results
                 look.
@@ -383,7 +443,7 @@ export function StudioPage() {
 
           <FileDrop
             label="Upload a recording"
-            hint={UPLOAD_HINT}
+            hint={isIos() ? IOS_UPLOAD_HINT : UPLOAD_HINT}
             disabled={busy || recording}
             onFile={(f) => void onUpload(f)}
             onReject={setRejectMsg}

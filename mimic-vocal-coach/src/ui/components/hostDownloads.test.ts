@@ -38,3 +38,43 @@ describe('saveFile', () => {
     expect(click).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('saveFile on iOS', () => {
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
+
+  function iphone(share: unknown, canShare: unknown) {
+    vi.stubGlobal('navigator', { userAgent: IPHONE, platform: 'iPhone', maxTouchPoints: 5, share, canShare });
+  }
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('offers the file to the share sheet and does not download', async () => {
+    const share = vi.fn().mockResolvedValue(undefined);
+    iphone(share, vi.fn(() => true));
+    const { saveFile } = await import('./download');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await saveFile(new Blob(['x'], { type: 'audio/wav' }), 'take.wav');
+    expect(share).toHaveBeenCalledTimes(1);
+    const arg = share.mock.calls[0][0] as { files: File[] };
+    expect(arg.files[0].name).toBe('take.wav');
+    expect(arg.files[0].type).toBe('audio/wav');
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('treats closing the share sheet as a cancel, not a failure', async () => {
+    iphone(vi.fn().mockRejectedValue(Object.assign(new Error('cancel'), { name: 'AbortError' })), vi.fn(() => true));
+    const { saveFile } = await import('./download');
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await saveFile(new Blob(['x']), 'take.wav');
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a download when files cannot be shared', async () => {
+    iphone(vi.fn(), vi.fn(() => false));
+    const { saveFile } = await import('./download');
+    URL.createObjectURL = vi.fn(() => 'blob:x');
+    URL.revokeObjectURL = vi.fn();
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    await saveFile(new Blob(['x']), 'take.wav');
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+});

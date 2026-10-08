@@ -8,6 +8,7 @@ import { useApp } from '../../state/context';
 import { A4_MAX, A4_MIN, parseA4 } from '../components/format';
 import type { ThemePref } from '../../state/theme';
 import type { VoiceType } from '../../types';
+import { MicrophoneSetting, StoragePanel } from '../components/StoragePanel';
 
 const VOICE_TYPES = Object.keys(VOICE_TYPE_LABELS) as VoiceType[];
 const THEMES: { value: ThemePref; label: string }[] = [
@@ -149,6 +150,7 @@ export function SettingsPage() {
             {a4Error ?? 'Leave at 440 unless you sing along to a track tuned differently (some recordings sit at 432 or 442).'}
           </p>
         </div>
+        <MicrophoneSetting />
       </section>
 
       <section className="settings-section" aria-labelledby="ai-heading">
@@ -261,6 +263,8 @@ export function SettingsPage() {
           </div>
         </fieldset>
       </section>
+
+      <StoragePanel />
 
       <section className="settings-section" aria-labelledby="data-heading">
         <h2 id="data-heading" className="section-title">

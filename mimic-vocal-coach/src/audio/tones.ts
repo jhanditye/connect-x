@@ -4,6 +4,7 @@
 
 import { midiToHz } from '../dsp/music';
 import type { Exercise } from '../types';
+import { setAudioSessionType } from './audioSession';
 
 export interface PatternPlayer {
   stop(): void;
@@ -102,6 +103,8 @@ export function audioSupported(): boolean {
 }
 
 function getContext(): AudioContext | null {
+  // A context that was closed (or killed while the app was in the background) cannot be resumed: make a new one.
+  if (sharedCtx && sharedCtx.state === 'closed') sharedCtx = null;
   if (!sharedCtx) {
     const Ctor = audioCtor();
     if (!Ctor) return null;
@@ -111,7 +114,10 @@ function getContext(): AudioContext | null {
       return null;
     }
   }
-  if (sharedCtx.state === 'suspended') sharedCtx.resume().catch(() => undefined);
+  // iPhone: Web Audio is "ambient" by default and muted by the ring/silent switch. 'playback' plays anyway.
+  setAudioSessionType('playback');
+  // Not only 'suspended': Safari also reports 'interrupted' after the app was in the background or a call.
+  if (sharedCtx.state !== 'running') sharedCtx.resume().catch(() => undefined);
   return sharedCtx;
 }
 

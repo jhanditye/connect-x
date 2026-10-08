@@ -1,5 +1,6 @@
 // File downloads and the JSON export of a result.
 
+import { isIos } from '../../pwa/platform';
 import type { CoachingPlan, Comparison, ReferenceComparison, SingerProfile, VoiceAnalysis } from '../../types';
 
 /**
@@ -28,8 +29,31 @@ export function hostDownloads(): Promise<HostDownloads | null> {
   return hostDownloadsPromise;
 }
 
-/** Save a generated file: through the host viewer when there is one, else a normal browser download. */
+/**
+ * iPhone and iPad: hand the file to the system share sheet ("Save to Files", AirDrop, Voice Memos...).
+ * A blob <a download> works in a Safari tab but has been unreliable in Home Screen web apps (it can open the
+ * file in a window with no way back), and Save to Files is what people want for a take anyway.
+ * navigator.share() must be called inside the tap that asked for it, so nothing is awaited before it.
+ * Resolves true when the share sheet handled it (or the user closed it), false when it is unavailable.
+ */
+async function shareFile(blob: Blob, filename: string): Promise<boolean> {
+  try {
+    if (typeof navigator === 'undefined' || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return false;
+    const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+    if (!navigator.canShare({ files: [file] })) return false;
+    await navigator.share({ files: [file] });
+    return true;
+  } catch (err) {
+    // Closing the sheet rejects with AbortError: that is a cancel, not a failure.
+    if ((err as { name?: string } | null)?.name === 'AbortError') return true;
+    return false;
+  }
+}
+
+/** Save a generated file: through the host viewer when there is one, the share sheet on iOS, else a normal browser download. */
 export async function saveFile(blob: Blob, filename: string): Promise<void> {
+  const inHostViewer = typeof window !== 'undefined' && typeof (window as HostWindow).claude?.use === 'function';
+  if (!inHostViewer && isIos() && (await shareFile(blob, filename))) return;
   const host = await hostDownloads();
   if (host) {
     // The viewer shows its own confirmation; a decline is the viewer's choice, not an error to show.

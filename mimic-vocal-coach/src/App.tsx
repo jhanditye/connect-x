@@ -4,6 +4,7 @@ import { useApp } from './state/context';
 import { practiceFocusIds } from './state/reducer';
 import { ROUTE_LABELS } from './state/routing';
 import { TabBar, TopBar } from './ui/components/Nav';
+import { UpdateNotice } from './ui/components/UpdateNotice';
 import { GuidePage } from './ui/pages/Guide';
 import { PracticePage } from './ui/pages/Practice';
 import { ProgressPage } from './ui/pages/Progress';
@@ -64,6 +65,7 @@ function Shell() {
         Skip to content
       </a>
       <TopBar route={app.route} resultsEnabled={hasResult} />
+      <UpdateNotice />
       <main ref={mainRef} className="main" tabIndex={-1}>
         <Page />
       </main>

@@ -2,6 +2,10 @@
 // suppression, automatic gain) is switched off because it gates quiet breathy tone, pumps the
 // level and smears harmonics, which would corrupt every measurement the analysis makes.
 
+import { setAudioSessionType } from './audioSession';
+import { loadMicChoice, looksBluetooth } from './micChoice';
+import { keepScreenAwake, type ScreenWakeLock } from './wakeLock';
+
 export type RecorderErrorKind = 'denied' | 'unsupported' | 'no-device';
 
 export class RecorderError extends Error {
@@ -13,12 +17,41 @@ export class RecorderError extends Error {
   }
 }
 
+/**
+ * Why a take stopped receiving audio for a while. iPhone suspends or mutes microphone capture when the
+ * app is switched away from, the screen locks, a call comes in or another app takes the microphone.
+ * - hidden: the page was sent to the background (the take has a gap or ends there)
+ * - muted: the system muted the microphone track (call, Siri, another app)
+ * - ended: the microphone track ended; no more audio will arrive
+ * - context-stopped: the audio engine was suspended or interrupted
+ * - no-audio: nothing arrived in the first two seconds (Safari did not deliver audio)
+ */
+export type InterruptionReason = 'hidden' | 'muted' | 'ended' | 'context-stopped' | 'no-audio';
+
+/** What the browser tells us about the microphone that is actually in use. */
+export interface RecorderInfo {
+  inputLabel: string | null;
+  /** Sample rate of the capture device, e.g. 16000 for an AirPods voice profile (the context may run faster). */
+  inputSampleRate: number | null;
+  contextSampleRate: number | null;
+  /** The label looks like Bluetooth earbuds or a headset. */
+  bluetooth: boolean;
+  /** Bluetooth, or capture below 32 kHz: tone measures (breathiness, brightness, H1-H2) will be less reliable. */
+  lowBandwidth: boolean;
+}
+
 export interface Recorder {
   start(): Promise<void>;
-  stop(): Promise<{ samples: Float32Array; sampleRate: number }>;
+  stop(): Promise<{ samples: Float32Array; sampleRate: number; interrupted?: InterruptionReason | null }>;
   cancel(): void;
   /** For level meter / live pitch; null until start() resolves and after stop/cancel. */
   readonly analyser: AnalyserNode | null;
+  /** Seconds of audio actually received (use for the clock: wall time keeps running while iOS suspends capture). */
+  readonly capturedSec?: number;
+  /** The microphone in use; null until start() resolves. */
+  readonly info?: RecorderInfo | null;
+  /** Called when capture is interrupted (see InterruptionReason). Set it before start(). */
+  onInterruption?: ((reason: InterruptionReason) => void) | null;
 }
 
 /** Hard cap on one take; the UI stops at this point and further samples are dropped. */
@@ -119,9 +152,15 @@ export function joinChunks(chunks: Float32Array[], maxSamples = Infinity): Float
   return out;
 }
 
+const WATCHDOG_MS = 2000;
+const RESUME_WAIT_MS = 1500;
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /** getUserMedia with echoCancellation/noiseSuppression/autoGainControl OFF (they wreck voice analysis). Throws RecorderError('denied'|'unsupported'|'no-device'). */
 export function createRecorder(): Recorder {
   let stream: MediaStream | null = null;
+  let track: MediaStreamTrack | null = null;
   let ctx: AudioContext | null = null;
   let analyser: AnalyserNode | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
@@ -129,10 +168,16 @@ export function createRecorder(): Recorder {
   let worklet: AudioWorkletNode | null = null;
   let processor: ScriptProcessorNode | null = null;
   let workletUrl: string | null = null;
+  let wake: ScreenWakeLock | null = null;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  const cleanups: (() => void)[] = [];
   let chunks: Float32Array[] = [];
   let captured = 0;
   let maxSamples = Infinity;
   let active = false;
+  let interrupted: InterruptionReason | null = null;
+  let lastRate = 48000;
+  const handlers: { onInterruption: ((reason: InterruptionReason) => void) | null } = { onInterruption: null };
 
   const push = (chunk: Float32Array) => {
     if (!active || captured >= maxSamples) return;
@@ -140,8 +185,27 @@ export function createRecorder(): Recorder {
     captured += chunk.length;
   };
 
+  /** Remember the first reason (that is where the gap starts) and tell the UI every time. */
+  const interrupt = (reason: InterruptionReason) => {
+    if (!active) return;
+    interrupted = interrupted ?? reason;
+    handlers.onInterruption?.(reason);
+  };
+
+  type Target = { addEventListener?: (t: string, f: () => void) => void; removeEventListener?: (t: string, f: () => void) => void } | null | undefined;
+  const listen = (target: Target, type: string, fn: () => void) => {
+    if (!target?.addEventListener) return;
+    target.addEventListener(type, fn);
+    cleanups.push(() => target.removeEventListener?.(type, fn));
+  };
+
   const release = () => {
     active = false;
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = null;
+    for (const undo of cleanups.splice(0)) undo();
+    wake?.release();
+    wake = null;
     try {
       source?.disconnect();
       worklet?.disconnect();
@@ -157,6 +221,7 @@ export function createRecorder(): Recorder {
     if (ctx && ctx.state !== 'closed') ctx.close().catch(() => undefined);
     if (workletUrl) URL.revokeObjectURL(workletUrl);
     stream = null;
+    track = null;
     ctx = null;
     analyser = null;
     source = null;
@@ -210,9 +275,51 @@ export function createRecorder(): Recorder {
     });
   }
 
+  /** getUserMedia, preferring the microphone chosen in Settings and falling back to the default when it is gone. */
+  async function openMicrophone(): Promise<MediaStream> {
+    const base: MediaTrackConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+    const chosen = loadMicChoice();
+    if (chosen) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: chosen } } });
+      } catch (err) {
+        const name = (err as { name?: string } | null)?.name;
+        if (name !== 'OverconstrainedError' && name !== 'NotFoundError') throw err;
+        // The saved microphone is not connected any more: use the default one.
+      }
+    }
+    return navigator.mediaDevices.getUserMedia({ audio: base });
+  }
+
   return {
     get analyser() {
       return analyser;
+    },
+
+    get capturedSec() {
+      return ctx ? captured / ctx.sampleRate : captured / lastRate;
+    },
+
+    get info(): RecorderInfo | null {
+      if (!ctx && !track) return null;
+      const settings = (track?.getSettings?.() ?? {}) as MediaTrackSettings;
+      const label = track?.label || null;
+      const inputSampleRate = typeof settings.sampleRate === 'number' ? settings.sampleRate : null;
+      const bluetooth = label ? looksBluetooth(label) : false;
+      return {
+        inputLabel: label,
+        inputSampleRate,
+        contextSampleRate: ctx?.sampleRate ?? null,
+        bluetooth,
+        lowBandwidth: bluetooth || (inputSampleRate !== null && inputSampleRate < 32000),
+      };
+    },
+
+    get onInterruption() {
+      return handlers.onInterruption;
+    },
+    set onInterruption(fn: ((reason: InterruptionReason) => void) | null | undefined) {
+      handlers.onInterruption = fn ?? null;
     },
 
     async start() {
@@ -221,6 +328,9 @@ export function createRecorder(): Recorder {
       if (reason) throw new RecorderError(reason === MSG_FRAME ? 'denied' : 'unsupported', reason);
       const Ctor = audioContextCtor();
       if (!Ctor) throw new RecorderError('unsupported', MSG_UNSUPPORTED);
+      interrupted = null;
+      // A 'playback' session left over from the practice tones would stop the microphone from capturing.
+      setAudioSessionType('auto');
       // Create and resume the context before awaiting the permission prompt: iOS Safari only lets
       // audio start synchronously inside the tap that called start().
       let resumed: Promise<void> = Promise.resolve();
@@ -232,16 +342,18 @@ export function createRecorder(): Recorder {
         throw toRecorderError(err);
       }
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 },
-        });
+        stream = await openMicrophone();
       } catch (err) {
         release();
         throw toRecorderError(err);
       }
       try {
         if (!ctx) throw new RecorderError('unsupported', MSG_UNSUPPORTED);
-        await resumed;
+        // iOS can leave the context 'suspended' or 'interrupted' while its permission sheet is up, and a
+        // resume() that never settles would leave the page on "Waiting for the microphone" for good.
+        await Promise.race([resumed, delay(RESUME_WAIT_MS)]);
+        if (String(ctx.state) !== 'running') await Promise.race([ctx.resume().catch(() => undefined), delay(RESUME_WAIT_MS)]);
+        track = stream.getAudioTracks?.()[0] ?? stream.getTracks()[0] ?? null;
         source = ctx.createMediaStreamSource(stream);
         analyser = ctx.createAnalyser();
         analyser.fftSize = 2048;
@@ -254,9 +366,30 @@ export function createRecorder(): Recorder {
         sink.connect(ctx.destination);
         chunks = [];
         captured = 0;
+        lastRate = ctx.sampleRate;
         maxSamples = Math.round(MAX_RECORD_SEC * ctx.sampleRate);
         active = true;
         if (!(await attachWorklet(ctx, source, sink))) attachScriptProcessor(ctx, source, sink);
+
+        // Interruptions: app switched away, call, Siri, another app took the microphone, screen locked.
+        const audioCtx = ctx;
+        listen(track as Target, 'ended', () => interrupt('ended'));
+        listen(track as Target, 'mute', () => interrupt('muted'));
+        listen(track as Target, 'unmute', () => void audioCtx.resume().catch(() => undefined));
+        listen(audioCtx as unknown as Target, 'statechange', () => {
+          const st = String(audioCtx.state); // Safari adds 'interrupted' to running/suspended/closed
+          if (st !== 'running' && st !== 'closed') interrupt('context-stopped');
+        });
+        if (typeof document !== 'undefined') {
+          listen(document as unknown as Target, 'visibilitychange', () => {
+            if (document.visibilityState === 'hidden') interrupt('hidden');
+            else void audioCtx.resume().catch(() => undefined);
+          });
+        }
+        wake = keepScreenAwake();
+        watchdog = setTimeout(() => {
+          if (active && captured === 0) interrupt('no-audio');
+        }, WATCHDOG_MS);
       } catch (err) {
         release();
         throw toRecorderError(err);
@@ -264,12 +397,13 @@ export function createRecorder(): Recorder {
     },
 
     async stop() {
-      const rate = ctx?.sampleRate ?? 48000;
+      const rate = ctx?.sampleRate ?? lastRate;
       await flushWorklet();
       const samples = joinChunks(chunks, maxSamples);
+      const reason = interrupted;
       chunks = [];
       release();
-      return { samples, sampleRate: rate };
+      return { samples, sampleRate: rate, interrupted: reason };
     },
 
     cancel() {

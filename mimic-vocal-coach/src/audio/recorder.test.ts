@@ -68,9 +68,17 @@ describe('microphoneUnavailableReason', () => {
 });
 
 /** Minimal Web Audio + getUserMedia fakes: no AudioWorklet, so the ScriptProcessor path is used. */
-function installFakeAudio() {
-  const track = { stop: vi.fn() };
-  const stream = { getTracks: () => [track] };
+function installFakeAudio(opts: { track?: Record<string, unknown>; navigatorExtras?: Record<string, unknown> } = {}) {
+  const listeners = new Map<string, () => void>();
+  const track = {
+    stop: vi.fn(),
+    label: '',
+    getSettings: () => ({}),
+    addEventListener: (type: string, fn: () => void) => listeners.set(type, fn),
+    removeEventListener: (type: string) => listeners.delete(type),
+    ...opts.track,
+  };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   const getUserMedia = vi.fn(async (_c: MediaStreamConstraints) => stream);
   const node = () => ({ connect: vi.fn(), disconnect: vi.fn() });
   let processor: { onaudioprocess: ((e: unknown) => void) | null } & ReturnType<typeof node>;
@@ -90,12 +98,12 @@ function installFakeAudio() {
     });
   }
   vi.stubGlobal('isSecureContext', true);
-  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } });
+  vi.stubGlobal('navigator', { mediaDevices: { getUserMedia }, ...opts.navigatorExtras });
   vi.stubGlobal('document', {});
   vi.stubGlobal('AudioContext', FakeContext);
   const feed = (samples: number[]) =>
     processor.onaudioprocess?.({ inputBuffer: { getChannelData: () => Float32Array.from(samples) } });
-  return { track, getUserMedia, close, feed };
+  return { track, getUserMedia, close, feed, fire: (type: string) => listeners.get(type)?.() };
 }
 
 describe('createRecorder', () => {
@@ -152,5 +160,85 @@ describe('createRecorder', () => {
       .start()
       .catch((e: unknown) => e);
     expect((err as RecorderError).kind).toBe('unsupported');
+  });
+});
+
+describe('createRecorder on iPhone', () => {
+  it('reports the microphone in use and flags a Bluetooth voice profile as low bandwidth', async () => {
+    installFakeAudio({ track: { label: 'Jamie’s AirPods Pro', getSettings: () => ({ sampleRate: 16000 }) } });
+    const rec = createRecorder();
+    expect(rec.info).toBeNull();
+    await rec.start();
+    expect(rec.info).toMatchObject({ inputLabel: 'Jamie’s AirPods Pro', inputSampleRate: 16000, contextSampleRate: 48000, bluetooth: true, lowBandwidth: true });
+    rec.cancel();
+  });
+
+  it('does not flag the built-in microphone', async () => {
+    installFakeAudio({ track: { label: 'iPhone Microphone', getSettings: () => ({ sampleRate: 48000 }) } });
+    const rec = createRecorder();
+    await rec.start();
+    expect(rec.info).toMatchObject({ bluetooth: false, lowBandwidth: false });
+    rec.cancel();
+  });
+
+  it('tells the page when the system mutes the microphone and reports it from stop()', async () => {
+    const fake = installFakeAudio();
+    const rec = createRecorder();
+    const seen: string[] = [];
+    rec.onInterruption = (r) => seen.push(r);
+    await rec.start();
+    fake.feed([0.1]);
+    fake.fire('mute');
+    expect(seen).toEqual(['muted']);
+    const out = await rec.stop();
+    expect(out.interrupted).toBe('muted');
+  });
+
+  it('reports a take that ended abruptly and a clean take as not interrupted', async () => {
+    const fake = installFakeAudio();
+    const rec = createRecorder();
+    const seen: string[] = [];
+    rec.onInterruption = (r) => seen.push(r);
+    await rec.start();
+    fake.fire('ended');
+    expect(seen).toEqual(['ended']);
+    rec.cancel();
+
+    installFakeAudio();
+    const clean = createRecorder();
+    await clean.start();
+    expect((await clean.stop()).interrupted).toBeNull();
+  });
+
+  it('measures the clock in captured audio, not wall time', async () => {
+    const fake = installFakeAudio();
+    const rec = createRecorder();
+    await rec.start();
+    expect(rec.capturedSec).toBe(0);
+    fake.feed(new Array(4800).fill(0));
+    expect(rec.capturedSec).toBeCloseTo(0.1, 6);
+    rec.cancel();
+  });
+
+  it('puts a leftover "playback" audio session back to auto so the microphone can capture', async () => {
+    const audioSession = { type: 'playback' };
+    installFakeAudio({ navigatorExtras: { audioSession } });
+    const rec = createRecorder();
+    await rec.start();
+    expect(audioSession.type).toBe('auto');
+    rec.cancel();
+  });
+
+  it('records with the microphone chosen in Settings and falls back to the default when it is gone', async () => {
+    const store = new Map<string, string>([['mimic.micDeviceId', 'built-in-mic']]);
+    vi.stubGlobal('localStorage', { getItem: (k: string) => store.get(k) ?? null, setItem: vi.fn(), removeItem: vi.fn() });
+    const fake = installFakeAudio();
+    fake.getUserMedia.mockRejectedValueOnce(Object.assign(new Error('gone'), { name: 'OverconstrainedError' }));
+    const rec = createRecorder();
+    await rec.start();
+    const raw = { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1 };
+    expect(fake.getUserMedia).toHaveBeenNthCalledWith(1, { audio: { ...raw, deviceId: { exact: 'built-in-mic' } } });
+    expect(fake.getUserMedia).toHaveBeenNthCalledWith(2, { audio: raw });
+    rec.cancel();
   });
 });

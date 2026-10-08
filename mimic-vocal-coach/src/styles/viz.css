@@ -455,9 +455,11 @@
   font-size: var(--fs-sm);
   cursor: pointer;
 }
-.filter-chip:hover:not([aria-pressed='true']) {
-  border-color: var(--ink-3);
-  color: var(--ink);
+@media (hover: hover) {
+  .filter-chip:hover:not([aria-pressed='true']) {
+    border-color: var(--ink-3);
+    color: var(--ink);
+  }
 }
 .filter-chip[aria-pressed='true'] {
   background: var(--accent);
@@ -522,8 +524,10 @@
   font-weight: 600;
   cursor: pointer;
 }
-.ex-details-summary:hover {
-  color: var(--accent);
+@media (hover: hover) {
+  .ex-details-summary:hover {
+    color: var(--accent);
+  }
 }
 .ex-details[open] > .ex-details-summary {
   margin-bottom: var(--space-1);
@@ -609,8 +613,10 @@
   font-size: var(--fs-sm);
   cursor: pointer;
 }
-.hist-tab:hover:not([aria-pressed='true']) {
-  border-color: var(--ink-3);
+@media (hover: hover) {
+  .hist-tab:hover:not([aria-pressed='true']) {
+    border-color: var(--ink-3);
+  }
 }
 .hist-tab[aria-pressed='true'] {
   background: var(--surface);
@@ -759,5 +765,17 @@
 @media (min-width: 721px) {
   .ex-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Finger-sized targets on touch screens (Apple asks for 44 pt). */
+@media (pointer: coarse) {
+  .filter-chip,
+  .hist-tab {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  .ex-details-summary {
+    min-height: 44px;
   }
 }

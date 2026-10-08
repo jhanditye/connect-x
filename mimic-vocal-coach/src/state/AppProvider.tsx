@@ -6,6 +6,7 @@ import { MAX_ANALYSIS_SEC } from '../analysis/analyze';
 import { analyzeInWorker } from '../analysis/client';
 import { makeDemoTake } from '../analysis/demo';
 import { decodeAudioFile } from '../audio/decode';
+import { keepScreenAwake } from '../audio/wakeLock';
 import { isScoreable } from '../coach/compare';
 import { getExercise } from '../coach/exercises';
 import { ARTIST_VOICE_TYPE, clipFromAnalysis, MAX_CLIPS_PER_SINGER } from '../coach/measured';
@@ -93,6 +94,9 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
     async (job: JobKind, samples: Float32Array, sampleRate: number, opts: AnalysisOptions, label: string): Promise<VoiceAnalysis | null> => {
       const run = ++runRef.current;
       dispatch({ type: 'job/start', job, phase: 'analyzing', label });
+      // A 5-minute take takes ~10-20 s to analyse. iOS freezes a page ~20 s after the screen locks or the app
+      // is left, so keep the screen awake while the worker runs (no-op where Wake Lock is unavailable).
+      const awake = keepScreenAwake();
       try {
         const analysis = await analyzeInWorker(samples, sampleRate, opts, (value: number) => {
           if (runRef.current === run) dispatch({ type: 'job/progress', value });
@@ -101,6 +105,8 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
       } catch (err) {
         if (runRef.current === run) dispatch({ type: 'job/fail', message: message(err, 'The analysis failed.') });
         return null;
+      } finally {
+        awake.release();
       }
     },
     [],

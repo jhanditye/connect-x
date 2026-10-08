@@ -20,8 +20,17 @@ export interface DecodeOptions {
   maxSeconds?: number;
 }
 
-/** File extensions the upload inputs advertise (browsers vary; the decoder is the final judge). */
-export const AUDIO_ACCEPT = 'audio/*,.wav,.mp3,.m4a,.aac,.ogg,.oga,.opus,.webm,.flac,.caf,.mp4';
+/**
+ * What the upload inputs advertise (browsers vary; the decoder is the final judge).
+ * iOS Safari does not honour the "audio/*" wildcard (WebKit bug 242110: MDN notes "does not support audio/*") and
+ * has greyed out .m4a files (UTI com.apple.m4a-audio) under a bare wildcard, so every extension and the common
+ * MIME types are listed explicitly. .qta is the "Editable" export of a Voice Memo on iOS 18+ (QuickTime audio).
+ */
+export const AUDIO_ACCEPT = [
+  'audio/*',
+  '.m4a', '.mp3', '.wav', '.wave', '.aac', '.caf', '.aif', '.aiff', '.flac', '.ogg', '.oga', '.opus', '.webm', '.mp4', '.qta',
+  'audio/mp4', 'audio/x-m4a', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/aac', 'audio/flac', 'audio/ogg', 'audio/webm', 'audio/x-caf', 'audio/aiff',
+].join(',');
 
 /** Bigger files are almost certainly not a single sung take and would exhaust memory when decoded. */
 const MAX_FILE_BYTES = 250 * 1024 * 1024;
@@ -94,6 +103,24 @@ function createDecodingContext(): DecodingContext | null {
     }
   }
   return null;
+}
+
+/** ISO base media brands that Safari 26 - 27.1 was reported to refuse in decodeAudioData (fixed in Safari 27.2 beta: "valid AAC and M4A files whose file brand is not mp4"). */
+const RELABELLABLE_BRANDS = ['M4A ', 'M4B ', 'F4A '];
+
+/**
+ * A copy of an MP4/M4A file whose major brand is relabelled "mp42", or null when the file is not one of the
+ * brands above. Used only as a second attempt after decodeAudioData refused the original: the audio is
+ * untouched, only the 4-byte brand in the leading "ftyp" box changes. (Voice Memos writes "M4A ".)
+ */
+export function relabelMp4Brand(buf: ArrayBuffer): ArrayBuffer | null {
+  if (buf.byteLength < 12) return null;
+  const b = new Uint8Array(buf, 0, 12);
+  const tag = (o: number) => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+  if (tag(4) !== 'ftyp' || !RELABELLABLE_BRANDS.includes(tag(8))) return null;
+  const copy = buf.slice(0);
+  new Uint8Array(copy, 8, 4).set([0x6d, 0x70, 0x34, 0x32]); // "mp42"
+  return copy;
 }
 
 /** decodeAudioData in both its promise and (old Safari) callback forms. */
@@ -196,8 +223,15 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
     throw new DecodeError('This browser cannot decode compressed audio here. Export the take as a WAV file and upload that instead.');
   }
   try {
-    // decodeAudioData detaches its input; nothing reads `buf` after this.
-    const audio = await decodeWith(ctx, buf);
+    // decodeAudioData detaches its input, so the relabelled copy for the second attempt is made first.
+    const retryBuf = relabelMp4Brand(buf);
+    let audio: AudioBuffer;
+    try {
+      audio = await decodeWith(ctx, buf);
+    } catch (first) {
+      if (!retryBuf) throw first;
+      audio = await decodeWith(ctx, retryBuf);
+    }
     const { samples, cancelled } = downmix(channelsOf(audio), frameLimit(opts.maxSeconds, audio.sampleRate));
     return finish(samples, audio.sampleRate, file, audio.length / audio.sampleRate, cancelled);
   } catch (err) {

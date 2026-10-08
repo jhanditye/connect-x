@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sine } from '../testing/synth';
-import { decodeAudioFile, DecodeError, downmix } from './decode';
+import { AUDIO_ACCEPT, decodeAudioFile, DecodeError, downmix, relabelMp4Brand } from './decode';
 import { encodeWav } from './wav';
 
 function wavBlob(channels: Float32Array | Float32Array[], rate: number, name = 'take.wav'): File {
@@ -198,5 +198,69 @@ describe('decodeAudioFile (browser decoder path)', () => {
     const err = await decodeAudioFile(bad).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(DecodeError);
     expect((err as Error).message).toMatch(/"notes.txt" \(text\/plain\) could not be decoded/);
+  });
+});
+
+/** A minimal "ftyp" box: 4-byte size, "ftyp", major brand, minor version, one compatible brand. */
+function ftyp(major: string): ArrayBuffer {
+  const bytes = new Uint8Array(32);
+  const put = (o: number, text: string) => [...text].forEach((c, i) => (bytes[o + i] = c.charCodeAt(0)));
+  new DataView(bytes.buffer).setUint32(0, 24);
+  put(4, 'ftyp');
+  put(8, major);
+  put(20, 'isom');
+  return bytes.buffer;
+}
+
+describe('iOS-friendly file picking and decoding', () => {
+  it('lists audio extensions and MIME types explicitly (iOS Safari ignores the audio/* wildcard)', () => {
+    const tokens = AUDIO_ACCEPT.split(',');
+    for (const t of ['.m4a', '.mp3', '.wav', '.caf', '.qta', 'audio/mp4', 'audio/x-m4a', 'audio/mpeg']) expect(tokens).toContain(t);
+  });
+
+  it('relabels an M4A major brand to mp42 on a copy and leaves other files alone', () => {
+    const original = ftyp('M4A ');
+    const fixed = relabelMp4Brand(original);
+    expect(fixed).not.toBeNull();
+    expect(String.fromCharCode(...new Uint8Array(fixed!, 8, 4))).toBe('mp42');
+    expect(String.fromCharCode(...new Uint8Array(original, 8, 4))).toBe('M4A ');
+    expect(relabelMp4Brand(ftyp('mp42'))).toBeNull();
+    expect(relabelMp4Brand(ftyp('qt  '))).toBeNull();
+    expect(relabelMp4Brand(new ArrayBuffer(4))).toBeNull();
+  });
+
+  it('retries once with the relabelled brand when the browser refuses an M4A', async () => {
+    const decoded = { sampleRate: 48000, numberOfChannels: 1, getChannelData: () => new Float32Array(480).fill(0.25) };
+    const seen: string[] = [];
+    const decodeAudioData = vi.fn(async (data: ArrayBuffer) => {
+      const brand = String.fromCharCode(...new Uint8Array(data, 8, 4));
+      seen.push(brand);
+      if (brand === 'M4A ') throw new DOMException('Unable to decode audio data', 'EncodingError');
+      return decoded;
+    });
+    vi.stubGlobal(
+      'OfflineAudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+      },
+    );
+    const out = await decodeAudioFile(new File([ftyp('M4A ')], 'Voice Memo.m4a', { type: 'audio/x-m4a' }));
+    expect(seen).toEqual(['M4A ', 'mp42']);
+    expect(out.samples.length).toBe(480);
+  });
+
+  it('does not retry files that are not relabellable and still reports a readable error', async () => {
+    const decodeAudioData = vi.fn(async () => {
+      throw new DOMException('Unable to decode audio data', 'EncodingError');
+    });
+    vi.stubGlobal(
+      'OfflineAudioContext',
+      class {
+        decodeAudioData = decodeAudioData;
+      },
+    );
+    const err = await decodeAudioFile(new File([ftyp('mp42')], 'x.m4a')).catch((e: unknown) => e);
+    expect(decodeAudioData).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(DecodeError);
   });
 });
