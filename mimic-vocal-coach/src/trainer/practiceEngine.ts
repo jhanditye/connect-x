@@ -22,6 +22,7 @@
 import { analyzeInWorker } from '../analysis/client';
 import { audibleTime, createDuplexSession, PRE_ROLL_SEC, takeIsUsable, type DuplexSession, type InterruptReason, type RouteInfo, type TakeResult } from '../audio/duplex';
 import { floatToInt16 } from '../audio/pcm';
+import { markBusy } from '../pwa/register';
 import { attemptBuffer, attemptStartForBoth, createPhrasePlayer, hearBothBuffer, preparePlayback, type PreparedPlayback } from '../audio/player';
 import { RecorderError } from '../audio/recorder';
 import { describeRoute, listInputDevices } from '../audio/route';
@@ -45,6 +46,7 @@ import {
   flavourOf,
   interruptionMessage,
   isAbort,
+  isRoughTake,
   judgeTake,
   medianOfRecent,
   microphoneMessage,
@@ -110,6 +112,8 @@ interface Run {
   finishing: boolean;
   /** Playhead in phrase seconds for position(). */
   position: (() => number) | null;
+  /** A take only: lets an app update go ahead again (it waited for the take to end). */
+  releaseBusy: (() => void) | null;
   resolveStale(): void;
 }
 
@@ -298,7 +302,9 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     if (current) endRun(current);
     let resolveStale!: () => void;
     const stale = new Promise<Stale>((res) => (resolveStale = () => res(STALE)));
-    const run: Run = { kind, abort: new AbortController(), stale, stops: [], ended: false, committed: false, finish: null, finishing: false, position: null, resolveStale };
+    const run: Run = { kind, abort: new AbortController(), stale, stops: [], ended: false, committed: false, finish: null, finishing: false, position: null, releaseBusy: null, resolveStale };
+    // A take (count-in, recording, analysing, saving) must not be cut off by an app update that reloads the page.
+    if (kind === 'take') run.releaseBusy = markBusy();
     current = run;
     return run;
   }
@@ -315,6 +321,8 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
       }
     }
     run.resolveStale();
+    run.releaseBusy?.();
+    run.releaseBusy = null;
     if (current === run) current = null;
     if (run.kind === 'take') stopTicker();
   }
@@ -842,7 +850,9 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     const compared = compareTake(attemptAnalysis, reference, timing, hintFor(keyHint, keyMode, opts.guideShift), opts.guideShift, toneBiasFromCalibration(calibration));
     const verdict = judgeTake({ comparison: compared, mode, probe, headphonesLikely: route.headphonesLikely, keyHint, voicedSec: attemptAnalysis.voicedSec, referenceUsable: reference.notes.length >= 2 && reference.voicedSec >= 1 });
     const comparison = verdict.comparison;
-    const fixes = verdict.countable ? buildFixes(comparison, flavour) : [];
+    // A rough guide is not counted, but the scorer's whole-take fixes (the only ones it gives then) are still worth showing.
+    const showFixes = verdict.countable || (isRoughTake(comparison) && comparison.score.status === 'ok' && comparison.score.trust.level !== 'invalid' && !comparison.bleedSuspect);
+    const fixes = showFixes ? buildFixes(comparison, flavour) : [];
     const at = now();
     const attempt = buildAttemptRecord({
       id: makeId(),

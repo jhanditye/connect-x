@@ -9,6 +9,7 @@
 
 import { useId, useState, type JSX, type ReactNode, type Ref } from 'react';
 import { attemptLite } from '../../storage/library';
+import { wrongNoteCount } from '../../trainer/compare';
 import { keyLine } from '../../trainer/keys';
 import { inOriginalTerms, type TrainerFix } from '../../trainer/feedback';
 import { isShortPhrase, scoreBand } from '../../trainer/score/score';
@@ -84,17 +85,25 @@ export function isScored(result: PracticeResult): boolean {
   return s.status === 'ok' && s.overall !== null && s.trust.level !== 'invalid';
 }
 
-/**
- * The opening words for a score. A wrong note barely moves the number (one note in ten costs about five points), so a take with a
- * wrong note never opens with "Very close": it says it was close, with the wrong note.
- */
-export function leadWords(band: ReturnType<typeof scoreBand>, wrongNotes: number): string {
-  if (wrongNotes > 0 && band === 'excellent') return wrongNotes === 1 ? 'Close, with one wrong note.' : `Close, with ${wrongNotes} wrong notes.`;
-  return `${BAND_WORD[band]}.`;
+/** True when the take was compared with a rough full-song guide (part of it is probably the band): the number is shown, but not as a verdict. */
+export function isRoughGuide(result: PracticeResult): boolean {
+  const d = result.comparison.score.diagnostics;
+  return d.roughGuide === true || d.refLowConfidence === true;
 }
 
-export function wrongNoteCount(result: PracticeResult): number {
-  return result.comparison.notes.filter((n) => n.flags.includes('wrong-note') || n.flags.includes('octave-displaced')).length;
+/** The band of the shown number. The pitch score is passed so a weak pitch cannot read "Very close" on the strength of tone and expression. */
+function bandOf(shown: number, result: PracticeResult): ReturnType<typeof scoreBand> {
+  return scoreBand(shown, result.comparison.scores.pitch);
+}
+
+/**
+ * The opening words for a score. A wrong note barely moves the number (one note in ten costs about five points), so a take with a
+ * wrong note never opens with "Very close": it says it was close, with the wrong note. Against a rough guide there is no verdict word.
+ */
+export function leadWords(band: ReturnType<typeof scoreBand>, wrongNotes: number, rough = false): string {
+  if (rough) return 'Rough guide.';
+  if (wrongNotes > 0 && band === 'excellent') return wrongNotes === 1 ? 'Close, with one wrong note.' : `Close, with ${wrongNotes} wrong notes.`;
+  return `${BAND_WORD[band]}.`;
 }
 
 /** One sentence for the screen reader when the result appears. */
@@ -104,7 +113,7 @@ export function resultAnnouncement(result: PracticeResult, reference: VoiceAnaly
   const short = reference ? isShortPhrase(reference) : false;
   const n = shownScore(s.overall as number, short);
   const first = result.fixes[0];
-  const lead = leadWords(scoreBand(n), wrongNoteCount(result));
+  const lead = leadWords(bandOf(n, result), wrongNoteCount(result.comparison), isRoughGuide(result));
   return `Score ${n} out of 100. ${lead}${first ? ` First thing to fix: ${first.title}.` : ' Nothing stood out to fix.'}`;
 }
 
@@ -161,16 +170,18 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
   const invalid = s.trust.level === 'invalid';
   const short = reference ? isShortPhrase(reference) : false;
   const overall = scored ? shownScore(s.overall as number, short) : null;
-  const band = overall !== null ? scoreBand(overall) : null;
+  const rough = isRoughGuide(result);
+  const band = overall !== null ? bandOf(overall, result) : null;
   const sentence = scored ? inOriginalTerms(s.notes[0] ?? '') : '';
   const median = reference?.pitch.medianMidi ?? null;
   const fixes: TrainerFix[] = result.fixes;
   const lite = props.history.map(attemptLite);
   const mastery = masteryProgress(lite);
-  const step = nextStep({ overall: scored ? (s.overall as number) : null, rate: props.rate, triesThisVisit: props.triesThisVisit, mastered: phrase.srs.rung > 0 });
-  const flagged = c.notes.filter(isFlagged);
+  const step = nextStep({ overall: scored && !rough ? (s.overall as number) : null, rate: props.rate, triesThisVisit: props.triesThisVisit, mastered: phrase.srs.rung > 0 });
+  // Against a rough guide the scorer does not count unsung notes as missed (they may be the band), so they are not listed either.
+  const flagged = c.notes.filter((n) => isFlagged(n) && !(rough && n.flags.every((f) => f === 'missed' || f === 'ok' || f === 'merged' || f === 'ornament')));
   // The next phrase is offered as soon as this one is as good as the mastery mark (not only after three tries), within thumb reach.
-  const offerNext = step.next || (scored && (s.overall as number) >= MASTER_SCORE);
+  const offerNext = step.next || (scored && !rough && (s.overall as number) >= MASTER_SCORE);
 
   const loopNote = (n: NoteCompare) => props.onLoop?.({ from: Math.max(0, n.refStart - 0.1), to: n.refEnd + 0.1, rate: 0.75 });
   const history = [...props.history].sort((a, b) => a.at - b.at);
@@ -192,7 +203,7 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
           <p>{inOriginalTerms(s.notes[0] ?? 'Mimic could not line this take up with the phrase. Listen to it once more, then try again.')}</p>
         </QuietNotice>
       )}
-      {scored && s.trust.level === 'caution' && (
+      {scored && s.trust.level === 'caution' && inOriginalTerms(s.trust.reasons[0] ?? '') !== result.notice && (
         <Notice tone="warn" title="Treat this score with care">
           <p>{inOriginalTerms(s.trust.reasons[0] ?? 'The take was unclear in places.')}</p>
         </Notice>
@@ -210,7 +221,7 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
           </div>
           <div className="rs-top-text">
             <p className="rs-sentence">
-              <strong>{leadWords(band, wrongNoteCount(result))}</strong> {sentence}
+              <strong>{leadWords(band, wrongNoteCount(c), rough)}</strong> {sentence}
             </p>
             {short && <p className="rs-hint">Short phrases are scored roughly, so the number is rounded to the nearest 5.</p>}
             {median !== null && <p className="rs-key">{keyLine(median, c.transposeSemitones)}</p>}
@@ -270,7 +281,9 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
       {/* Not a live region: the page already announces the score. Shown once the history includes this take. */}
       {scored && props.historyReady !== false && (
         <p className="rs-mastery">
-          {phrase.srs.rung > 0
+          {rough
+            ? 'This take was compared with a rough guide, so it does not count toward mastery. A vocal-only file gives a real score.'
+            : phrase.srs.rung > 0
             ? 'Mastered. It will come back for review.'
             : mastery.considered === 0
               ? `Counts toward mastery when sung at full speed: ${mastery.needed} good tries are needed.`
@@ -299,18 +312,21 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
           <ul className="rs-notechips">
             {c.notes.map((n) => {
               const bad = n.flags.find((f) => flagWord(f) !== null);
+              // Against a rough guide a note that was not sung may be the band, not the singer: the scorer does not count it as missed, so it is not called missed here either.
+              const notCounted = rough && bad === 'missed';
+              const shown = notCounted ? null : bad;
               return (
                 <li key={n.refIndex}>
                   <button
                     type="button"
-                    className={`rs-notechip${bad ? ' rs-notechip--flag' : ''}`}
+                    className={`rs-notechip${shown ? ' rs-notechip--flag' : ''}`}
                     onClick={() => loopNote(n)}
                     disabled={!props.onLoop || outsideTrackerRange(n)}
-                    aria-label={`${noteSummary(n)}${props.onLoop ? '. Loops this note at 75 percent.' : ''}`}
+                    aria-label={`${notCounted ? `${n.refName}: not counted against a rough guide` : noteSummary(n)}${props.onLoop ? '. Loops this note at 75 percent.' : ''}`}
                   >
-                    <Icon name={bad ? 'alert' : 'check'} size={14} />
+                    <Icon name={shown ? 'alert' : notCounted ? 'info' : 'check'} size={14} />
                     <span className="num rs-notechip-name">{n.refName}</span>
-                    <span className="rs-notechip-word">{bad ? flagWord(bad) : 'ok'}</span>
+                    <span className="rs-notechip-word">{shown ? flagWord(shown) : notCounted ? 'not counted' : 'ok'}</span>
                   </button>
                 </li>
               );

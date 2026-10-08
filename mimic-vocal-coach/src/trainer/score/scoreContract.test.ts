@@ -95,7 +95,7 @@ describe('flags are charges', () => {
     const r = scoreAttempt(ref, attemptAnalysis({ notes: I.wrongNote(PH_A, 2, 2), key: -3, lead: 1.4 }));
     const wrong = r.fixes.find((f) => f.id === 'pitch.wrong-notes');
     expect(wrong).toBeDefined();
-    expect(fixEvidence(r, 'pitch.wrong-notes')).toMatch(/note 3/);
+    expect(fixEvidence(r, 'pitch.wrong-notes')).toMatch(/note 3/i);
     expect(fixEvidence(r, 'nonexistent')).toBeNull();
     const half = scoreAttempt(ref, attemptAnalysis({ notes: I.sliceNotes(PH_A, 0, 6), lead: 1.4 }));
     expect(half.fixes[0].id).toBe('coverage');

@@ -7,6 +7,7 @@
 import { int16ToFloat } from '../audio/pcm';
 import type { AttemptRecord, ClipAudioInfo, ClipRecord } from '../types';
 import { AudioMissingError, QuotaError, type ClipStore } from './clips';
+import { sanitizeStyle } from './history';
 
 export interface ContractEnv {
   /** A fresh, empty store. The environment closes and removes every store it made when `cleanup` runs. */
@@ -66,8 +67,13 @@ function clipRec(id: string, addedAt = '2026-10-08T00:00:00Z'): ClipRecord {
   return { id, addedAt, updatedAt: addedAt, title: id, phrases: [] } as unknown as ClipRecord;
 }
 
-function attempt(id: string, phraseId: string, at: number, clipId = 'c1'): AttemptRecord {
-  return { id, clipId, phraseId, at, hasAudio: false } as unknown as AttemptRecord;
+/** A complete, valid attempt record (stores read rows back through parseAttemptRecord, so a stub with a few fields would be skipped). */
+export function attempt(id: string, phraseId: string, at: number, clipId = 'c1'): AttemptRecord {
+  return {
+    id, clipId, phraseId, at, mode: 'sing-along', keyMode: 'locked', rate: 1, transposeSemitones: 0,
+    scores: { overall: 80, pitch: 80, timing: 80, tone: 80, expression: 80 }, trust: 'ok', coverage: 1, wrongNotes: 0,
+    syncOffsetMs: null, tempoRatio: null, route: 'wired', notes: [], style: sanitizeStyle({}), tone: [], fixIds: [], analysisVersion: 1, hasAudio: false,
+  } as unknown as AttemptRecord;
 }
 
 /** A deterministic tone as Int16, so expected samples can be recomputed anywhere without keeping a second copy. */

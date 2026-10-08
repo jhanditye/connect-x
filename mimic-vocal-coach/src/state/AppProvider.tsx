@@ -6,7 +6,7 @@ import { MAX_ANALYSIS_SEC } from '../analysis/analyze';
 import { analyzeInWorker } from '../analysis/client';
 import { makeDemoTake } from '../analysis/demo';
 import { decodeAudioFile } from '../audio/decode';
-import { keepScreenAwake } from '../audio/wakeLock';
+import { keepScreenAwake, type ScreenWakeLock } from '../audio/wakeLock';
 import { isScoreable } from '../coach/compare';
 import { getExercise } from '../coach/exercises';
 import { ARTIST_VOICE_TYPE, clipFromAnalysis, MAX_CLIPS_PER_SINGER } from '../coach/measured';
@@ -102,13 +102,30 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
 
   useEffect(() => applyTheme(theme), [theme]);
 
+  // One screen wake lock shared by everything that is running (a file's decode and its analysis are one hold).
+  const awakeRef = useRef<{ lock: ScreenWakeLock; holders: number } | null>(null);
+  /** Takes (or joins) the lock and returns the function that lets go of this hold. Safari grants the lock only within about 5 s of a touch, so callers take it first thing in the tap handler. */
+  const holdAwake = useCallback((): (() => void) => {
+    if (!awakeRef.current) awakeRef.current = { lock: keepScreenAwake(), holders: 0 };
+    awakeRef.current.holders++;
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      const held = awakeRef.current;
+      if (!held || --held.holders > 0) return;
+      held.lock.release();
+      awakeRef.current = null;
+    };
+  }, []);
+
   const runAnalysis = useCallback(
     async (job: JobKind, samples: Float32Array, sampleRate: number, opts: AnalysisOptions, label: string): Promise<VoiceAnalysis | null> => {
       const run = ++runRef.current;
       dispatch({ type: 'job/start', job, phase: 'analyzing', label });
       // A 5-minute take takes ~10-20 s to analyse. iOS freezes a page ~20 s after the screen locks or the app
       // is left, so keep the screen awake while the worker runs (no-op where Wake Lock is unavailable).
-      const awake = keepScreenAwake();
+      const awake = holdAwake();
       try {
         const analysis = await analyzeInWorker(samples, sampleRate, opts, (value: number) => {
           if (runRef.current === run) dispatch({ type: 'job/progress', value });
@@ -118,10 +135,10 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         if (runRef.current === run) dispatch({ type: 'job/fail', message: message(err, 'The analysis failed.') });
         return null;
       } finally {
-        awake.release();
+        awake();
       }
     },
-    [],
+    [holdAwake],
   );
 
   const analyzeSamples = useCallback(
@@ -178,18 +195,24 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
 
   const analyzeFile = useCallback(
     async (file: File): Promise<boolean> => {
-      const decoded = await decode(file, 'take');
-      if (!decoded) return false;
-      return analyzeSamples({
-        samples: decoded.samples,
-        sampleRate: decoded.sampleRate,
-        source: 'upload',
-        name: stripExtension(file.name) || 'Uploaded take',
-        sourceDurationSec: decoded.sourceDurationSec,
-        notices: decoded.notices,
-      });
+      // Requested before anything is awaited: this runs inside the tap, and a decode can take longer than Safari allows between a touch and the request.
+      const release = holdAwake();
+      try {
+        const decoded = await decode(file, 'take');
+        if (!decoded) return false;
+        return await analyzeSamples({
+          samples: decoded.samples,
+          sampleRate: decoded.sampleRate,
+          source: 'upload',
+          name: stripExtension(file.name) || 'Uploaded take',
+          sourceDurationSec: decoded.sourceDurationSec,
+          notices: decoded.notices,
+        });
+      } finally {
+        release();
+      }
     },
-    [decode, analyzeSamples],
+    [decode, analyzeSamples, holdAwake],
   );
 
   const analyzeDemo = useCallback(async (): Promise<boolean> => {
@@ -218,14 +241,19 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
 
   const loadReferenceFile = useCallback(
     async (file: File): Promise<boolean> => {
-      const decoded = await decode(file, 'reference');
-      if (!decoded) return false;
-      const name = stripExtension(file.name) || 'Reference clip';
-      const trimmed = trimForAnalysis(decoded.samples, decoded.sampleRate, name, decoded.sourceDurationSec);
-      const notices = [...decoded.notices, ...trimmed.notices];
-      return analyzeReference({ name, samples: trimmed.samples, sampleRate: decoded.sampleRate, notices }, false);
+      const release = holdAwake(); // first thing in the tap, before the decode (see analyzeFile)
+      try {
+        const decoded = await decode(file, 'reference');
+        if (!decoded) return false;
+        const name = stripExtension(file.name) || 'Reference clip';
+        const trimmed = trimForAnalysis(decoded.samples, decoded.sampleRate, name, decoded.sourceDurationSec);
+        const notices = [...decoded.notices, ...trimmed.notices];
+        return await analyzeReference({ name, samples: trimmed.samples, sampleRate: decoded.sampleRate, notices }, false);
+      } finally {
+        release();
+      }
     },
-    [decode, analyzeReference],
+    [decode, analyzeReference, holdAwake],
   );
 
   // Voice type and tuning feed the analysis itself (passaggio zone, tuning offset), so a change

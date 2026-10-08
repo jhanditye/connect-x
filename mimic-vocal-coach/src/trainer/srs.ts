@@ -130,7 +130,7 @@ export function practiceQueue(
       const whole = Math.round(overdueDays);
       items.push({ phraseId: p.id, status, reason: overdueDays >= 1 ? `Review, ${days(whole)} overdue` : 'Review due today', priority: 100 + overdueDays });
     } else if (status === 'stuck') {
-      items.push({ phraseId: p.id, status, reason: 'Stuck: try it at 75 % speed', priority: 70 });
+      items.push({ phraseId: p.id, status, reason: 'Stuck: try it at 75% speed', priority: 70 });
     } else if (status === 'learning') {
       const lastScore = last && finite(last.overall) ? last.overall : null;
       items.push({
@@ -147,7 +147,7 @@ export function practiceQueue(
 }
 
 export interface NextStep {
-  /** Suggest the same phrase at 75 % speed (a poor score at full speed). */
+  /** Suggest the same phrase at 75% speed (a poor score at full speed). */
   slower: boolean;
   /** Suggest going back to full speed (a good score at 75 %). */
   faster: boolean;

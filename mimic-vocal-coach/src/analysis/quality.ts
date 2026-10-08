@@ -312,12 +312,12 @@ export function qualityReport(input: QualityInput): { warnings: string[]; issues
   if (!backed && voicedSec >= 0.2 && Number.isFinite(quality.snrDb) && quality.snrDb < WARN_MIN_SNR_DB) {
     flag('noisy');
     w.push(
-      `There is a lot of background noise (singing is only ${fmt(quality.snrDb)} dB above it), so breathiness and tone readings are less reliable. Record in a quieter room, away from fans and traffic, and a little closer to the microphone.`,
+      `There is a lot of background noise (singing is only ${fmt(quality.snrDb)} dB above it), so breathiness and tone readings are less reliable. Record in a quieter room, away from fans and traffic, with the phone about a hand-span from your mouth.`,
     );
   }
   if (voicedSec >= 0.2 && Number.isFinite(medianVoicedDb) && medianVoicedDb < WARN_MIN_LEVEL_DB) {
     flag('too-quiet');
-    w.push(`The recording is very quiet (typical singing level ${fmt(medianVoicedDb)} dBFS). Move closer to the microphone or raise the input gain.`);
+    w.push(`The recording is very quiet (typical singing level ${fmt(medianVoicedDb)} dBFS). Hold the phone about a hand-span from your mouth and sing at your normal comfortable volume.`);
   }
   return { warnings: w, issues };
 }
@@ -401,7 +401,7 @@ export function mixReport(input: { confidence: number; voicedSec: number; purity
   } else if (purity !== undefined && purity < ROUGH_GUIDE_PURITY) {
     // The confidence looks fine (a steady bass line scores as well as a voice) but the line has too many band-like notes in it.
     warnings.push(
-      `Only about ${fmt(Math.max(0, purity) * 100)}% of the melody that was followed looks like the lead voice; the rest is probably the band (bass, guitar or keys). Treat the contour as a rough guide: notes you do not sing may be the band's, not yours to hit. A vocal-only file works far better.`,
+      `About a third or more of the melody that was followed is probably the band (bass, guitar or keys), not the voice: only about ${fmt(Math.max(0, purity) * 100)}% of it looks like the lead voice. Treat the contour as a rough guide: notes you do not sing may be the band's, not yours to hit. A vocal-only file works far better.`,
     );
   }
   return { warnings, issues };

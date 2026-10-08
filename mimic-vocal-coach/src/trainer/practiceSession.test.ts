@@ -17,10 +17,13 @@ import {
   medianOfRecent,
   microphoneMessage,
   octaveFold,
+  isRoughTake,
+  MIC_ADVICE,
   trimTake,
   withTrust,
-  wrongNoteCount,
 } from './practiceSession';
+import { wrongNoteCount } from './compare';
+import { safeCue } from './feedback';
 
 const SR = 1000;
 const ramp = (n: number): Float32Array => Float32Array.from({ length: n }, (_, i) => i);
@@ -190,6 +193,74 @@ describe('judgeTake', () => {
     expect(v.notice).toBe(COPY.unclearKey(7, 0));
     expect(v.notice).toMatch(/7 semitones above the original last time/);
     expect(v.notice).toMatch(/the original key this time/);
+  });
+
+  it('a no-match the scorer can explain shows the scorer\'s own words, in the words of the app, never the microphone advice', () => {
+    const c = makeFakePhraseComparison('no-match');
+    const why = (noMatchWhy: 'locked-key' | 'pitch-far' | 'rough-reference', line: string) =>
+      judgeTake({ ...base, comparison: { ...c, score: { ...c.score, notes: [line], diagnostics: { ...c.score.diagnostics, noMatchWhy } } } });
+    const locked = why('locked-key', 'You sang 5 semitones below the reference key. While you sing along with the guide only octaves count as the same key. Move the guide to your key (Key, Other), or choose Listen then sing, where any key is fine.');
+    expect(locked.countable).toBe(false);
+    expect(locked.notice).toMatch(/5 semitones below the original key/);
+    expect(locked.notice).toMatch(/Move the guide to your key/);
+    expect(locked.notice).toMatch(/Listen then sing/);
+    expect(locked.notice).not.toMatch(/reference|microphone/);
+    expect(why('pitch-far', 'The rhythm matched, but many notes were far from the reference.').notice).toBe('The rhythm matched, but many notes were far from the original.');
+    expect(why('rough-reference', 'The melody found in this full song does not line up.').notice).toMatch(/^The melody found in this full song/);
+    // no explanation from the scorer: the generic words
+    expect(judgeTake({ ...base, comparison: { ...c, score: { ...c.score, notes: ['Nothing lines up.'], diagnostics: { ...c.score.diagnostics, noMatchWhy: null } } } }).notice).toBe(COPY.noMatch);
+  });
+
+  it('a take against a rough full-song guide is shown with the reason but never counted', () => {
+    const c = makeFakePhraseComparison('perfect');
+    const reason = 'The reference has about 2.1 times as many notes as you sang. In a full song some of them belong to the band, so the score is a rough guide. A vocal-only file gives a real score.';
+    const rough = (d: { roughGuide?: boolean; refLowConfidence?: boolean }) => ({ ...c, score: { ...c.score, trust: { level: 'caution' as const, reasons: ['The recording is noisy.', reason] }, diagnostics: { ...c.score.diagnostics, ...(d.roughGuide === undefined ? {} : { roughGuide: d.roughGuide }), ...(d.refLowConfidence === undefined ? {} : { refLowConfidence: d.refLowConfidence }) } } });
+    for (const d of [{ roughGuide: true }, { refLowConfidence: true }, { roughGuide: true, refLowConfidence: true }]) {
+      const comparison = rough(d);
+      expect(isRoughTake(comparison)).toBe(true);
+      const v = judgeTake({ ...base, comparison });
+      expect(v.countable).toBe(false);
+      expect(v.notice).toBe(reason.replace('The reference', 'The original'));
+    }
+    // no reason in the trust list: the app's own words
+    const bare = rough({ roughGuide: true });
+    bare.score.trust.reasons = [];
+    expect(judgeTake({ ...base, comparison: bare })).toMatchObject({ countable: false, notice: COPY.roughGuide });
+    // a clean reference still counts
+    expect(isRoughTake(c)).toBe(false);
+    expect(judgeTake({ ...base, comparison: c }).countable).toBe(true);
+    // speaker bleed is still said first
+    expect(judgeTake({ ...base, comparison: rough({ roughGuide: true }), probe: leaking, headphonesLikely: false }).notice).toBe(COPY.speakerBleed);
+  });
+
+  it('octave-displaced notes are not wrong notes in the stored count (one definition, compare.ts)', () => {
+    const c = makeFakePhraseComparison('perfect');
+    const notes = c.notes.map((n, i) => (i === 0 ? { ...n, flags: ['octave-displaced' as const] } : i === 1 ? { ...n, flags: ['wrong-note' as const] } : n));
+    const a = buildAttemptRecord({ id: 'a', at: 1, clipId: 'c', phraseId: 'p', mode: 'sing-along', keyMode: 'locked', rate: 1, comparison: { ...c, notes }, routeKind: 'wired', style: {} as StyleVector, fixes: [] });
+    expect(a.wrongNotes).toBe(1);
+  });
+});
+
+describe('words that go to the singer', () => {
+  it('never tell the singer to be louder or push, and give the one microphone advice', () => {
+    const strings = [
+      ...Object.values(COPY).flatMap((v) => (typeof v === 'string' ? [v] : [])),
+      COPY.unclearKey(7, 0),
+      COPY.notSaved('x'),
+      COPY.guideFailed('x'),
+      COPY.openFailed('x'),
+      COPY.analysisFailed('x'),
+      COPY.playbackFailed('x'),
+      ...(['audio-session', 'hidden', 'mic-ended', 'device-change', 'no-audio', null] as const).flatMap((r) => [interruptionMessage(r, 'take'), interruptionMessage(r, 'playback')]),
+      microphoneMessage(new Error('boom')),
+    ];
+    for (const t of strings) {
+      expect(safeCue(t)).toBe(t);
+      expect(t).not.toMatch(/louder|closer or|sing out/i);
+    }
+    expect(COPY.lowEvidence).toContain(MIC_ADVICE);
+    expect(COPY.nothingHeard).toContain(MIC_ADVICE);
+    expect(MIC_ADVICE).toBe('Hold the phone about a hand-span from your mouth, sing at your normal comfortable volume, and sing the whole phrase.');
   });
 });
 

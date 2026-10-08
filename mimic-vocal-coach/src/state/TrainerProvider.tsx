@@ -363,16 +363,20 @@ export function TrainerProvider(props: TrainerProviderProps) {
       notifyTabs();
     };
 
+    // Each clip is read, rebuilt and written inside that clip's own queue, the one a saved take uses: a take that finishes while a
+    // backup is being merged is applied before or after the rebuild, never in between (its attempt count would be lost).
     const rebuildClips = async (store: ClipStore, clipIds: Iterable<string>): Promise<void> => {
       for (const id of new Set(clipIds)) {
-        const clip = await store.getClip(id).then((raw) => {
-          const i = raw ? inspectClipRecord(raw) : null;
-          return i && i.ok ? i.clip : null;
+        await queue(id, async () => {
+          const clip = await store.getClip(id).then((raw) => {
+            const i = raw ? inspectClipRecord(raw) : null;
+            return i && i.ok ? i.clip : null;
+          });
+          if (!clip) return;
+          const phrases: PhraseRecord[] = [];
+          for (const p of clip.phrases) phrases.push(rebuildPhraseState(p, await store.listAttempts({ phraseId: p.id, clipId: id })));
+          await putAndShow(store, { ...clip, phrases });
         });
-        if (!clip) continue;
-        const phrases: PhraseRecord[] = [];
-        for (const p of clip.phrases) phrases.push(rebuildPhraseState(p, await store.listAttempts({ phraseId: p.id, clipId: id })));
-        await putAndShow(store, { ...clip, phrases });
       }
     };
 
@@ -610,7 +614,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
       importLibrary: (file: File): Promise<{ added: number; updated: number; warnings: string[] }> =>
         queue('*library*', () =>
           guard(async () => {
-            if (file.size > MAX_IMPORT_BYTES) throw new Error('That file is far larger than a Mimic backup. Choose the .json file made with "Export library".');
+            if (file.size > MAX_IMPORT_BYTES) throw new Error('That file is far larger than a Mimic backup. Choose the .json file made with "Export my library".');
             const parsed = parseLibraryText(await file.text());
             if (!parsed.ok) throw new Error(parsed.error);
             const store = await getStore();
@@ -622,10 +626,25 @@ export function TrainerProvider(props: TrainerProviderProps) {
             const merged = mergeLibrary(existing, parsed.value.clips);
             const before = new Map(existing.map((c) => [c.id, c]));
             const changed = merged.clips.filter((c) => before.get(c.id) !== undefined ? JSON.stringify(before.get(c.id)) !== JSON.stringify(c) : true);
-            for (const c of changed) await store.putClip(c);
+            // Each changed clip is written inside its own queue, merged again with what is on the device at that moment: a take saved
+            // while the backup was being read has already updated the phrase's counts, and the write must not go back over it.
+            const incomingById = new Map(parsed.value.clips.map((c) => [c.id, c]));
+            const written = new Map<string, ClipRecord>();
+            for (const c of changed) {
+              await queue(c.id, async () => {
+                const raw = await store.getClip(c.id);
+                const inspected = raw ? inspectClipRecord(raw) : null;
+                const current = inspected && inspected.ok ? inspected.clip : null;
+                const incoming = incomingById.get(c.id);
+                const next = current && incoming ? mergeLibrary([current], [incoming]).clips[0] : current ?? c;
+                if (!current || JSON.stringify(current) !== JSON.stringify(next)) await store.putClip(next);
+                written.set(c.id, next);
+              });
+            }
+            const finalClips = merged.clips.map((c) => written.get(c.id) ?? c);
 
             const knownIds = new Set((await store.listAttempts({})).map((x) => x.id));
-            const picked = selectNewAttempts(merged.clips, knownIds, parsed.value.attempts);
+            const picked = selectNewAttempts(finalClips, knownIds, parsed.value.attempts);
             if (picked.skippedOrphans) warnings.push(`${picked.skippedOrphans} practice ${picked.skippedOrphans === 1 ? 'attempt was' : 'attempts were'} skipped because ${picked.skippedOrphans === 1 ? 'its phrase has' : 'their phrases have'} been edited or removed since the backup.`);
             for (let i = 0; i < picked.attempts.length; i += 50) await Promise.all(picked.attempts.slice(i, i + 50).map((x) => store.addAttempt(x)));
             await rebuildClips(store, picked.attempts.map((x) => x.clipId));
@@ -638,7 +657,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
             const a = appRef.current;
             const touchedIds = new Set(changed.map((c) => c.id));
             if (a) {
-              for (const c of merged.clips) {
+              for (const c of finalClips) {
                 if (!touchedIds.has(c.id)) continue;
                 if (!c.contributesToSinger) {
                   // A newer copy that does not count (or no longer counts): the singer's measured targets must not keep it.

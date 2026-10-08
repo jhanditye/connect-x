@@ -286,17 +286,15 @@ export function scoreAttempt(ref: VoiceAnalysis, attempt: VoiceAnalysis, opts: S
     .slice(0, 5)
     .map((i) => ({ id: i.id, skill: i.skill, title: i.title, advice: i.advice, gainPoints: round(gain(i), 1), notes: i.notes }));
   let coverageEvidence: string | null = null;
-  if (completeness < 0.98 && status !== 'no-match') {
-    // Notes that fell before the first or after the last sound of a very quiet take were probably not sung quietly but not heard.
-    const missedAll = perNote.filter((n) => !n.matched && !unhearable.has(n.refIndex) && !doubtful.has(n.refIndex)).map((n) => n.refIndex);
-    const firstHeard = perNote.findIndex((n) => n.matched);
-    const lastHeard = perNote.length - 1 - [...perNote].reverse().findIndex((n) => n.matched);
-    const missed = quietTake ? missedAll.filter((k) => k > firstHeard && k < lastHeard) : missedAll;
-    coverageEvidence = `Only ${Math.round(coverage * 100)}% of the original was sung${missed.length ? ` (missed: ${missed.slice(0, 4).map((k) => `note ${k + 1}`).join(', ')}${missed.length > 4 ? '...' : ''})` : ''}.${quietTake ? ' The recording is very quiet, so the app may simply not have heard the quietest notes.' : ''}`;
+  // "Sing the whole phrase" is not said to a take below the quiet-take level: notes that were not heard may simply have been sung softly
+  // (the trust line already says the recording is very quiet), and the advice to sing more would send the singer the wrong way.
+  if (completeness < 0.98 && status !== 'no-match' && !quietTake) {
+    const missed = perNote.filter((n) => !n.matched && !unhearable.has(n.refIndex) && !doubtful.has(n.refIndex)).map((n) => n.refIndex);
+    coverageEvidence = `Only ${Math.round(coverage * 100)}% of the original was sung${missed.length ? ` (missed: ${missed.slice(0, 4).map((k) => `note ${k + 1}`).join(', ')}${missed.length > 4 ? '...' : ''})` : ''}.`;
     fixes.push({
       id: 'coverage', skill: 'pitch', title: 'Sing the whole phrase',
       advice: 'Listen once more, then sing from the first note to the last without stopping.',
-      gainPoints: round(onSung * (1 - completeness), 1), notes: missedAll,
+      gainPoints: round(onSung * (1 - completeness), 1), notes: missed,
     });
     fixes.sort((a, b) => b.gainPoints - a.gainPoints);
   }

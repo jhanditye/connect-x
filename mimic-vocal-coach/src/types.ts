@@ -440,6 +440,8 @@ export interface ClipAnalysisSummary {
   unusableReason: string | null;
   /** Full-song clips read by the lead-vocal extractor: how well it followed the voice, 0..1 (a ranking, calibrated on synthetic mixes). Absent for solo clips. */
   leadConfidence?: number | null;
+  /** Full-song clips: the share (0..1) of the followed melody that is probably the lead voice, not the band. Absent when the extractor did not say. */
+  leadPurity?: number;
 }
 
 export interface PhraseSummary {

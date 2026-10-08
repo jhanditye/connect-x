@@ -3,7 +3,7 @@ import { act, StrictMode, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryClipStore, QuotaError, StoreUnavailableError, type ClipStore } from '../storage/clips';
-import { findRelinkCandidates, measuredFromClip } from '../storage/library';
+import { buildLibraryExport, findRelinkCandidates, measuredFromClip } from '../storage/library';
 import { FAKE_NOW, FakeTrainerEngine, makeFakeAttempts, makeFakeClip, makeFakePreparedClip } from '../testing/trainerFixtures';
 import { makeFakeProfile } from '../testing/fixtures';
 import type { AppSettings, AttemptRecord, ClipRecord, MeasuredClip, PhraseRecord } from '../types';
@@ -633,6 +633,42 @@ describe('practice sessions', () => {
     const stored = (await store.getClip('fake-clip')) as ClipRecord;
     expect(stored.title).toBe('Renamed mid-take');
     expect(stored.phrases[10].stats.attempts).toBe(2);
+  });
+
+  it('an import racing a saved take keeps both: the rename arrives and the take is counted on the phrase', async () => {
+    const base = createMemoryClipStore();
+    const clip = makeFakeClip({ id: 'race-clip', updatedAt: '2026-10-01T00:00:00.000Z' });
+    await base.putClip(clip);
+    await base.writeAudio('race-clip', 'mix', new Int16Array(44100), 44100);
+    // hold the first write that carries the imported title, so a take can be saved while the import is in the middle of its work
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let held = false;
+    const store: ClipStore = {
+      ...base,
+      async putClip(c) {
+        if (!held && c.title === 'Renamed on another copy') {
+          held = true;
+          await gate;
+        }
+        return base.putClip(c);
+      },
+    };
+    const h = await mount({ props: { store, openPractice } });
+    await act1(() => h.c.openPractice('race-clip', clip.phrases[0].id));
+    const newer = { ...clip, title: 'Renamed on another copy', updatedAt: '2026-10-09T00:00:00.000Z' };
+    const importing = h.c.importLibrary(new File([JSON.stringify(buildLibraryExport([newer], [], {}))], 'backup.json'));
+    await h.settle();
+    const take = good(clip.phrases[0].id, 5, { id: 'take-during-import', clipId: 'race-clip' });
+    const saving = sessions[0].recordAttempt(take);
+    await h.settle();
+    release();
+    await act1(() => Promise.all([importing, saving]));
+    await h.settle();
+    const after = (await base.getClip('race-clip')) as ClipRecord;
+    expect(after.title).toBe('Renamed on another copy');
+    expect((await base.listAttempts({ phraseId: clip.phrases[0].id })).map((a) => a.id)).toContain('take-during-import');
+    expect(after.phrases[0].stats.attempts).toBe(clip.phrases[0].stats.attempts + 1);
   });
 
   it('keeps the calibration the engine learns', async () => {

@@ -88,7 +88,11 @@ sync model and plain-words tone findings **from the scorer's own readings**. `tr
   of 12; a tidy take one semitone up is still a transposition.
 - **Tone words.** One size scale (`toneSize`: a little / clearly / much) for the fix card and the tone panel. Rasp is named before
   breathiness when the rasp index differs past its dead zone (a rough voice also reads as airier); "let more air in" is never given when
-  the rasp index differs or the reference has any (above 0.1); the evidence says it is an estimate and prints no index numbers.
+  the rasp index differs or the reference has any (above 0.1); the evidence says it is an estimate and prints no index numbers. When the
+  rasp fix is given, the breathiness finding becomes an info line that does not say "airier" (a raspy take is not also told it is airier).
+- **Quiet takes.** A take below the quiet-take level (`diagnostics.quietTake`: the recording is flagged too quiet, or the median voiced level is
+  under `QUIET_VOICED_DB`) gets no `coverage` fix ("Sing the whole phrase"): the notes may have been sung softly, not skipped. The trust line
+  already says the recording is very quiet, and the practice notice says to hold the phone about a hand-span away, never to sing louder.
 - **Tracker slips.** `prepare` folds an octave slip shorter than 0.4 s back to its neighbours' octave (and drops other big jumps) before
   anything is measured: a 150 ms octave error in a perfect copy used to read as a note that came in 160 ms late.
 

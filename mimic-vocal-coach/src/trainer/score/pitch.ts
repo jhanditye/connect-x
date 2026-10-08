@@ -97,6 +97,7 @@ export function scorePitch(ctx: Ctx): SkillResult {
   };
   const consumed = new Set<number>();
   const nm = (k: number): string => `note ${k + 1} (${perNote[k].refName})`;
+  const cap = (t: string): string => t.charAt(0).toUpperCase() + t.slice(1);
   const list = (ks: number[]): string => (ks.length <= 3 ? ks.map(nm).join(', ') : `${ks.slice(0, 3).map(nm).join(', ')} and ${ks.length - 3} more`);
 
   const wrong = idx.filter((k) => perNote[k].flags.includes('wrong-note'));
@@ -117,7 +118,7 @@ export function scorePitch(ctx: Ctx): SkillResult {
     });
     insights.push({
       id: 'pitch.wrong-notes', skill: 'pitch', kind: 'fix', title: wrong.length === 1 ? 'A wrong note' : `${wrong.length} wrong notes`,
-      text: `Wrong pitch on ${wrong.length === 1 ? 'one note' : `${wrong.length} notes`}. ${parts.join('; ')}.`,
+      text: `Wrong pitch on ${wrong.length === 1 ? 'one note' : `${wrong.length} notes`}. ${cap(parts.join('; '))}.`,
       advice: 'Play the reference note, hum it quietly, then sing it again: land on the pitch softly before adding words.',
       lossSkill: wrong.reduce((a, k) => a + noteLoss(k), 0), notes: wrong,
     });
@@ -127,7 +128,7 @@ export function scorePitch(ctx: Ctx): SkillResult {
     disp.forEach((k) => consumed.add(k));
     insights.push({
       id: 'pitch.octave', skill: 'pitch', kind: 'info', title: 'Octave-displaced notes',
-      text: `${list(disp)} ${disp.length === 1 ? 'was' : 'were'} sung an octave away from the rest of the line. The note name is right; that is fine if it was out of your range.`,
+      text: `${cap(list(disp))} ${disp.length === 1 ? 'was' : 'were'} sung an octave away from the rest of the line. The note name is right; that is fine if it was out of your range.`,
       advice: 'If it is within your range, try the note in the line\'s octave in a lighter, mixed sound.',
       lossSkill: disp.reduce((a, k) => a + noteLoss(k), 0), notes: disp,
     });

@@ -13,6 +13,7 @@ import { findRelinkMatches, reanalyzeClip, sameSource, type CommitEdits, type Im
 import { IMPORT_FORMATS, IMPORT_LEDE, IMPORT_STEPS, PRIVACY_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
 import type { ClipKind, ClipRecord } from '../../types';
 import { ClipReview } from './ClipReview';
+import { BrowserTabNote } from './InstallCard';
 import { Icon } from './Icon';
 import { Notice } from './Notice';
 import type { SamplePlayer } from './samplePlayer';
@@ -504,6 +505,9 @@ export function ImportSheet(props: ImportSheetProps) {
               This browser would not give Mimic a place to keep them. Add the app to your Home Screen, or export a backup after adding clips.
             </Notice>
           )}
+
+          {/* In a browser tab on an iPhone what is saved here is not in the Home Screen app: said before the first save, not after. */}
+          {savedCount === 0 && state.step !== 'done' && <BrowserTabNote />}
 
           {relinkMode && !relinkClip && state.step !== 'done' && (
             <div>

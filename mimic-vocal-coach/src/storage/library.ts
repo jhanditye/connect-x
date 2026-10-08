@@ -156,6 +156,7 @@ function parseAnalysis(x: unknown): ClipAnalysisSummary | null {
     usableAsTarget: x.usableAsTarget === true,
     unusableReason: typeof x.unusableReason === 'string' && x.unusableReason ? x.unusableReason : null,
     ...(finite(x.leadConfidence) ? { leadConfidence: clampNum(x.leadConfidence, 0, 0, 1) } : {}),
+    ...(finite(x.leadPurity) ? { leadPurity: clampNum(x.leadPurity, 0, 0, 1) } : {}),
   };
 }
 
@@ -370,7 +371,7 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
 
 /** Field-by-field validation: malformed entries are dropped with a warning; a newer `version` is refused. */
 export function parseLibraryExport(input: unknown): LibraryParse {
-  if (!isRecord(input) || input.format !== LIBRARY_FORMAT) return { ok: false, error: 'That file is not a Mimic library backup. Choose a file made with "Export library".' };
+  if (!isRecord(input) || input.format !== LIBRARY_FORMAT) return { ok: false, error: 'That file is not a Mimic library backup. Choose a file made with "Export my library".' };
   let json: Record<string, unknown> = input;
   if (!finite(json.version) || json.version < 1 || !Number.isInteger(json.version)) return { ok: false, error: 'This backup has no readable version, so it cannot be imported.' };
   if (json.version > LIBRARY_VERSION) {
@@ -445,7 +446,7 @@ export function parseLibraryText(raw: string): LibraryParse {
   try {
     json = JSON.parse(raw);
   } catch {
-    return { ok: false, error: 'That file is not a Mimic library backup (it is not readable JSON). Choose a file made with "Export library".' };
+    return { ok: false, error: 'That file is not a Mimic library backup (it is not readable JSON). Choose a file made with "Export my library".' };
   }
   return parseLibraryExport(json);
 }
@@ -568,7 +569,7 @@ export function measuredFromClip(clip: ClipRecord): MeasuredClip {
 // Attempts update their phrase
 
 export function attemptLite(a: AttemptRecord): AttemptLite {
-  return { at: a.at, overall: a.scores.overall, pitch: a.scores.pitch, timing: a.scores.timing, tone: a.scores.tone, rate: a.rate, coverage: a.coverage, wrongNotes: a.wrongNotes };
+  return { at: a.at, overall: a.scores.overall, pitch: a.scores.pitch, timing: a.scores.timing, tone: a.scores.tone, expression: a.scores.expression, rate: a.rate, coverage: a.coverage, wrongNotes: a.wrongNotes, trust: a.trust };
 }
 
 const FULL_COVERAGE = 0.9;

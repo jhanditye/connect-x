@@ -143,6 +143,55 @@ describe('FakeTrainerEngine', () => {
     expect(e.getSnapshot().state).toBe('closed');
   });
 
+  it('mirrors the real engine: the microphone is open after a take and Turn off closes it, never while a take runs', async () => {
+    const e = new FakeTrainerEngine();
+    expect(e.getSnapshot()).toMatchObject({ micOpen: false, speakerConfirmed: false });
+    await e.sing();
+    expect(e.getSnapshot().micOpen).toBe(true);
+    e.releaseMicrophone();
+    expect(e.getSnapshot().micOpen).toBe(false);
+    e.force({ state: 'singing', micOpen: true });
+    e.releaseMicrophone();
+    expect(e.getSnapshot().micOpen).toBe(true);
+    expect(e.calls).toEqual(['sing', 'releaseMicrophone', 'releaseMicrophone']);
+  });
+
+  it('mirrors the real engine: "I have headphones on" is remembered for sing-along only', async () => {
+    const e = new FakeTrainerEngine({ options: { mode: 'sing-along' } });
+    await e.sing({ speakerConfirmed: true });
+    expect(e.getSnapshot().speakerConfirmed).toBe(true);
+    const t = new FakeTrainerEngine({ options: { mode: 'turn-taking' } });
+    await t.sing({ speakerConfirmed: true });
+    expect(t.getSnapshot().speakerConfirmed).toBe(false);
+  });
+
+  it('mirrors the real engine: finish() scores what was sung while recording, and is stop() anywhere else; stop() cancels the take', async () => {
+    const e = new FakeTrainerEngine({ script: ['perfect'] });
+    const seen: string[] = [];
+    e.subscribe(() => seen.push(e.getSnapshot().state));
+    const p = e.sing();
+    for (let i = 0; i < 20 && e.getSnapshot().state !== 'singing'; i++) await Promise.resolve();
+    expect(e.getSnapshot().state).toBe('singing');
+    e.finish();
+    expect(e.getSnapshot().state).toBe('processing');
+    await p;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(e.getSnapshot().state).toBe('result');
+    expect(seen.filter((s) => s === 'result')).toHaveLength(1); // the take that was finished is not scored a second time
+    // finish() when nothing is recording is stop()
+    e.finish();
+    expect(e.getSnapshot().state).toBe('result');
+    // a cancelled take shows no result
+    const c = new FakeTrainerEngine();
+    const q = c.sing();
+    await Promise.resolve();
+    c.stop();
+    await q;
+    expect(c.getSnapshot().state).toBe('idle');
+    expect(c.getSnapshot().result).toBeNull();
+  });
+
   it('starts in preparing with no reference when asked', () => {
     const e = new FakeTrainerEngine({ initialState: 'preparing' });
     expect(e.getSnapshot().reference).toBeNull();

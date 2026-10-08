@@ -400,6 +400,7 @@ export function ClipReview(props: ClipReviewProps) {
             <span className="chip rev-lead-badge">Lead vocal: {LEAD_WORDS[lead.band]}</span>
             <span className="rev-lead-hint">
               Mimic&rsquo;s own estimate of how well it followed the singing ({lead.confidence.toFixed(2)} out of 1). It is a ranking, not a measured accuracy: check it by ear below.
+              {lead.roughGuide ? ' About a third or more of what was followed is probably the band, so scores against it are a rough guide and do not count toward mastery.' : ''}
             </span>
           </p>
         )}

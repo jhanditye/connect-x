@@ -109,3 +109,14 @@ the repo, tests or fixtures (synthetic audio from `testing/synth.ts` or canned o
 | Cancelling | `analyzeInWorker`, `analyzeWithRouting` / `AnalyzeFn`, `prepareClip`, `reanalyzeClip` and `analyzePhraseCached` take an `AbortSignal`: the worker is terminated and the promise rejects with an `AbortError` (`analysis/abort.ts`). The import sheet aborts a file when it is skipped and every file when it closes, and reads one file at a time (plus one look-ahead after the file on screen has been read) |
 | Big files | The length of FLAC, MP3 (Xing/VBRI or first-frame bitrate) and Ogg is read from the header like MP4 (`audio/probe.ts`) and refused above 15 minutes; a compressed file whose length cannot be read is refused above 30 MB; a WAV is read only as far as the 5 minutes that are analysed. A WAV above 48 kHz is converted in slices (`trainer/resampleAsync.ts`) so the page stays responsive |
 | Ownership tick | Asked for every file, never remembered, shown next to Save in the pinned footer with the file's name |
+
+### Review round 3: what the screen does with the scorer's explanations
+
+| Question | Decision |
+|---|---|
+| A take that did not match and the scorer knows why | `judgeTake` shows the scorer's `notes[0]` in the app's words (`inOriginalTerms`) when `diagnostics.noMatchWhy` is set (`locked-key`, `pitch-far`, `rough-reference`); only an unexplained no-match gets `COPY.noMatch`. Sing-along in a key that is not an octave away tells the singer to move the guide to their key or choose Listen then sing |
+| A take against a rough full-song guide | `diagnostics.roughGuide` or `refLowConfidence`: shown with the trust reason, `countable = false` (no mastery, no review), whole-take fixes still listed. The result sheet says "Rough guide" where the band word would be, and bands use `scoreBand(shown, scores.pitch)`. The import badge and the clip page use `mixTrustBand({ confidence, purity })` (purity is stored as `leadPurity` on the clip's analysis summary) |
+| Microphone advice | One sentence everywhere (`MIC_ADVICE`): hold the phone about a hand-span from your mouth, sing at your normal comfortable volume, sing the whole phrase. Never "louder" or "closer"; a test runs every singer-facing string through `safeCue` |
+| Wrong notes | `compare.ts` `wrongNoteCount` only; the copies in `practiceSession.ts` and `ResultSheet.tsx` are gone |
+| Backups and attempts | `attemptLite` carries `expression` and `trust` (a rebuild and the live path agree); stores read attempt rows back through `parseAttemptRecord` and skip damaged ones (`readableAttempts`); an import writes each changed clip inside that clip's own queue, merged against what is on the device at that moment, so a take saved during an import is not lost |
+| An app update during a take | `practiceEngine` marks the page busy (`pwa/register.ts` `markBusy`) from the start of a take until its result, a cancel or `dispose()` |

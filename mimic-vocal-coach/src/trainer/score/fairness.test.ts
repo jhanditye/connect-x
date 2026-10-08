@@ -42,6 +42,9 @@ describe('ornaments and run notes are never "wrong notes"', () => {
     const c = comparePhrase(take(wrong), refRun, turn);
     expect(c.score.fixes.map((f) => f.id)).toContain('pitch.wrong-notes');
     expect(wrongNoteCount(c)).toBe(1);
+    // a sentence that starts with the note starts with a capital
+    expect(fixEvidence(c.score, 'pitch.wrong-notes')).toMatch(/\. Note \d+ \(/);
+    expect(textOf(c.score)).not.toMatch(/(^|[.!?] )note \d/);
   }, 60_000);
 
   it('an octave-displaced note is information, not a wrong note', () => {
@@ -137,6 +140,18 @@ describe('tone advice stays inside what the measurement supports', () => {
     expect(ids).toContain('tone.rasp');
     if (ids.includes('tone.breathiness')) expect(ids.indexOf('tone.rasp')).toBeLessThan(ids.indexOf('tone.breathiness'));
   }, 60_000);
+
+  it('a raspy take that is given the rasp fix is not also told it is airier', () => {
+    for (const sub of [0.3, 0.5]) {
+      const r = scoreAttempt(ref, take(PH_A, { tone: rasp(sub) }));
+      const ids = r.fixes.map((f) => f.id);
+      if (!ids.includes('tone.rasp')) continue;
+      expect(ids, `subharmonic ${sub}`).not.toContain('tone.breathiness');
+      expect(textOf(r), `subharmonic ${sub}`).not.toMatch(/airier|let your vocal folds meet|more air/i);
+    }
+    // at least one of the two is a raspy take with the rasp fix, so the loop above is not vacuous
+    expect(['tone.rasp'].every((id) => [0.3, 0.5].some((sub) => scoreAttempt(ref, take(PH_A, { tone: rasp(sub) })).fixes.some((f) => f.id === id)))).toBe(true);
+  }, 120_000);
 
   it('a clean take against a raspy original is never told to let more air in', () => {
     const rough = refAnalysis(PH_A, rasp(0.4));
@@ -275,4 +290,23 @@ describe('the words for a score', () => {
     expect(scoreBand(62)).toBe('fair');
     expect(scoreBand(40)).toBe('needs-work');
   });
+});
+
+describe('the coverage fix needs a take above the quiet-take level', () => {
+  const missing = I.sliceNotes(PH_A, 0, 6);
+
+  it('a take that skipped a note is told to sing the whole phrase', () => {
+    const r = scoreAttempt(ref, take(missing));
+    expect(r.diagnostics.quietTake).toBe(false);
+    expect(r.fixes.map((f) => f.id)).toContain('coverage');
+  }, 60_000);
+
+  it('the same take, flagged as very quiet, is not: the notes may simply not have been heard', () => {
+    const quiet = { ...take(missing), issues: ['too-quiet' as const] };
+    const r = scoreAttempt(ref, quiet);
+    expect(r.diagnostics.quietTake).toBe(true);
+    expect(r.fixes.map((f) => f.id)).not.toContain('coverage');
+    expect(r.diagnostics['fix.coverage']).toBeUndefined();
+    expect(r.trust.reasons.join(' ')).toMatch(/very quiet/);
+  }, 60_000);
 });

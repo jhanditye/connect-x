@@ -15,7 +15,7 @@ import {
   QuotaError,
   StoreUnavailableError,
 } from '../../src/storage/clips.ts';
-import { CLIP_STORE_CASES, runClipStoreContract } from '../../src/storage/clipStoreContract.ts';
+import { attempt, CLIP_STORE_CASES, runClipStoreContract } from '../../src/storage/clipStoreContract.ts';
 
 const SR = 44100;
 const lines = [];
@@ -347,7 +347,8 @@ window.persistWrite = async () => {
   const pcm = new Int16Array(25 * SR).map((_, i) => (i % 1000) - 500);
   await s.putClip({ id: 'kept', addedAt: '2026-10-08T00:00:00Z', title: 'Kept across a reload', phrases: [] });
   const info = await s.writeAudio('kept', 'mix', pcm, SR);
-  await s.addAttempt({ id: 'a1', clipId: 'kept', phraseId: 'p1', at: 10, hasAudio: false }, { pcm: pcm.slice(0, 500), sampleRate: SR });
+  // Stores read attempts back through parseAttemptRecord, so the fixture must be a complete record.
+  await s.addAttempt(attempt('a1', 'p1', 10, 'kept'), { pcm: pcm.slice(0, 500), sampleRate: SR });
   await s.setMeta('calibration', { wired: 91 });
   s.close();
   return info;

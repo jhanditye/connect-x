@@ -6,6 +6,7 @@ import { createPracticeEngine } from './practiceEngine';
 import type { PreparedPlayback } from '../audio/player';
 import { FakeBufferSource } from '../testing/fakeAudio';
 import { META } from '../storage/clips';
+import { isBusy } from '../pwa/register';
 import type { AttemptRecord, PhraseRecord, VoiceAnalysis } from '../types';
 import type { PracticeSnapshot } from './engine';
 import { COPY } from './practiceSession';
@@ -331,6 +332,21 @@ describe('gating: what is not counted', () => {
     expect(r.notice).toBe(COPY.nothingHeard);
     expect(r.fixes).toEqual([]);
     expect(x.session.recordAttempt).not.toHaveBeenCalled();
+    expect(await x.attempts()).toEqual([]);
+  });
+
+  it('singing along in another key says so, in the scorer\'s words: move the guide to your key or choose Listen then sing', async () => {
+    const x = await open();
+    expect(x.snap().options.mode).toBe('sing-along');
+    const r = (await x.take({ notes: person(), key: -5 })).result!;
+    expect(r.comparison.score.status).toBe('no-match');
+    expect(r.comparison.score.diagnostics.noMatchWhy).toBe('locked-key');
+    expect(r.saved).toBe(false);
+    expect(r.notice).toMatch(/5 semitones below the original key/);
+    expect(r.notice).toMatch(/Move the guide to your key/);
+    expect(r.notice).toMatch(/Listen then sing/);
+    expect(r.notice).not.toBe(COPY.noMatch);
+    expect(r.notice).not.toMatch(/microphone|reference/);
     expect(await x.attempts()).toEqual([]);
   });
 
@@ -742,6 +758,45 @@ describe('interruptions', () => {
     expect(s.state).toBe('interrupted');
     expect(s.message).toBe(COPY.gap);
     expect(await x.attempts()).toEqual([]);
+  });
+});
+
+describe('an app update waits for a take', () => {
+  it('the page is busy from the count-in until the result is shown, then free; listening alone does not hold an update back', async () => {
+    const x = await quick();
+    expect(isBusy()).toBe(false);
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'countin', 5);
+    expect(isBusy()).toBe(true);
+    await x.until(() => x.snap().state === 'singing', 10);
+    expect(isBusy()).toBe(true);
+    await x.drive(p);
+    expect(x.snap().state).toBe('result');
+    expect(isBusy()).toBe(false);
+    const l = x.engine.listen();
+    await x.until(() => x.snap().state === 'listening', 5);
+    expect(isBusy()).toBe(false);
+    x.engine.stop();
+    await x.drive(l);
+  });
+
+  it('is free again after a cancel, while the take is being analysed and cancelled, and when the screen closes in the middle of a take', async () => {
+    const x = await quick();
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'singing', 10);
+    expect(isBusy()).toBe(true);
+    x.engine.stop();
+    expect(isBusy()).toBe(false);
+    await x.drive(p);
+    const q = x.engine.sing();
+    await x.until(() => x.snap().state === 'countin', 5);
+    expect(isBusy()).toBe(true);
+    x.engine.dispose();
+    expect(isBusy()).toBe(false);
+    await x.drive(q).catch(() => undefined);
+    expect(isBusy()).toBe(false);
   });
 });
 

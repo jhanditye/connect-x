@@ -8,6 +8,7 @@ import type { InterruptReason, RouteInfo, TakeResult } from '../audio/duplex';
 import { RecorderError } from '../audio/recorder';
 import type { Flavour } from '../coach/coach';
 import type { AttemptNoteSummary, AttemptRecord, KeyMode, PhraseComparison, PlayMode, StyleVector } from '../types';
+import { wrongNoteCount } from './compare';
 import { inOriginalTerms, type TrainerFix } from './feedback';
 import type { ClickProbe } from './latency';
 import { TRAINER_ANALYSIS_VERSION } from './phraseAnalysis';
@@ -79,14 +80,18 @@ export function medianOfRecent(values: (number | null)[]): number | null {
 
 const semis = (n: number): string => (n === 0 ? 'the original key' : `${Math.abs(n)} semitone${Math.abs(n) === 1 ? '' : 's'} ${n < 0 ? 'below' : 'above'} the original`);
 
+/** What to do when the microphone barely heard the singer. Never "louder": the fix is the distance and a normal comfortable volume. */
+export const MIC_ADVICE = 'Hold the phone about a hand-span from your mouth, sing at your normal comfortable volume, and sing the whole phrase.';
+
 export const COPY = {
-  noMatch: 'That take did not match this phrase closely enough to score, so it was not counted. Check you are singing the phrase shown, get a little closer to the microphone, and try again.',
+  noMatch: 'That take did not match this phrase closely enough to score, so it was not counted. Check you are singing the phrase shown, hold the phone about a hand-span from your mouth, and try again.',
   referenceTooShort: 'This phrase has too little singing in it to score against (it needs at least two notes and a second of voice), so the take was not counted. Edit the clip\'s phrases to take in more of the singing, or pick another phrase.',
-  lowEvidence: 'There was not enough clear singing in that take to score it, so it was not counted. Sing the whole phrase a little louder and try again.',
-  nothingHeard: 'I could not hear any singing in that take, so it was not scored. Check the microphone is not covered, sing a little louder or closer, and try again.',
+  lowEvidence: `There was not enough clear singing in that take to score it, so it was not counted. ${MIC_ADVICE} Then try again.`,
+  nothingHeard: `I could not hear any singing in that take, so it was not scored. Check the microphone is not covered. ${MIC_ADVICE} Then try again.`,
   bleedSuspect: 'This take sounded like the playback, not like you, so it was not counted. Wear headphones, or switch to Listen then sing, and try again.',
   speakerBleed: 'The track was audible in your microphone, so this score could be measuring the playback instead of you. It was not counted. Use headphones, or switch to Listen then sing, and try again.',
   leakCaution: 'A little of the track leaks into your microphone, so the headphones may not be sealing. The score is probably fine; if it looks too good to be true, press them in or use Listen then sing.',
+  roughGuide: 'Part of what this score was compared with is probably the band, not the voice, so it is a rough guide and was not counted. A vocal-only file gives a real score.',
   gap: 'The recording had a gap in it (the phone was busy), so this take was not scored. Close other apps that use sound or the microphone, then tap Sing again.',
   empty: 'Nothing was recorded, so this take was not scored. Tap Sing to try again; if it keeps happening, check the microphone in Settings.',
   noSpeaker: 'Sing along needs headphones and none were detected, so Mimic switched to Listen then sing. Tap Sing to go on, or choose Sing along again to try it anyway.',
@@ -173,9 +178,9 @@ export function keyLooksUnclear(c: Pick<PhraseComparison, 'transposeSemitones' |
   return keyHint !== null && mod12(c.transposeSemitones - keyHint) !== 0 && c.coverage < 0.7;
 }
 
-/** The reference notes the singer sang as a different note (mastery needs none). */
-export function wrongNoteCount(c: Pick<PhraseComparison, 'notes'>): number {
-  return c.notes.filter((n) => n.flags.includes('wrong-note') || n.flags.includes('octave-displaced')).length;
+/** The take was compared with a rough full-song guide (or one the extractor doubts): its score is shown but never counted. */
+export function isRoughTake(c: Pick<PhraseComparison, 'score'>): boolean {
+  return c.score.diagnostics.roughGuide === true || c.score.diagnostics.refLowConfidence === true;
 }
 
 export interface Verdict {
@@ -207,7 +212,13 @@ export function judgeTake(p: {
   // The scorer's range hint (the pitch tracker cannot follow below about C2) is worth keeping next to the generic words.
   const floorHint = s.notes.find((n) => /below about C2/.test(n));
   const withHint = (text: string): string => (floorHint ? `${text} ${inOriginalTerms(floorHint)}` : text);
-  if (s.status === 'no-match') return { comparison: c, countable: false, notice: withHint(COPY.noMatch) };
+  // When the scorer knows why a take did not match (another key while singing along, notes far off, a rough full-song guide), its own
+  // words are the notice: the generic microphone advice would send the singer the wrong way.
+  if (s.status === 'no-match') {
+    const why = s.diagnostics.noMatchWhy;
+    const said = why ? s.notes[0] : undefined;
+    return { comparison: c, countable: false, notice: withHint(said ? inOriginalTerms(said) : COPY.noMatch) };
+  }
   if (s.status === 'low-evidence') {
     if (p.referenceUsable === false) return { comparison: c, countable: false, notice: COPY.referenceTooShort };
     return { comparison: c, countable: false, notice: p.voicedSec < 0.5 ? COPY.nothingHeard : withHint(COPY.lowEvidence) };
@@ -218,6 +229,13 @@ export function judgeTake(p: {
   const leaking = p.mode === 'sing-along' && !!p.probe && p.probe.bleed && p.probe.consistent;
   if (leaking && !p.headphonesLikely) {
     return { comparison: withTrust(c, 'invalid', COPY.speakerBleed), countable: false, notice: COPY.speakerBleed };
+  }
+  // A take against a rough full-song guide (or a melody the extractor itself doubts) is shown, never counted: part of what it was
+  // compared with is the band, so a high score would be an accident of the reference.
+  if (isRoughTake(c)) {
+    const reason = s.trust.reasons.find((r) => /rough guide/i.test(r)) ?? COPY.roughGuide;
+    const notice = inOriginalTerms(reason);
+    return { comparison: leaking ? withTrust(c, 'caution', COPY.leakCaution) : c, countable: false, notice };
   }
   if (leaking) return { comparison: withTrust(c, 'caution', COPY.leakCaution), countable: true, notice: COPY.leakCaution };
   if (keyLooksUnclear(c, p.keyHint)) return { comparison: c, countable: true, notice: COPY.unclearKey(p.keyHint as number, c.transposeSemitones) };

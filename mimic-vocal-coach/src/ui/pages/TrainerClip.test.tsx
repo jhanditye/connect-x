@@ -116,6 +116,12 @@ describe('Clip detail: a full song read by the lead-vocal extractor', () => {
     expect(screen.text()).toMatch(/Edit the phrases if the melody missed part of a line/);
   });
 
+  it('a rough guide is worded by its purity too, not by the confidence alone', () => {
+    clipPage({ kind: 'mix', analysisKind: 'mix-melody', analysis: { ...makeFakeClip().analysis, leadConfidence: 0.92, leadPurity: 0.6 } });
+    expect(screen.text()).toMatch(/followed the singing as hard to follow in places/);
+    expect(screen.text()).toMatch(/third or more of what was followed is probably the band/);
+  });
+
   it('says nothing about it for a clip stored before the rating existed, or one with a vocal-only file', () => {
     clipPage({ kind: 'mix', analysisKind: 'mix-melody' });
     expect(screen.text()).not.toMatch(/out of 1/);

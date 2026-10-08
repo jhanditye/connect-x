@@ -542,6 +542,15 @@ describe('ClipReview: the lead-vocal confidence of a full song', () => {
     }
   });
 
+  it('a rough guide (confidence high, a third or more of the line is the band) reads "hard to follow in places" and says what that means', () => {
+    const p = mixWithConfidence(0.92);
+    Object.assign((p.analysis as VoiceAnalysis & { leadExtraction: Record<string, unknown> }).leadExtraction, { noteTrust: Array(p.analysis.notes.length).fill(0.6), trustedNotes: p.analysis.notes.length * 0.6, purity: 0.6, roughGuide: true });
+    mount({}, p);
+    expect($('.rev-lead').getAttribute('data-band')).toBe('low');
+    expect($('.rev-lead').textContent).toMatch(/hard to follow in places/);
+    expect($('.rev-lead').textContent).toMatch(/third or more of what was followed is probably the band/);
+  });
+
   it('is not shown for a solo clip, or once a vocal-only file stands in for the song', () => {
     mount();
     expect(container.querySelector('.rev-lead')).toBeNull();

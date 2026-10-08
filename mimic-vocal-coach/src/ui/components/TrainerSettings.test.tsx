@@ -127,7 +127,7 @@ describe('Settings: Trainer backup', () => {
     await pick(new File(['{}'], 'a.json'));
     expect(screen.text()).toMatch(/holds nothing new, so nothing changed/);
     ctl.importLibrary = async () => {
-      throw new Error('That is not a Mimic backup. Choose the .json file made with "Export library".');
+      throw new Error('That is not a Mimic backup. Choose the .json file made with "Export my library".');
     };
     await pick(new File(['nope'], 'b.json'));
     expect(screen.q('.notice--error').textContent).toMatch(/not a Mimic backup/);

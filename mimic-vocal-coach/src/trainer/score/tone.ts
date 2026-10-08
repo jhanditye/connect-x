@@ -155,6 +155,9 @@ export function scoreTone(ctx: Ctx, T: number): SkillResult {
   const raspD = diffs.find((d) => d.key === 'rasp');
   const raspDiffers = !!raspD && Math.abs(raspD.corrected) > raspD.dead;
   const refRough = (ctx.ref.a.style.rasp ?? 0) > REF_ROUGH;
+  // When the rasp fix is given, the same roughness is not also reported as "airier": the breathiness finding becomes an info line.
+  const raspComp = comps.find((x) => x.id === 'tone.rasp');
+  const raspFixGiven = raspDiffers && (raspD?.corrected ?? 0) > 0 && raspComp !== undefined && raspComp.score !== null && raspComp.score < 75;
   for (const d of diffs) {
     const c = comps.find((x) => x.id === `tone.${d.key}`) as ScoreComponent;
     if ((c.score as number) >= 75) continue;
@@ -169,12 +172,19 @@ export function scoreTone(ctx: Ctx, T: number): SkillResult {
         });
         continue;
       }
-      const raspLoss = raspD && raspDiffers && raspD.corrected > 0 ? loss('tone.rasp') : Infinity;
+      if (more && raspFixGiven) {
+        insights.push({
+          id: 'tone.breathiness', skill: 'tone', kind: 'info', title: 'Roughness, not air',
+          text: `Some of what the tone measure reads as air in your sound is probably the roughness mentioned above, so there is no separate advice about air.${TONE_ESTIMATE}`,
+          advice: '', lossSkill: 0, notes: [],
+        });
+        continue;
+      }
       insights.push({
         id: 'tone.breathiness', skill: 'tone', kind: 'fix', title: more ? 'Airier than the reference' : 'Firmer than the reference',
         text: `Your tone is ${size} ${more ? 'airier' : 'firmer and cleaner'} than the reference.${TONE_ESTIMATE}`,
         advice: more ? 'Close the sound up a little: say "nay" or "gee" on the melody at a comfortable volume, then relax it into the vowel. Do not push; it should feel easy.' : 'Let a little more air into the tone, like a sung sigh on the vowel, staying light and relaxed.',
-        lossSkill: Math.min(loss(c.id), raspLoss * 0.9), notes: [],
+        lossSkill: loss(c.id), notes: [],
       });
     } else if (d.key === 'brightness') {
       insights.push({

@@ -708,6 +708,43 @@ describe('ImportSheet: announcing progress', () => {
   });
 });
 
+describe('ImportSheet: the browser-tab note', () => {
+  const SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
+  const original = {
+    userAgent: Object.getOwnPropertyDescriptor(window.navigator, 'userAgent'),
+    platform: Object.getOwnPropertyDescriptor(window.navigator, 'platform'),
+  };
+  const asIphone = (on: boolean) => {
+    Object.defineProperty(window.navigator, 'userAgent', { configurable: true, value: on ? SAFARI : 'Mozilla/5.0 (X11; Linux x86_64) Chrome/140' });
+    Object.defineProperty(window.navigator, 'platform', { configurable: true, value: on ? 'iPhone' : 'Linux x86_64' });
+  };
+  afterEach(() => {
+    for (const k of ['userAgent', 'platform'] as const) {
+      const d = original[k];
+      if (d) Object.defineProperty(window.navigator, k, d);
+      else delete (window.navigator as unknown as Record<string, unknown>)[k];
+    }
+  });
+
+  it('on an iPhone in a browser tab, says before the first save that the clips will not be in the Home Screen app', async () => {
+    asIphone(true);
+    const { ctl } = controllerReading({ 'a.wav': fakePrepared({ name: 'a.wav' }) });
+    mount(ctl);
+    expect($('[data-testid="browser-tab-note"]').textContent).toMatch(/will not appear in the Home Screen app/);
+    await choose(audioFile('a.wav'));
+    expect($('[data-testid="browser-tab-note"]')).toBeTruthy(); // still there while reviewing, before Save
+    await tickAndSave();
+    expect(text()).toMatch(/Added 1 clip/);
+    expect(sheet().querySelector('[data-testid="browser-tab-note"]')).toBeNull();
+  });
+
+  it('is not shown anywhere else', () => {
+    asIphone(false);
+    mount(makeFakeTrainerController({ clips: [] }));
+    expect(sheet().querySelector('[data-testid="browser-tab-note"]')).toBeNull();
+  });
+});
+
 describe('ImportSheet: focus when it closes', () => {
   it('returns to the control that opened it, and to the page heading when that control is gone', () => {
     const opener = document.createElement('button');
@@ -730,5 +767,18 @@ describe('ImportSheet: focus when it closes', () => {
     expect(document.activeElement).toBe(h1);
     expect(document.activeElement).not.toBe(document.body);
     h1.remove();
+  });
+
+  it('with no heading on the page, the focus lands on the main area, never on the body', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    const main = document.createElement('main');
+    document.body.appendChild(main);
+    opener.focus();
+    mount(makeFakeTrainerController({ clips: [] }));
+    opener.remove();
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(main);
+    main.remove();
   });
 });

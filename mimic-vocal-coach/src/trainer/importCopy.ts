@@ -123,8 +123,10 @@ export function mixAutoFailedWarning(why: string | null): string {
 export const BAND_WARNING =
   'This clip sounds like it has instruments in it. If the detected melody does not follow the singing, switch on "This is a full song".';
 
-export const NOISY_WARNING =
-  'There is a lot of background noise in this clip, so the notes may be harder to follow. If there is music behind the voice, switch on "This is a full song".';
+export const NOISY_WARNING = 'There is a lot of background noise in this clip, so the notes may be harder to follow.';
+
+/** A voice well above the band (+6 dB and more) reads as a clean solo with background noise: the extra notes in the guide would be the band's. */
+export const VOCAL_FORWARD_HINT = 'If there are instruments with the voice, switch on "This is a full song".';
 export const CLIPPING_WARNING = 'The recording is distorted (clipping), which can confuse the pitch tracking.';
 export const QUIET_WARNING = 'This clip is very quiet, so quiet notes may be missed.';
 

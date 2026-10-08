@@ -13,9 +13,10 @@ import {
   makeFakePracticeResult,
   type ComparisonScenario,
 } from '../../testing/trainerFixtures';
+import { wrongNoteCount } from '../../trainer/compare';
 import type { PracticeResult } from '../../trainer/engine';
 import type { AttemptRecord, VoiceAnalysis } from '../../types';
-import { isScored, leadWords, ResultSheet, resultAnnouncement, shownScore, wrongNoteCount, type ResultSheetProps } from './ResultSheet';
+import { isScored, leadWords, ResultSheet, resultAnnouncement, shownScore, isRoughGuide, type ResultSheetProps } from './ResultSheet';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -72,7 +73,9 @@ describe('ResultSheet: a scored take', () => {
     sheet();
     expect(container.querySelector('h2')?.textContent).toBe('How close you got');
     expect(container.querySelector('.dial-number')?.textContent).toBe('91');
-    expect(text()).toMatch(/Very close\./);
+    // pitch 84 with tone and expression near the top: 91 reads "Close", not "Very close" (scoreBand with the pitch score)
+    expect(text()).toMatch(/Close\./);
+    expect(text()).not.toMatch(/Very close\./);
     expect(text()).toMatch(/Two notes sat about 40 cents under the original/);
     expect(text()).toContain('Original C4, your key C3 (an octave lower)');
     expect(text()).toMatch(/Sync offset 160 ms: your headphones plus your reaction\. Not counted against you\./);
@@ -232,8 +235,8 @@ describe('ResultSheet: a scored take', () => {
     expect(container.querySelector('.rs-sentence strong')?.textContent).toBe('Close, with one wrong note.');
     expect(text()).toMatch(/On D4 you sang E4/);
     expect(resultAnnouncement(result('wrong-note'), reference)).toMatch(/^Score 95 out of 100\. Close, with one wrong note\./);
-    expect(wrongNoteCount(result('wrong-note'))).toBe(1);
-    expect(wrongNoteCount(result('flat'))).toBe(0);
+    expect(wrongNoteCount(result('wrong-note').comparison)).toBe(1);
+    expect(wrongNoteCount(result('flat').comparison)).toBe(0);
   });
 
   it('words a score by its band, and by the wrong notes only when the band would be the top one', () => {
@@ -308,11 +311,72 @@ describe('ResultSheet: a take that cannot be scored', () => {
     expect(Array.from(container.querySelectorAll('.notice')).every((n) => n.getAttribute('role') === null)).toBe(true);
   });
 
+  it('a take against a rough guide says "Rough guide" where the band word would be, and never reads excellent on a weak pitch', () => {
+    const r = result('perfect');
+    r.comparison.score.diagnostics = { ...r.comparison.score.diagnostics, roughGuide: true };
+    expect(isRoughGuide(r)).toBe(true);
+    sheet({ result: r, onNext: vi.fn() });
+    expect(container.querySelector('.rs-sentence strong')?.textContent).toBe('Rough guide.');
+    expect(resultAnnouncement(r, reference)).toMatch(/Rough guide\./);
+    expect(resultAnnouncement(r, reference)).not.toMatch(/Very close/);
+    // and it neither counts toward mastery nor offers the next phrase on the strength of the number
+    expect(text()).toMatch(/does not count toward mastery/);
+    expect(text()).not.toMatch(/Counts toward mastery|good tries/);
+    expect(Array.from(container.querySelectorAll('button')).some((b) => /Next phrase/.test(b.textContent ?? ''))).toBe(false);
+    sheet({ result: result('perfect'), onNext: vi.fn() });
+    expect(Array.from(container.querySelectorAll('button')).some((b) => /Next phrase/.test(b.textContent ?? ''))).toBe(true); // a clean reference still offers it
+    const low = result('perfect');
+    low.comparison.score.diagnostics = { ...low.comparison.score.diagnostics, refLowConfidence: true };
+    expect(isRoughGuide(low)).toBe(true);
+    expect(isRoughGuide(result('perfect'))).toBe(false);
+  });
+
+  it('against a rough guide, an unsung note is "not counted" rather than "missed", but real mistakes still show', () => {
+    const allChips = () => Array.from(container.querySelectorAll('.rs-notechip')).map((e) => e.textContent ?? '');
+    const flaggedChips = () => Array.from(container.querySelectorAll('.rs-notechip--flag')).map((e) => e.textContent ?? '');
+    const flagFirstTwo = (r: ReturnType<typeof result>) => {
+      r.comparison.notes = r.comparison.notes.map((n, i) => (i === 0 ? { ...n, flags: ['missed'] } : i === 1 ? { ...n, flags: ['flat'] } : { ...n, flags: ['ok'] }));
+      return r;
+    };
+    const rough = flagFirstTwo(result('perfect'));
+    rough.comparison.score.diagnostics = { ...rough.comparison.score.diagnostics, roughGuide: true };
+    sheet({ result: rough, defaultDetent: 2 });
+    expect(allChips()[0]).toMatch(/not counted/);
+    expect(allChips().join(' | ')).not.toMatch(/missed/);
+    expect(flaggedChips()).toHaveLength(1);
+    expect(flaggedChips()[0]).toMatch(/flat/);
+    expect(container.querySelector('.rs-notechip')?.getAttribute('aria-label')).toMatch(/not counted against a rough guide/);
+    // with a clean reference the same unsung note is called missed
+    sheet({ result: flagFirstTwo(result('perfect')), defaultDetent: 2 });
+    expect(allChips()[0]).toMatch(/missed/);
+    expect(flaggedChips()).toHaveLength(2);
+  });
+
+  it('a weak pitch cannot read "Very close" on the strength of tone and expression', () => {
+    const r = result('perfect');
+    r.comparison.scores = { ...r.comparison.scores, overall: 91, pitch: 70 };
+    r.comparison.score.overall = 91;
+    expect(resultAnnouncement(r, reference)).not.toMatch(/Very close/);
+    expect(resultAnnouncement(r, reference)).toMatch(/Close\./);
+    r.comparison.scores = { ...r.comparison.scores, overall: 96, pitch: 96 };
+    r.comparison.score.overall = 96;
+    expect(resultAnnouncement(r, reference)).toMatch(/Very close\./);
+  });
+
+  it('does not repeat the not-counted reason as a second warning', () => {
+    const r = result('perfect');
+    const reason = 'The score is a rough guide only.';
+    r.comparison.score.trust = { level: 'caution', reasons: [reason] };
+    r.notice = reason;
+    sheet({ result: r });
+    expect(text().split(reason).length - 1).toBe(1);
+  });
+
   it('too little singing is not a score of zero', () => {
     const r = result('flat');
     r.comparison.score.status = 'low-evidence';
     r.comparison.score.overall = null;
-    r.comparison.score.notes = ['I could hardly hear you. Move closer to the microphone, then try again.'];
+    r.comparison.score.notes = ['I could hardly hear you. Hold the phone about a hand-span from your mouth, then try again.'];
     sheet({ result: r });
     expect(isScored(r)).toBe(false);
     expect(container.querySelector('.dial-number')).toBeNull();
@@ -330,7 +394,7 @@ describe('ResultSheet helpers', () => {
   });
 
   it('announces the score and the first fix for a screen reader, or why there is none', () => {
-    expect(resultAnnouncement(result('flat'), reference)).toBe('Score 91 out of 100. Very close. First thing to fix: Lift the flat notes.');
+    expect(resultAnnouncement(result('flat'), reference)).toBe('Score 91 out of 100. Close. First thing to fix: Lift the flat notes.');
     expect(resultAnnouncement(result('perfect'), reference)).toMatch(/Nothing stood out to fix/);
     expect(resultAnnouncement(result('no-match'), reference)).toMatch(/^Not scored\./);
   });

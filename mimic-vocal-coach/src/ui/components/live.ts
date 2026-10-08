@@ -30,7 +30,7 @@ export function levelState(rmsDb: number, peak: number): LevelState {
 
 export const LEVEL_TEXT: Record<LevelState, string> = {
   silent: 'Waiting for sound',
-  quiet: 'Quiet: move closer or sing out a little',
+  quiet: 'Quiet: hold the phone a hand-span from your mouth',
   good: 'Good level',
   hot: 'Too loud: move the phone back',
 };

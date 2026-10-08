@@ -129,6 +129,23 @@ describe('different phrase / nothing to score', () => {
     const scr = clone(PH_A).map((n, i, a) => ({ ...n, midi: a[(i * 5 + 3) % a.length].midi, vibrato: null }));
     expect(run({ notes: scr }).status).toBe('no-match');
   });
+  it('tunes of the same length that go the other way, climb, fall, zigzag or stay flat are no-match', () => {
+    // The scorer is lenient on purpose (a very poor copy of the right tune scores about the same as a tune that only happens to stay in the
+    // same range), so only tunes with a clearly different shape are required to be rejected. 60 random 8-note tunes in the same range: 45 were.
+    const p1: I.PNote[] = [[55, 0.9], [59, 0.8], [62, 1.0], [64, 0.8], [62, 0.7], [59, 0.9], [60, 0.8], [55, 1.4]].map(([midi, durSec]) => ({ midi, durSec }));
+    const r1 = refAnalysis(p1);
+    const tunes: Record<string, I.PNote[]> = {
+      inverted: p1.map((x) => ({ midi: 119 - x.midi, durSec: x.durSec })),
+      climb: p1.map((x, i) => ({ midi: 52 + i * 2, durSec: x.durSec })),
+      fall: p1.map((x, i) => ({ midi: 68 - i * 2, durSec: x.durSec })),
+      zigzag: p1.map((x, i) => ({ midi: i % 2 ? 66 : 54, durSec: x.durSec })),
+      flat: p1.map((x) => ({ midi: 58, durSec: x.durSec })),
+    };
+    for (const [name, notes] of Object.entries(tunes)) {
+      const r = scoreAttempt(r1, attemptAnalysis({ notes, seed: 80, lead: 1.5 }));
+      expect(r.status, name).toBe('no-match');
+    }
+  }, 60_000);
   it('silence and a too-short take are low-evidence, never a number', () => {
     const silent = analyzeTake(roomNoise(new Float32Array(SR * 4), 0.001, 2), SR, { voiceType: 'tenor' });
     const r = scoreAttempt(ref, silent);
@@ -240,7 +257,7 @@ describe('what to fix first', () => {
   it('the findings are plain English and mention the key change and the wrong note', () => {
     const r = run({ key: -4, notes: I.wrongNote(PH_A, 7, -3) });
     expect(r.notes.join(' ')).toMatch(/4 semitones lower.*not marked down/);
-    expect(r.notes.join(' ')).toMatch(/note 8/);
+    expect(r.notes.join(' ')).toMatch(/note 8/i);
     // the opening sentence is a verdict, not the first fix's own words and not the key line
     expect(r.notes[0]).toMatch(/\d+ of \d+ notes were more than 25 cents/);
     expect(r.notes.slice(1)).not.toContain(r.notes[0]);

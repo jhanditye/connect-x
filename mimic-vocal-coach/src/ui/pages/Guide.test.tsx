@@ -115,6 +115,8 @@ describe('GuidePage', () => {
   it('is honest about what the Trainer scores and what it cannot hear', () => {
     const text = container.querySelector('#guide-trainer-scores')?.textContent ?? '';
     expect(text).toMatch(/pitch.*40 percent.*timing.*25.*tone.*20.*expression.*15/s);
+    expect(text).toMatch(/in Listen then sing any key is fine; while singing along only octaves count/);
+    expect(text).not.toMatch(/any key or octave is fine/);
     expect(text).toMatch(/closeness, not quality/);
     expect(text).toMatch(/not on ratings by people/);
     expect(text).toMatch(/words and diction/);

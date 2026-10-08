@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS } from '../storage/settings';
 import { sine } from '../testing/synth';
 import { makeFakePreparedClip } from '../testing/trainerFixtures';
 import type { AnalysisOptions, AppSettings, ClipRecord, VoiceAnalysis } from '../types';
-import { MIX_REASON, SPEECH_REASON } from './importCopy';
+import { BAND_WARNING, MIX_REASON, NOISY_WARNING, SPEECH_REASON } from './importCopy';
 import {
   analysisFromSpans,
   fakeAudioBuffer,
@@ -298,6 +298,34 @@ describe('prepareClip: a melody over a band', () => {
     const easy = analysisFromSpans([{ start: 1, end: 12 }], 14, { mode: 'mix', issues: ['accompaniment'] });
     (easy as VoiceAnalysis & { leadExtraction: { confidence: number; sideToMidDb: null } }).leadExtraction = { confidence: 0.9, sideToMidDb: null };
     expect(buildView('mix', easy).warnings).toEqual([MIX_REASON]);
+  });
+
+  it('a rough guide (confidence fine, a third or more of the line is the band) is never worded better than "hard to follow", in the badge and the warnings', () => {
+    const rough = analysisFromSpans([{ start: 1, end: 12 }], 14, { mode: 'mix', issues: ['accompaniment'] });
+    const n = rough.notes.length;
+    (rough as VoiceAnalysis & { leadExtraction: Record<string, unknown> }).leadExtraction = { confidence: 0.92, sideToMidDb: null, noteTrust: Array(n).fill(0.6), trustedNotes: n * 0.6, purity: 0.6, roughGuide: true };
+    expect(leadConfidenceOf(rough)).toMatchObject({ band: 'low', roughGuide: true, purity: 0.6 });
+    const w = buildView('mix', rough).warnings.join(' ');
+    expect(w).toMatch(/third or more/);
+    expect(w).toMatch(/60%/);
+    // the same confidence without a purity reading stays "high"
+    const plain = analysisFromSpans([{ start: 1, end: 12 }], 14, { mode: 'mix', issues: ['accompaniment'] });
+    (plain as VoiceAnalysis & { leadExtraction: { confidence: number; sideToMidDb: null } }).leadExtraction = { confidence: 0.92, sideToMidDb: null };
+    expect(leadConfidenceOf(plain)).toMatchObject({ band: 'high', roughGuide: false });
+    expect(buildView('mix', plain).warnings).toEqual([MIX_REASON]);
+  });
+
+  it('a vocal-forward song read as a noisy solo is told to switch on "This is a full song"; a clean solo, a mix and a band-flagged solo are not given the hint twice', () => {
+    const noisy = analysisFromSpans([{ start: 1, end: 12 }], 14, { issues: ['noisy'] });
+    const solo = buildView('solo', noisy);
+    expect(solo.warnings.join(' ')).toContain(NOISY_WARNING);
+    expect(solo.warnings.join(' ')).toContain('If there are instruments with the voice, switch on "This is a full song".');
+    expect(solo.warnings.join(' ').split('This is a full song').length - 1).toBe(1);
+    expect(buildView('solo', analysisFromSpans([{ start: 1, end: 12 }], 14, {})).warnings.join(' ')).not.toMatch(/instruments/);
+    const banded = analysisFromSpans([{ start: 1, end: 12 }], 14, { issues: ['noisy', 'accompaniment'] });
+    expect(buildView('solo', banded).warnings).toContain(BAND_WARNING);
+    expect(buildView('solo', banded).warnings.join(' ')).not.toContain('If there are instruments with the voice');
+    expect(buildView('mix', noisy).warnings.join(' ')).not.toContain('If there are instruments with the voice');
   });
 
   it('blocks a full song whose lead vocal is too short, with words for songs rather than for solo clips', () => {

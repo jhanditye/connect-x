@@ -7,7 +7,7 @@ import { MAX_ANALYSIS_SEC } from '../analysis/analyze';
 import { analyzeWithRouting } from '../analysis/auto';
 import { analyzeInWorker } from '../analysis/client';
 import { leadExtractionOf } from '../analysis/mixMode';
-import { mixConfidenceBand, mixReport, type MixConfidenceBand } from '../analysis/quality';
+import { mixReport, mixTrustBand, type MixConfidenceBand } from '../analysis/quality';
 import { decodeAudioFile, isVideoFile, type DecodedTake, type DecodeOptions } from '../audio/decode';
 import { chunkFramesFor, fingerprint as hashBytes, floatToInt16, MAX_STORE_RATE, sameSourceFile } from '../audio/pcm';
 import { ARTIST_VOICE_TYPE } from '../coach/measured';
@@ -34,6 +34,7 @@ import {
   NO_PHRASES_REASON,
   QUIET_WARNING,
   SPEECH_REASON,
+  VOCAL_FORWARD_HINT,
   littleMixSingingReason,
   littleSingingContext,
   littleSingingReason,
@@ -233,10 +234,16 @@ export function classifyClip(analysis: VoiceAnalysis): { kind: ClipKind | 'block
   return { kind: 'solo', reason: null };
 }
 
-/** How sure Mimic is that it followed the lead vocal of a full song (null for a solo reading). A ranking, not a percentage of right notes. */
-export function leadConfidenceOf(analysis: VoiceAnalysis): { confidence: number; band: MixConfidenceBand } | null {
+/**
+ * How sure Mimic is that it followed the lead vocal of a full song (null for a solo reading). A ranking, not a percentage of right notes.
+ * The band word also weighs `purity` (how much of the line is probably the voice, not the band): a steady bass line scores a high
+ * confidence, so a rough guide is never worded better than "hard to follow in places".
+ */
+export function leadConfidenceOf(analysis: VoiceAnalysis): { confidence: number; purity?: number; roughGuide: boolean; band: MixConfidenceBand } | null {
   const le = leadExtractionOf(analysis);
-  return le ? { confidence: le.confidence, band: mixConfidenceBand(le.confidence) } : null;
+  if (!le) return null;
+  const purity = le.purity;
+  return { confidence: le.confidence, ...(purity === undefined ? {} : { purity }), roughGuide: le.roughGuide === true, band: mixTrustBand({ confidence: le.confidence, purity }) };
 }
 
 /** A reading of the analysis as the given kind: the phrases found, warnings to show and blockers that stop the save. */
@@ -248,9 +255,14 @@ export function buildView(kind: ClipKind, analysis: VoiceAnalysis): AnalysisView
     warnings.unshift(MIX_REASON);
     // Below 0.8 the extractor itself says it was hard to follow: say so before the user trusts the phrases.
     const lead = leadConfidenceOf(analysis);
-    if (lead && analysis.mode === 'mix') warnings.splice(1, 0, ...mixReport({ confidence: lead.confidence, voicedSec: analysis.voicedSec }).warnings);
+    if (lead && analysis.mode === 'mix') warnings.splice(1, 0, ...mixReport({ confidence: lead.confidence, voicedSec: analysis.voicedSec, purity: lead.purity }).warnings);
   }
   if (kind === 'solo' && analysis.mode !== 'mix' && issues.includes('accompaniment')) warnings.unshift(BAND_WARNING);
+  else if (kind === 'solo' && issues.includes('noisy')) {
+    // A vocal-forward song (voice +6 dB or more over the band) reads as a solo with background noise; the instruments are the extra notes.
+    const at = warnings.indexOf(NOISY_WARNING);
+    if (at >= 0) warnings[at] = `${NOISY_WARNING} ${VOCAL_FORWARD_HINT}`;
+  }
   if (issues.includes('too-little-singing')) blockers.push(kind === 'mix' && analysis.mode === 'mix' ? littleMixSingingReason(analysis.voicedSec) : littleSingingReason(analysis.voicedSec, littleSingingContext(analysis)));
   else if (issues.includes('speech-like') && kind === 'solo') blockers.push(SPEECH_REASON);
   let phrases: SegPhrase[] = [];
@@ -504,6 +516,11 @@ function voicedSecIn(analysis: VoiceAnalysis, startSec: number, endSec: number):
   return n * hop;
 }
 
+function mixSummaryFields(analysis: VoiceAnalysis): Pick<ClipAnalysisSummary, 'leadConfidence' | 'leadPurity'> {
+  const le = leadExtractionOf(analysis);
+  return { leadConfidence: le?.confidence ?? null, ...(le?.purity === undefined ? {} : { leadPurity: le.purity }) };
+}
+
 function summaryOf(analysis: VoiceAnalysis, opts: AnalysisOptions, kind: ClipKind, trimmed: { startSec: number; endSec: number }): ClipAnalysisSummary {
   const usable = kind === 'mix' ? { usable: false, reason: NOT_FOR_TARGETS_MIX } : referenceUsability(analysis);
   const p = analysis.pitch;
@@ -518,7 +535,7 @@ function summaryOf(analysis: VoiceAnalysis, opts: AnalysisOptions, kind: ClipKin
     issues: [...(analysis.issues ?? [])],
     usableAsTarget: usable.usable,
     unusableReason: usable.usable ? null : usable.reason,
-    ...(analysis.mode === 'mix' ? { leadConfidence: leadExtractionOf(analysis)?.confidence ?? null } : {}),
+    ...(analysis.mode === 'mix' ? mixSummaryFields(analysis) : {}),
   };
 }
 

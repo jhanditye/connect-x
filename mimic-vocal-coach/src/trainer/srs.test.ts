@@ -204,7 +204,7 @@ describe('the practice queue', () => {
     expect(q.map((i) => i.phraseId)).toEqual(['due-3', 'due-1', 'stuck', 'learn-40', 'learn-70', 'new']);
     expect(q[0].reason).toBe('Review, 3 days overdue');
     expect(q[1].reason).toBe('Review, 1 day overdue');
-    expect(q[2].reason).toBe('Stuck: try it at 75 % speed');
+    expect(q[2].reason).toBe('Stuck: try it at 75% speed');
     expect(q[3].reason).toBe('Last 40, aim for 85');
     expect(q[5].reason).toBe('Not tried yet');
   });

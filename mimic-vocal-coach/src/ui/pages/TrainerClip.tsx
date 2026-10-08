@@ -3,7 +3,8 @@
 // history, new ones start fresh. Everything goes through the TrainerController.
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { mixConfidenceBand } from '../../analysis/quality';
+import { ROUGH_GUIDE_PURITY } from '../../analysis/leadTrust';
+import { mixTrustBand } from '../../analysis/quality';
 import { MAX_CLIPS_PER_SINGER } from '../../coach/measured';
 import { contributionBlocker } from '../../storage/library';
 import { goTrainer, trainerHash } from '../../state/routing';
@@ -378,8 +379,11 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
           <p>Mimic follows the lead vocal, so pitch and timing are scored; the tone of the voice is not compared because the band changes it.</p>
           {typeof clip.analysis.leadConfidence === 'number' && (
             <p className="field-hint">
-              When you added it, Mimic rated how well it followed the singing as <strong>{LEAD_WORDS[mixConfidenceBand(clip.analysis.leadConfidence)]}</strong> (
+              When you added it, Mimic rated how well it followed the singing as <strong>{LEAD_WORDS[mixTrustBand({ confidence: clip.analysis.leadConfidence, purity: clip.analysis.leadPurity })]}</strong> (
               {clip.analysis.leadConfidence.toFixed(2)} out of 1, a ranking rather than a measured accuracy).
+              {typeof clip.analysis.leadPurity === 'number' && clip.analysis.leadPurity < ROUGH_GUIDE_PURITY
+                ? ' About a third or more of what was followed is probably the band, so scores against it are a rough guide and do not count toward mastery.'
+                : ''}
               {clip.analysisKind === 'mix-melody' ? ' Edit the phrases if the melody missed part of a line.' : ''}
             </p>
           )}

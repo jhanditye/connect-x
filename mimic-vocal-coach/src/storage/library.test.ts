@@ -76,6 +76,18 @@ describe('export', () => {
   });
 });
 
+describe('parseClipRecord: full-song rating', () => {
+  it('keeps the lead confidence and purity, within 0..1, and drops them when absent', () => {
+    const c = clip();
+    c.analysis = { ...c.analysis, leadConfidence: 0.9, leadPurity: 0.62 };
+    expect(parseClipRecord(viaJson(c))?.analysis).toMatchObject({ leadConfidence: 0.9, leadPurity: 0.62 });
+    c.analysis = { ...c.analysis, leadPurity: 4 };
+    expect(parseClipRecord(viaJson(c))?.analysis.leadPurity).toBe(1);
+    delete c.analysis.leadPurity;
+    expect(parseClipRecord(viaJson(c))?.analysis).not.toHaveProperty('leadPurity');
+  });
+});
+
 describe('parseClipRecord', () => {
   it('reads back what a clip looked like when it was stored', () => {
     const c = clip();
@@ -475,6 +487,25 @@ describe('phrase state from attempts', () => {
     }
   });
 
+  it('a rebuild and the live path agree on takes that must not count (speaker bleed) and on a weak expression score', () => {
+    const p = blankPhrase(clipRec.phrases[0]);
+    const take = (n: number, over: Partial<AttemptRecord>): AttemptRecord => ({ ...all[0], id: `t${n}`, phraseId: p.id, at: FAKE_NOW + n * 60_000, rate: 1, coverage: 1, wrongNotes: 0, scores: { overall: 95, pitch: 96, timing: 95, tone: 95, expression: 95 }, trust: 'ok', ...over });
+    const bleed = [1, 2, 3].map((n) => take(n, { trust: 'invalid' }));
+    expect(rebuildPhraseState(p, bleed).srs.rung).toBe(0);
+    const flat = [1, 2, 3].map((n) => take(n, { scores: { overall: 95, pitch: 96, timing: 95, tone: 95, expression: 40 } }));
+    expect(rebuildPhraseState(p, flat).srs.rung).toBe(0);
+    const good = [1, 2, 3].map((n) => take(n, {}));
+    expect(rebuildPhraseState(p, good).srs.rung).toBeGreaterThan(0);
+    // the live path (one at a time) gives the same
+    for (const list of [bleed, flat, good]) {
+      let live = p;
+      list.forEach((a, i) => {
+        live = applyAttempt(live, list.slice(0, i), a);
+      });
+      expect(live.srs).toEqual(rebuildPhraseState(p, list).srs);
+    }
+  });
+
   it('masters a phrase after three good full-speed attempts and schedules the first review a day later', () => {
     const p = blankPhrase(clipRec.phrases[0]);
     const good = (n: number): AttemptRecord => ({ ...all[0], id: `g${n}`, phraseId: p.id, at: FAKE_NOW + n * 60_000, rate: 1, coverage: 1, wrongNotes: 0, scores: { overall: 92, pitch: 95, timing: 90, tone: 88, expression: 90 } });
@@ -518,7 +549,7 @@ describe('phrase state from attempts', () => {
   });
 
   it('reduces an attempt to what the review ladder needs', () => {
-    expect(attemptLite(all[0])).toEqual({ at: all[0].at, overall: all[0].scores.overall, pitch: all[0].scores.pitch, timing: all[0].scores.timing, tone: all[0].scores.tone, rate: all[0].rate, coverage: all[0].coverage, wrongNotes: all[0].wrongNotes });
+    expect(attemptLite(all[0])).toEqual({ at: all[0].at, overall: all[0].scores.overall, pitch: all[0].scores.pitch, timing: all[0].scores.timing, tone: all[0].scores.tone, expression: all[0].scores.expression, rate: all[0].rate, coverage: all[0].coverage, wrongNotes: all[0].wrongNotes, trust: all[0].trust });
   });
 
   it('fixture clip id is used for every attempt', () => {

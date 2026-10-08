@@ -20,6 +20,17 @@
 
 import { CHUNK_SEC, chunkFramesFor, chunkRanges, chunksFor, floatToInt16, sliceChunks } from '../audio/pcm';
 import type { AttemptRecord, ClipAudioInfo, ClipRecord } from '../types';
+import { parseAttemptRecord } from './library';
+
+/** The stored attempt rows that read as attempts (parseAttemptRecord); a damaged row is skipped, never shown or counted. */
+export function readableAttempts(rows: Iterable<unknown>): AttemptRecord[] {
+  const out: AttemptRecord[] = [];
+  for (const r of rows) {
+    const a = parseAttemptRecord(r);
+    if (a) out.push(a);
+  }
+  return out;
+}
 
 /**
  * Why the library could not be opened. 'transient': the browser threw one of its random errors (worth retrying at once);
@@ -636,15 +647,16 @@ export function openClipStore(options: OpenClipStoreOptions = {}): Promise<ClipS
         const range = f.phraseId !== undefined ? phraseRange(f.phraseId) : f.clipId !== undefined ? clipRange(f.clipId) : undefined;
         const out: AttemptRecord[] = [];
         const limit = typeof f.limit === 'number' && Number.isInteger(f.limit) && f.limit > 0 ? f.limit : Infinity;
-        if (!index) return cap(((await req(os.getAll())) as AttemptRecord[]).sort(newestFirst), f.limit);
+        // A stored row that fails validation (damaged, or written by something else) is skipped, never shown or counted.
+        if (!index) return cap(readableAttempts((await req(os.getAll())) as unknown[]).sort(newestFirst), f.limit);
         await new Promise<void>((resolve, reject) => {
           const cur = index.openCursor(range, 'prev'); // newest first
           cur.onerror = () => reject(cur.error);
           cur.onsuccess = () => {
             const c = cur.result;
             if (!c) return resolve();
-            const a = c.value as AttemptRecord;
-            if (matches(a, f)) out.push(a);
+            const a = parseAttemptRecord(c.value);
+            if (a && matches(a, f)) out.push(a);
             if (out.length >= limit) return resolve();
             c.continue();
           };
@@ -666,7 +678,8 @@ export function openClipStore(options: OpenClipStoreOptions = {}): Promise<ClipS
           cur.onsuccess = () => {
             const c = cur.result;
             if (!c) return resolve();
-            const a = c.value as AttemptRecord;
+            const a = parseAttemptRecord(c.value);
+            if (!a) return c.continue(); // a damaged row is skipped and does not count as one of the phrase's newest
             if (a.phraseId !== phrase) {
               phrase = a.phraseId;
               seen = 0;
@@ -942,14 +955,14 @@ export function createMemoryClipStore(options: MemoryStoreOptions = {}): ClipSto
       else recordings.delete(a.id);
     },
     async listAttempts(f) {
-      return cap([...attempts.values()].filter((a) => matches(a, f)).sort(newestFirst), f.limit).map(plainClone);
+      return cap(readableAttempts(attempts.values()).filter((a) => matches(a, f)).sort(newestFirst), f.limit).map(plainClone);
     },
     async listRecentAttempts(perPhrase) {
       const n = Math.floor(perPhrase);
       if (!(n >= 1)) return [];
       const seen = new Map<string, number>();
       const out: AttemptRecord[] = [];
-      for (const a of [...attempts.values()].sort(newestFirst)) {
+      for (const a of readableAttempts(attempts.values()).sort(newestFirst)) {
         const k = seen.get(a.phraseId) ?? 0;
         if (k < n) out.push(plainClone(a));
         seen.set(a.phraseId, k + 1);

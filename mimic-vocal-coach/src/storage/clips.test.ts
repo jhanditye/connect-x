@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { floatToInt16 } from '../audio/pcm';
 import type { AttemptRecord, ClipRecord } from '../types';
-import { CLIP_STORE_CASES, runClipStoreContract, type ContractEnv } from './clipStoreContract';
+import { attempt as validAttempt, CLIP_STORE_CASES, runClipStoreContract, type ContractEnv } from './clipStoreContract';
 import {
   AudioMissingError,
   createMemoryClipStore,
@@ -15,6 +15,7 @@ import {
   openClipStore,
   openClipStoreWithFallback,
   QuotaError,
+  readableAttempts,
   StoreUnavailableError,
   type ClipStore,
 } from './clips';
@@ -625,13 +626,28 @@ describe('error classification', () => {
   });
 });
 
+describe('stored attempt rows are read back through the validator', () => {
+  const good = validAttempt('good', 'p1', 5);
+
+  it('readableAttempts skips a damaged row instead of showing it or failing', () => {
+    const damaged = [null, 7, 'x', {}, { ...good, id: '' }, { ...good, at: 'yesterday' }, { ...good, scores: null }, { ...good, scores: { overall: 'high', pitch: 3 } }];
+    const rows = readableAttempts([...damaged, good, { ...good, id: 'good2', scores: { ...good.scores, overall: 140 } }]);
+    expect(rows.map((r) => r.id)).toEqual(['good', 'good2']);
+    expect(rows[1].scores.overall).toBe(100); // a number outside 0..100 is clamped, not trusted
+  });
+
+  it('a record that passes is read back unchanged', () => {
+    expect(readableAttempts([good])[0]).toEqual(good);
+  });
+});
+
 describe('a fully typed record', () => {
   it('lets AttemptRecord and ClipRecord pass through the memory store untouched', async () => {
     const s = createMemoryClipStore();
     const clip = { id: 'c1', addedAt: '2026-10-08T00:00:00Z', title: 'x', phrases: [{ id: 'p1' }] } as unknown as ClipRecord;
     await s.putClip(clip);
     expect(await s.getClip('c1')).toEqual(clip);
-    const a = { id: 'a1', clipId: 'c1', phraseId: 'p1', at: 5, hasAudio: false, scores: { overall: 80 } } as unknown as AttemptRecord;
+    const a: AttemptRecord = validAttempt('a1', 'p1', 5);
     await s.addAttempt(a);
     expect((await s.listAttempts({ clipId: 'c1' }))[0]).toEqual(a);
   });
@@ -649,8 +665,8 @@ describe('copyLibrary (moving a session\'s clips into the library that opened la
     const pcm = tone(frames);
     await from.putClip(clipWith('a', frames));
     await from.writeAudio('a', 'mix', pcm, SR);
-    await from.addAttempt({ id: 'at1', clipId: 'a', phraseId: 'p1', at: 1000 } as unknown as AttemptRecord, { pcm: tone(500), sampleRate: SR });
-    await from.addAttempt({ id: 'at2', clipId: 'a', phraseId: 'p1', at: 2000 } as unknown as AttemptRecord);
+    await from.addAttempt(validAttempt('at1', 'p1', 1000, 'a'), { pcm: tone(500), sampleRate: SR });
+    await from.addAttempt(validAttempt('at2', 'p1', 2000, 'a'));
     await from.setMeta('calibration', { wired: 80 });
     await from.setMeta('attemptsSinceExport', 3);
     await to.putClip(clipWith('already', SR));

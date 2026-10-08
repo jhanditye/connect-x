@@ -226,6 +226,7 @@ describe('Practice: listening and singing', () => {
     expect(engine.calls).not.toContain('stop');
     screen.unmount();
     const bare = await open();
+    Object.assign(bare.engine, { finish: undefined }); // an older engine without finish
     force(bare.engine, { state: 'singing', liveMidi: 57, level: 0.5 }, 2);
     act(() => (screen.q('.pc-sing') as HTMLButtonElement).click());
     expect(bare.engine.calls).toContain('stop');
@@ -270,8 +271,9 @@ describe('Practice: listening and singing', () => {
 
   it('no microphone line while a take runs, and none for an engine that cannot turn it off', async () => {
     const { engine } = await open();
+    Object.assign(engine, { releaseMicrophone: undefined }); // an engine that cannot turn it off
     force(engine, { micOpen: true });
-    expect(screen.text()).not.toMatch(/Microphone on/); // this engine has no releaseMicrophone
+    expect(screen.text()).not.toMatch(/Microphone on/);
     Object.assign(engine, { releaseMicrophone: vi.fn() });
     force(engine, { micOpen: true, state: 'countin', countIn: 3 });
     expect(screen.text()).not.toMatch(/Microphone on/);
@@ -292,7 +294,7 @@ describe('Practice: listening and singing', () => {
     expect(engine.calls).toContain('sing');
     expect(screen.q('.rs h2').textContent).toBe('How close you got');
     expect(screen.q('.dial-number').textContent).toBe('91');
-    expect(live()).toBe('Score 91 out of 100. Very close. First thing to fix: Lift the flat notes.');
+    expect(live()).toBe('Score 91 out of 100. Close. First thing to fix: Lift the flat notes.');
     await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
     expect(document.activeElement).toBe(screen.q('.rs h2'));
     expect(screen.q('.pc-sing').textContent).toMatch(/Try again/);

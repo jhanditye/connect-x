@@ -627,6 +627,7 @@ export class FakeTrainerEngine implements PracticeEngine {
   private snapshot: PracticeSnapshot;
   private listeners = new Set<() => void>();
   private takes = 0;
+  private epoch = 0;
   private positionSec = NaN;
   private readonly script: ComparisonScenario[];
   private readonly failSing?: FakeEngineOptions['failSing'];
@@ -646,6 +647,8 @@ export class FakeTrainerEngine implements PracticeEngine {
       level: 0,
       reference: opts.initialState === 'preparing' ? null : makeFakePhraseAnalysis(),
       result: null,
+      micOpen: false,
+      speakerConfirmed: false,
     };
   }
 
@@ -688,26 +691,42 @@ export class FakeTrainerEngine implements PracticeEngine {
     this.emit({ state: this.snapshot.result ? 'result' : 'idle' });
   }
 
-  async sing(): Promise<void> {
+  /** Moves on only while this take is still the current one: stop(), finish() and dispose() end it. */
+  private current(epoch: number): boolean {
+    return epoch === this.epoch && !this.closed();
+  }
+
+  /** The take's result, as the scripted scenario says. */
+  private showResult(): void {
+    const scenario = this.script[Math.min(this.takes, this.script.length - 1)];
+    this.takes++;
+    this.emit({ state: 'result', result: makeFakePracticeResult(scenario, this.clip, this.phrase, FAKE_NOW + this.takes * MINUTE) });
+  }
+
+  async sing(opts?: { speakerConfirmed?: boolean }): Promise<void> {
     this.calls.push('sing');
     if (this.closed()) return;
+    const epoch = ++this.epoch;
+    // "I have headphones on" in the screen's own question: remembered for this route, like the real engine.
+    const confirmed = !!opts?.speakerConfirmed && this.snapshot.options.mode === 'sing-along';
+    if (confirmed) this.calls.push('speakerConfirmed');
     const beats = this.snapshot.options.countInBeats;
     for (let b = beats; b >= 1; b--) {
-      this.emit({ state: 'countin', countIn: b, message: null, result: null });
+      this.emit({ state: 'countin', countIn: b, message: null, result: null, ...(b === beats ? { micOpen: true, ...(confirmed ? { speakerConfirmed: true } : {}) } : {}) });
       await Promise.resolve();
+      if (!this.current(epoch)) return;
     }
     this.emit({ state: 'singing', countIn: null, liveMidi: 55, level: 0.5 });
     await Promise.resolve();
-    if (this.closed()) return;
+    if (!this.current(epoch)) return; // stopped (cancelled) or finished (scored by finish()) meanwhile
     if (this.failSing) {
       this.emit({ state: this.failSing.state, message: this.failSing.message, liveMidi: null, level: 0 });
       return;
     }
     this.emit({ state: 'processing', liveMidi: null, level: 0 });
     await Promise.resolve();
-    const scenario = this.script[Math.min(this.takes, this.script.length - 1)];
-    this.takes++;
-    this.emit({ state: 'result', result: makeFakePracticeResult(scenario, this.clip, this.phrase, FAKE_NOW + this.takes * MINUTE) });
+    if (!this.current(epoch)) return;
+    this.showResult();
   }
 
   stop(): void {
@@ -715,8 +734,28 @@ export class FakeTrainerEngine implements PracticeEngine {
     this.positionSec = NaN;
     if (this.closed()) return;
     if (['listening', 'countin', 'singing', 'processing'].includes(this.snapshot.state)) {
+      this.epoch++;
       this.emit({ state: this.snapshot.result ? 'result' : 'idle', countIn: null, liveMidi: null, level: 0 });
     }
+  }
+
+  /** While recording, ends the take now and scores what was sung (the Done button); in any other state it does what stop() does. */
+  finish(): void {
+    this.calls.push('finish');
+    if (this.closed()) return;
+    if (this.snapshot.state !== 'singing') return this.stop();
+    const epoch = ++this.epoch;
+    this.emit({ state: 'processing', liveMidi: null, level: 0 });
+    void Promise.resolve().then(() => {
+      if (this.current(epoch)) this.showResult();
+    });
+  }
+
+  /** Turns the microphone off now, when nothing is running (the real engine does the same). */
+  releaseMicrophone(): void {
+    this.calls.push('releaseMicrophone');
+    if (this.closed() || ['listening', 'countin', 'singing', 'processing'].includes(this.snapshot.state)) return;
+    this.emit({ micOpen: false });
   }
 
   async playAttempt(which: 'original' | 'you' | 'both'): Promise<void> {
@@ -727,7 +766,8 @@ export class FakeTrainerEngine implements PracticeEngine {
   dispose(): void {
     this.calls.push('dispose');
     if (this.closed()) return;
-    this.emit({ state: 'closed' });
+    this.epoch++;
+    this.emit({ state: 'closed', micOpen: false });
     this.listeners.clear();
   }
 

@@ -634,7 +634,7 @@ async function checkClickProbe(opts: RunOptions): Promise<DiagnosticResult> {
     if (probe.roundTripMs === null) {
       return result(id, 'info', 'No click was heard. That is normal with headphones on your head (nothing leaks to the microphone). To measure the delay, hold an earbud against the iPhone microphone, or use the speaker at a higher volume, and run it again.', details);
     }
-    if (!probe.consistent) return result(id, 'info', `Something was heard but the delays disagree, so this is not a clean reading. Try again in a quieter room with the earbud closer to the microphone.`, details);
+    if (!probe.consistent) return result(id, 'info', `Something was heard but the delays disagree, so this is not a clean reading. Try again in a quieter room with the earbud held against the microphone.`, details);
     const ms = round(probe.roundTripMs, 0);
     if (ms > 250) return result(id, 'warn', `Round trip about ${ms} ms (playing, the air and recording together). That is a lot: it looks like Bluetooth. Wired headphones, or the iPhone microphone with Listen then sing, will line up better.`, details);
     return result(id, 'ok', `Round trip about ${ms} ms (playing, the air and recording together). The trainer does not count this against you.`, details);
@@ -756,8 +756,8 @@ async function checkMicLevel(opts: RunOptions): Promise<DiagnosticResult> {
     }
     const state = levelState(loud, peak);
     if (details.clippedPercent !== null && (details.clippedPercent as number) > 0.1) return result(id, 'warn', `Too loud: the signal hit full scale in ${details.clippedPercent}% of the samples. Hold the phone farther away.`, details, ['deviceName']);
-    if (loud < -50) return result(id, 'warn', `Very quiet: singing-level sound reached only ${round(loud, 0)} dBFS. Move closer, or check the right microphone is selected.`, details, ['deviceName']);
-    if (state === 'quiet') return result(id, 'warn', `Quiet: ${round(loud, 0)} dBFS at singing level. Move closer or sing out a little.`, details, ['deviceName']);
+    if (loud < -50) return result(id, 'warn', `Very quiet: singing-level sound reached only ${round(loud, 0)} dBFS. Hold the phone about a hand-span from your mouth, or check the right microphone is selected.`, details, ['deviceName']);
+    if (state === 'quiet') return result(id, 'warn', `Quiet: ${round(loud, 0)} dBFS at singing level. Hold the phone about a hand-span from your mouth and sing at your normal comfortable volume.`, details, ['deviceName']);
     if (floor > -45) return result(id, 'warn', `The room is noisy (${round(floor, 0)} dBFS when you were quiet). Find a quieter spot for the best scores.`, details, ['deviceName']);
     return result(id, 'ok', `Singing level ${round(loud, 0)} dBFS (peak ${round(peakDb, 0)}), room noise ${round(floor, 0)} dBFS.`, details, ['deviceName']);
   } catch (e) {

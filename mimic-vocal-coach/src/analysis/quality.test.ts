@@ -105,7 +105,7 @@ describe('recording-quality warnings from analyzeTake', () => {
 
   it('warns about a very quiet recording', () => {
     const a = analyzeTake(concat(silence(0.5, SR), melody(0.01), silence(0.5, SR)), SR, OPTS);
-    expect(a.warnings.some((w) => /very quiet/.test(w) && /closer to the microphone/.test(w))).toBe(true);
+    expect(a.warnings.some((w) => /very quiet/.test(w) && /hand-span from your mouth/.test(w))).toBe(true);
     expect(a.issues).toEqual(['too-quiet']);
   });
 

@@ -361,7 +361,7 @@ export function GuidePage() {
           <h2 id="guide-trainer-scores-h" tabIndex={-1}>What the Trainer scores, and what it cannot hear</h2>
           <p>
             Each take gets one number from 0 to 100: how close you came to the original. It is made of four skills:{' '}
-            <strong>pitch</strong> (40 percent: any key or octave is fine, so singing an octave lower is not a mistake),{' '}
+            <strong>pitch</strong> (40 percent: in Listen then sing any key is fine; while singing along only octaves count, so singing an octave lower is not a mistake),{' '}
             <strong>timing</strong> (25: when each note starts and how long it lasts, after the delay of your headphones is taken out),{' '}
             <strong>tone</strong> (20: airier, brighter or rougher than the original, from the same measures as the Studio), and{' '}
             <strong>expression</strong> (15: vibrato, loudness shape and how notes are joined). Under the number it names up to three things
