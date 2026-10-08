@@ -17,7 +17,7 @@ import { makeSongStems, mixSong, rawPitchAccuracy, voicingFalseAlarm, type SongM
 import { whiteNoise } from '../testing/synth';
 import { analyzeTake } from './analyze';
 import { analyzeAuto } from './client';
-import { leadExtractionOf, MIX_NOTE } from './mixMode';
+import { leadExtractionOf, MIX_NOTE, type MixAnalysis } from './mixMode';
 
 const SR = 22050;
 const OPTS = { voiceType: 'tenor' as const };
@@ -63,11 +63,12 @@ describe('proxy mixes: pitch accuracy against the plain tracker', () => {
   });
 
   it('keeps the instrumental stretches mostly unvoiced when the voice is at least as loud as the band', () => {
-    // 20-26% of the band-only frames are called voiced at +3 and 0 dB; with the voice 6 dB under the band the level cue
-    // cannot tell them apart any more (about 84%), which is why mix mode offers a trim to the phrase the user wants.
+    // Band-only frames called voiced: 14% at +3 dB and 47% at 0 dB before the voicing level was read from a harder-suppressed
+    // copy of the spectrum (vocalMelody.ts, LEVEL_STRENGTH), now about 1% and 12%. With the voice 6 dB under the band the level
+    // cue cannot tell them apart any more (about 65%), which is why mix mode offers a trim to the phrase the user wants.
     for (const transpose of REGISTERS) {
-      expect(at(transpose, 3).falseAlarm).toBeLessThan(0.4);
-      expect(at(transpose, 0).falseAlarm).toBeLessThan(0.4);
+      expect(at(transpose, 3).falseAlarm).toBeLessThan(0.1);
+      expect(at(transpose, 0).falseAlarm).toBeLessThan(0.3);
     }
   });
 
@@ -154,6 +155,37 @@ describe('proxy mixes: mix mode through analyzeTake', () => {
     expect(voice.route).toBe('solo');
     expect(voice.analysis.mode).toBeUndefined();
   });
+});
+
+describe('proxy mixes: how many notes the extraction reports for the 16 that were sung', () => {
+  // Reference inflation (a full-song reference with more notes than the singer sang is what makes a near-exact copy look
+  // incomplete). Mean over three registers, built-in band, notes reported per sung note, before -> after the pitch-fragment
+  // clean-up, the harder-suppressed voicing level and the same-note bridging (vocalMelody.ts, clean.ts):
+  //   +3 dB 1.21 -> 1.08 | 0 dB 1.63 -> 1.52 | -3 dB (not recorded) -> 1.9 | -6 dB 3.2 -> 2.3
+  const notesPerSung = (db: number) => {
+    let total = 0;
+    for (const transpose of REGISTERS) {
+      total += analyzeTake(mixSong(makeSongStems({ transpose }), db).mono, SR, { ...OPTS, mode: 'mix' }).notes.length;
+    }
+    return total / REGISTERS.length / 16;
+  };
+
+  it('stays near one per sung note with the voice over the band and under 2.6 with the voice 6 dB under it', () => {
+    expect(notesPerSung(3)).toBeLessThan(1.3);
+    expect(notesPerSung(0)).toBeLessThan(1.75);
+    expect(notesPerSung(-6)).toBeLessThan(2.6);
+  }, 60000);
+
+  it('says how much of it is the singer: purity falls with the level and the extraction becomes a rough guide under the band', () => {
+    const purity = (db: number) => (analyzeTake(mixSong(makeSongStems(), db).mono, SR, { ...OPTS, mode: 'mix' }) as MixAnalysis).leadExtraction;
+    const over = purity(6);
+    const level = purity(0);
+    const under = purity(-6);
+    expect(over.purity!).toBeGreaterThan(level.purity!);
+    expect(level.purity!).toBeGreaterThan(under.purity!);
+    expect(over.roughGuide).toBe(false);
+    expect(under.roughGuide).toBe(true);
+  }, 60000);
 });
 
 describe('no vocal to find', () => {

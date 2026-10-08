@@ -7,6 +7,8 @@ import { SINGERS } from '../../coach/profiles';
 import { profileFromReference } from '../../coach/reference';
 import { sessionFromResults } from '../../storage/history';
 import { makeFakeAnalysis, makeFakeSessions } from '../../testing/fixtures';
+import { TrainerContext } from '../../state/trainerContext';
+import { makeFakeTrainerController } from '../../testing/trainerFixtures';
 import type { SessionRecord } from '../../types';
 import { availableMetrics, ProgressPage, profileTabs } from './Progress';
 
@@ -71,6 +73,32 @@ describe('ProgressPage', () => {
     expect(container.textContent).toContain('No saved takes yet');
     expect(container.textContent).toContain('Save to progress');
     expect(container.querySelector('[role="img"]')).toBeNull();
+  });
+
+  it('with Trainer clips but no Studio takes, leads with the phrases and does not claim there is no progress', async () => {
+    await act(async () =>
+      root.render(
+        <TrainerContext.Provider value={makeFakeTrainerController()}>
+          <ProgressPage sessions={[]} onDelete={() => {}} onClear={() => {}} />
+        </TrainerContext.Provider>,
+      ),
+    );
+    expect(container.textContent).not.toContain('No saved takes yet');
+    const headings = Array.from(container.querySelectorAll('h2')).map((h) => h.textContent);
+    expect(headings).toEqual(['Phrases', 'Studio takes']);
+    expect(container.querySelector('.pp-counts')).not.toBeNull();
+    expect(container.querySelector('#hist-studio')?.parentElement?.textContent).toMatch(/Takes you save from the Studio/);
+  });
+
+  it('with no Trainer clips either, still explains how to save a Studio take', async () => {
+    await act(async () =>
+      root.render(
+        <TrainerContext.Provider value={makeFakeTrainerController({ clips: [] })}>
+          <ProgressPage sessions={[]} onDelete={() => {}} onClear={() => {}} />
+        </TrainerContext.Provider>,
+      ),
+    );
+    expect(container.textContent).toContain('No saved takes yet');
   });
 
   it('shows tabs per singer, defaults to the newest take and switches', () => {

@@ -1,7 +1,7 @@
 // Per-phrase mastery and a small spaced-repetition ladder. Pure functions; the clock is always passed in.
 //
 //  - Full-speed attempt: rate >= 0.9 and coverage >= 0.9 (slow practice and half-sung takes build skill but do not count).
-//  - Mastered: 3 of the last 5 full-speed attempts reach 85 with no component under 70 and no wrong note.
+//  - Mastered: 3 of the last 5 full-speed attempts reach 85, with pitch at 80 or more, no other component under 70 and no wrong note.
 //  - Ladder 1, 3, 7, 14, 30, 60 days. A review attempt at full speed, due (or within half a day of due), moves the ladder:
 //    80 or more up one rung, under 65 down two rungs (never below 1), in between waits half the current interval.
 //    Extra practice before the review is due does not move the ladder.
@@ -31,7 +31,14 @@ export type PhraseStatus = 'new' | 'learning' | 'mastered' | 'review-due' | 'stu
 export type PhraseSrs = PhraseSrsState;
 
 export const MASTER_SCORE = 85;
-export const MASTER_FLOOR = 70; // no component below this
+export const MASTER_FLOOR = 70; // no timing / tone / expression component below this
+/**
+ * Pitch is held to a higher floor: the other three skills read 95-100 for almost any voice that is close to the original's shape
+ * (tone alone was 95 or more in 94 % of 467 scored takes), so 35 % of the overall is nearly free and a take whose notes scatter by
+ * 30 cents (pitch about 76) still reached 90 and counted as mastered. At 80, 8 of 8 takes with 40-cent scatter stop counting, while
+ * simulated 'good' singers (25 cents) still count in 11 of 12 and careful ones in 12 of 12.
+ */
+export const MASTER_PITCH_FLOOR = 80;
 export const MASTER_WINDOW = 5;
 export const MASTER_HITS = 3;
 export const MIN_MASTER_RATE = 0.9;
@@ -54,7 +61,7 @@ const byTime = (attempts: AttemptLite[]): AttemptLite[] => [...attempts].sort((a
 /** A component that was not measured (null / absent) is not held against the attempt; a NaN is. */
 const floorOk = (v: number | null | undefined): boolean => v === null || v === undefined || (finite(v) && v >= MASTER_FLOOR);
 
-const isHit = (a: AttemptLite): boolean => a.wrongNotes === 0 && finite(a.overall) && a.overall >= MASTER_SCORE && finite(a.pitch) && a.pitch >= MASTER_FLOOR && floorOk(a.timing) && floorOk(a.tone) && floorOk(a.expression);
+const isHit = (a: AttemptLite): boolean => a.wrongNotes === 0 && finite(a.overall) && a.overall >= MASTER_SCORE && finite(a.pitch) && a.pitch >= MASTER_PITCH_FLOOR && floorOk(a.timing) && floorOk(a.tone) && floorOk(a.expression);
 
 /** The last five full-speed attempts and how many of them are good enough: "2 of 3 good attempts". */
 export function masteryProgress(attempts: AttemptLite[]): { hits: number; needed: number; window: number; considered: number } {
@@ -62,7 +69,7 @@ export function masteryProgress(attempts: AttemptLite[]): { hits: number; needed
   return { hits: last.filter(isHit).length, needed: MASTER_HITS, window: MASTER_WINDOW, considered: last.length };
 }
 
-/** Mastered: 3 of the last 5 full-speed attempts reach 85 with no component under 70 and no wrong note. */
+/** Mastered: 3 of the last 5 full-speed attempts reach 85 with pitch at 80+, no other component under 70 and no wrong note. */
 export function isMastered(attempts: AttemptLite[]): boolean {
   return masteryProgress(attempts).hits >= MASTER_HITS;
 }

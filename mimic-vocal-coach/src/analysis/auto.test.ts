@@ -145,3 +145,48 @@ describe('analyzeWithRouting', () => {
     await expect(analyzeWithRouting(analyze, SAMPLES, 22050, OPTS)).resolves.toBeDefined();
   });
 });
+
+describe('analyzeWithRouting: cancelling', () => {
+  it('passes the signal to every pass', async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const analyze: AnalyzeFn = vi.fn(async (_s, _r, opts, _p, signal) => {
+      seen.push(signal);
+      return opts.mode === 'mix' ? mix() : song();
+    });
+    const ctl = new AbortController();
+    await analyzeWithRouting(analyze, SAMPLES, 22050, OPTS, 'auto', undefined, ctl.signal);
+    expect(seen).toEqual([ctl.signal, ctl.signal]);
+  });
+
+  it('does not start the mix pass when the signal aborted during the solo pass, and rejects with an AbortError', async () => {
+    const ctl = new AbortController();
+    const calls: string[] = [];
+    const analyze: AnalyzeFn = vi.fn(async (_s, _r, opts) => {
+      calls.push(opts.mode ?? 'solo');
+      ctl.abort(); // the user closed the sheet while the solo pass was finishing
+      return song();
+    });
+    await expect(analyzeWithRouting(analyze, SAMPLES, 22050, OPTS, 'auto', undefined, ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(calls).toEqual(['solo']);
+  });
+
+  it('a cancelled mix pass is a cancel, not "the full-song pass failed"', async () => {
+    const ctl = new AbortController();
+    const analyze: AnalyzeFn = vi.fn(async (_s, _r, opts) => {
+      if (opts.mode === 'mix') {
+        ctl.abort();
+        throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
+      }
+      return song();
+    });
+    await expect(analyzeWithRouting(analyze, SAMPLES, 22050, OPTS, 'auto', undefined, ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects before any work when the signal is already aborted', async () => {
+    const analyze: AnalyzeFn = vi.fn(async () => solo());
+    const ctl = new AbortController();
+    ctl.abort();
+    await expect(analyzeWithRouting(analyze, SAMPLES, 22050, OPTS, 'mix', undefined, ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(analyze).not.toHaveBeenCalled();
+  });
+});

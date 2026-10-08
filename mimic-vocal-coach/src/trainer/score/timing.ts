@@ -12,7 +12,7 @@
 
 import { median } from '../../dsp/stats';
 import {
-  DUR_DEAD, DUR_SIGMA, LATE_EARLY_MS, ONSET_DEAD_MS, ONSET_ORN_DEAD_MS, ONSET_ORN_SIGMA_MS, ONSET_SIGMA_MS, ORNAMENT_WEIGHT, TEMPO_DEAD, TEMPO_SIGMA,
+  DUR_DEAD, DUR_SIGMA, LATE_EARLY_MS, WRONG_NOTE_CENTS, ONSET_DEAD_MS, ONSET_ORN_DEAD_MS, ONSET_ORN_SIGMA_MS, ONSET_SIGMA_MS, ORNAMENT_WEIGHT, TEMPO_DEAD, TEMPO_SIGMA,
   TIMING_DUR_WEIGHT, TIMING_ONSET_WEIGHT, TIMING_TEMPO_WEIGHT,
 } from './constants';
 import { combine, type Ctx, type Insight, type SkillResult } from './ctx';
@@ -32,7 +32,17 @@ export function scoreTiming(ctx: Ctx): SkillResult {
   const durG: number[] = [];
   const durW: number[] = [];
 
-  for (const p of al.onsetPairs) {
+  // An entrance that follows a note sung at a clearly different pitch cannot be read from the pitch step that marks it (the step is
+  // missing or reversed in the take, so the aligner keeps a stale corner): such pairs would invent "starts early / late" fixes for what
+  // is a pitch error. Pitch is scored before timing, so the flags are already there. An entrance after a rest is a voiced-run start
+  // and does not depend on the neighbour's pitch.
+  const wrongish = (k: number): boolean => {
+    const r = perNote[k];
+    return !!r && r.matched && (r.flags.includes('wrong-note') || r.flags.includes('octave-displaced') || Math.abs(r.cents ?? 0) >= WRONG_NOTE_CENTS);
+  };
+  const isAfterRest = (k: number): boolean => k === 0 || rn[k].start - rn[k - 1].end >= 0.08;
+  const pairs = al.onsetPairs.filter((p) => p.found && perNote[p.k].matched && !(wrongish(p.k) || (!isAfterRest(p.k) && wrongish(p.k - 1))));
+  for (const p of pairs) {
     const k = p.k;
     const row = perNote[k];
     const e = (p.user - al.at(p.ref)) * 1000;
@@ -51,7 +61,7 @@ export function scoreTiming(ctx: Ctx): SkillResult {
   const endOf = new Map<number, { ref: number; user: number }>();
   for (const e of al.endPairs) endOf.set(e.k, e);
   const startOf = new Map<number, { ref: number; user: number }>();
-  for (const p of al.onsetPairs) startOf.set(p.k, p);
+  for (const p of pairs) startOf.set(p.k, p);
   for (const nm of al.notes) {
     const k = nm.k;
     const st = startOf.get(k);
@@ -86,7 +96,7 @@ export function scoreTiming(ctx: Ctx): SkillResult {
   const onsetScore = nOn >= 2 ? 100 * wmean(onsetG, onsetW) : null;
   const madMs = nOn >= 2 ? mad(onsetE) : null;
   comps.push({ id: 'timing.onsets', skill: 'timing', label: 'Note entrances', score: onsetScore, weight: TIMING_ONSET_WEIGHT, value: nOn >= 2 ? `${round(median(onsetE.map(Math.abs)), 0)} ms median offset` : undefined, n: nOn });
-  const rho = al.tempo * ctx.rate;
+  const rho = al.tempo; // 1 = the speed the guide was played at (the reference is laid out at that speed)
   const tempoScore = al.tempoFitted && nOn >= 2 ? 100 * bell(Math.log(rho), TEMPO_DEAD, TEMPO_SIGMA) : null;
   comps.push({ id: 'timing.tempo', skill: 'timing', label: 'Tempo', score: tempoScore, weight: TIMING_TEMPO_WEIGHT, value: al.tempoFitted ? `${round(rho, 2)}x the reference tempo` : undefined, n: nOn });
   const durScore = durG.length >= 2 ? 100 * wmean(durG, durW) : null;
@@ -102,7 +112,8 @@ export function scoreTiming(ctx: Ctx): SkillResult {
   const used = new Set<number>();
 
   if (tempoScore !== null && tempoScore < 80) {
-    const pct = Math.round(Math.abs(rho - 1) * 100);
+    // rho is time per reference time (> 1 = longer = slower); the percentage is the change of SPEED, the same figure whichever way it went
+    const pct = Math.round(Math.abs(1 / rho - 1) * 100);
     const slow = rho > 1;
     const word = ctx.mode === 'sing-along' ? (slow ? 'you fell behind the track' : 'you ran ahead of the track') : slow ? 'you dragged' : 'you rushed';
     insights.push({

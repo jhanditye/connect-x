@@ -3,8 +3,10 @@
 // a take, the result sheet. The engine does the audio, the comparison and the saving; this screen only asks and shows, so it
 // runs against the scripted FakeTrainerEngine as well as the real one.
 //
-// Keyboard and screen readers: every control is a button or a radio, the dock buttons keep focus when their label changes,
-// a polite live region announces count-in, recording, analysis and the result, and the result sheet's heading takes focus.
+// Keyboard and screen readers: every control is a button or a radio, the dock buttons keep focus when their label changes (they
+// are aria-disabled, never disabled, while busy), one polite live region announces the count-in, the analysis and the result
+// (nothing is spoken while the microphone is recording, so a screen reader's voice does not end up in the take), the result sheet's
+// heading takes focus, and what a failed or cancelled action said is shown above the dock, where it cannot hide under it.
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { requestWakeLock } from '../../audio/route';
@@ -17,7 +19,7 @@ import type { AttemptRecord } from '../../types';
 import { Icon } from '../components/Icon';
 import { Notice } from '../components/Notice';
 import { PhraseStrip } from '../components/PhraseStrip';
-import { PracticeControls, PracticeDock } from '../components/PracticeControls';
+import { PracticeControls, PracticeDock, type DockNote } from '../components/PracticeControls';
 import { ResultSheet, resultAnnouncement, type Hear } from '../components/ResultSheet';
 import { StatusChip } from '../components/StatusChip';
 import { neighbours, phraseByNumber, phraseCount, phraseNumber, phraseStatus, visiblePhrases } from '../components/phraseStatus';
@@ -32,25 +34,25 @@ function messageOf(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
 }
 
-/** What the live region says as the practice state changes. Quiet for states that need no words. */
-function stateAnnouncement(snap: PracticeSnapshot | null): string {
+/** What the live region says as the practice state changes. Quiet for states that need no words, and while the microphone records. */
+function stateAnnouncement(snap: PracticeSnapshot | null, hearing: Hear | null): string {
   if (!snap) return '';
   switch (snap.state) {
     case 'preparing':
       return 'Getting the phrase ready.';
     case 'listening':
-      return 'Playing the phrase.';
+      return hearing === 'you' ? 'Playing your take.' : hearing === 'both' ? 'Playing the original and your take together.' : 'Playing the phrase.';
     case 'countin':
-      return 'Get ready. The count-in has started.';
+      return 'Get ready.';
+    // The Done button says it is recording; a spoken "sing now" would be heard by the microphone.
     case 'singing':
-      return 'Recording. Sing now.';
+      return '';
     case 'processing':
       return 'Analysing your take.';
-    // The message itself is on screen in its own notice; here only that something stopped, so it is not read out twice.
+    // The message itself is on screen above the dock in its own alert; it is not read out a second time here.
     case 'interrupted':
-      return 'The take was stopped and not scored. The message below says what to do.';
     case 'error':
-      return 'Something went wrong. The message below says what to do.';
+      return snap.message ? '' : 'Something went wrong. Tap Sing or Listen to try again.';
     default:
       return '';
   }
@@ -83,6 +85,10 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
   const [history, setHistory] = useState<AttemptRecord[]>([]);
   const [tries, setTries] = useState(0);
   const [announce, setAnnounce] = useState('');
+  const hearing = useRef<Hear | null>(null);
+  const singRef = useRef<HTMLButtonElement>(null);
+  /** The result the history list was loaded for: the mastery line waits for it instead of showing a stale or empty count. */
+  const [historyFor, setHistoryFor] = useState<unknown>(null);
   const choseMode = useRef(false);
   const [controlsOpen, setControlsOpen] = useState(true);
 
@@ -157,29 +163,40 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
     if (!phraseId) return;
     let live = true;
     trainerRef.current.listAttempts({ phraseId, limit: 30 }).then(
-      (list) => live && setHistory(list),
-      () => live && setHistory([]),
+      (list) => {
+        if (!live) return;
+        setHistory(list);
+        setHistoryFor(result);
+      },
+      () => {
+        if (!live) return;
+        setHistory([]);
+        setHistoryFor(result);
+      },
     );
     return () => {
       live = false;
     };
   }, [phraseId, result]);
 
-  // ----- a new result: count it, announce it, move focus to it
+  // ----- a new result: count it, announce it, move focus to it; every other state change: say what is happening, once
   const lastResult = useRef<unknown>(null);
-  useEffect(() => {
-    if (!result || lastResult.current === result) return;
-    lastResult.current = result;
-    setTries((n) => n + 1);
-    setControlsOpen(false);
-    setAnnounce(resultAnnouncement(result, snap?.reference ?? null));
-    requestAnimationFrame(() => resultRef.current?.focus({ preventScroll: false }));
-    // The announcement uses the reference at the time of the result.
-  }, [result]);
   const state = snap?.state ?? (openError ? 'error' : 'preparing');
   useEffect(() => {
-    if (state !== 'idle' && state !== 'result' && state !== 'closed') setAnnounce(stateAnnouncement(snap));
-  }, [state, snap?.message]);
+    if (result && lastResult.current !== result) {
+      lastResult.current = result;
+      setTries((n) => n + 1);
+      setControlsOpen(false);
+      setAnnounce(resultAnnouncement(result, snap?.reference ?? null));
+      requestAnimationFrame(() => resultRef.current?.focus({ preventScroll: false }));
+      // The announcement uses the reference at the time of the result.
+      return;
+    }
+    if (state === 'closed') return;
+    if (state !== 'listening') hearing.current = null;
+    // Back at rest (also after a cancelled take): clear what was said, so the next take's first words are heard as new.
+    setAnnounce(state === 'idle' || state === 'result' ? '' : stateAnnouncement(snap, hearing.current));
+  }, [result, state, snap?.message]);
 
   // ----- what the buttons do
   const options = snap?.options;
@@ -248,7 +265,8 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
   const { prev, next } = neighbours(clip, phrase);
   const status = phraseStatus(phrase, props.now);
   const singer = singerOf(clip, trainer.singers);
-  const goPhrase = (p: { index: number }) => goTrainer({ view: 'phrase', clipId: clip.id, phraseNumber: p.index + 1 });
+  const goPhrase = (p: { index: number }) => goTrainer({ view: 'phrase', clipId: clip.id, phraseNumber: phraseNumber(p) });
+  const hiddenCount = clip.phrases.length - visible.length;
   const duration = Math.max(0.5, phrase.end - phrase.start);
 
   const back = (
@@ -269,7 +287,8 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
           <span className="icon-button pr-step pr-step--off" aria-hidden="true" />
         )}
         <h1 className="pr-title" ref={headingRef} tabIndex={-1}>
-          Phrase <span className="num">{n}</span> <span className="pr-of">of {visible.length}</span>
+          Phrase <span className="num">{n}</span> <span className="pr-of">of {clip.phrases.length}</span>
+          {hiddenCount > 0 && <span className="visually-hidden"> ({hiddenCount} hidden)</span>}
         </h1>
         {next ? (
           <a className="icon-button pr-step" href={trainerHash({ view: 'phrase', clipId: clip.id, phraseNumber: phraseNumber(next) })} aria-label={`Next phrase, ${phraseNumber(next)}`}>
@@ -333,6 +352,18 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
   const singing = state === 'singing';
   const tooSoft = state === 'interrupted' || state === 'error';
   const inResult = result !== null && state !== 'preparing';
+  // What the last action said, above the dock: a failure, an interruption, a refused sing-along, a cancelled take.
+  const note: DockNote | null = actionNote
+    ? { text: actionNote, tone: 'error' }
+    : snap?.message && (tooSoft || state === 'idle' || state === 'result')
+      ? { text: snap.message, tone: tooSoft ? 'error' : 'info' }
+      : null;
+  const micOn = !!engine && !!engine.releaseMicrophone && snap?.micOpen === true && (state === 'idle' || state === 'result');
+  const turnMicOff = (): void => {
+    engine?.releaseMicrophone?.();
+    setAnnounce('Microphone off.');
+    singRef.current?.focus({ preventScroll: true });
+  };
 
   return (
     <div className="page page--practice">
@@ -364,15 +395,15 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
         </div>
       )}
 
-      {(tooSoft || (snap?.message && state === 'idle')) && snap?.message && (
-        <Notice tone={tooSoft ? 'warn' : 'info'}>
-          <p>{snap.message}</p>
-        </Notice>
-      )}
-      {actionNote && (
-        <Notice tone="error" onDismiss={() => setActionNote(null)}>
-          <p>{actionNote}</p>
-        </Notice>
+      {micOn && (
+        <div className="button-row">
+          <p className="pc-hint">
+            <Icon name="mic" size={16} /> Microphone on, so the next try starts at once. It turns itself off in a moment.
+          </p>
+          <button type="button" className="button button--ghost button--small" onClick={turnMicOff}>
+            Turn off
+          </button>
+        </div>
       )}
 
       {inResult && result && (
@@ -384,9 +415,13 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
           rate={o.rate}
           triesThisVisit={tries}
           history={history}
+          historyReady={historyFor === result}
           keepRecordings={prefs.keepRecordings}
           onKeepRecordings={(on) => setPrefs({ keepRecordings: on })}
-          onHear={(which: Hear) => engine && act(() => engine.playAttempt(which))}
+          onHear={(which: Hear) => {
+            hearing.current = which;
+            if (engine) act(() => engine.playAttempt(which));
+          }}
           onNext={next ? () => goPhrase(next) : undefined}
           onSlower={() => setOptions({ rate: 0.75 })}
           onFaster={() => setOptions({ rate: 1 })}
@@ -421,10 +456,15 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
         state={state}
         route={route}
         hasResult={result !== null}
+        speakerConfirmed={snap?.speakerConfirmed === true}
+        note={note}
+        onDismissNote={actionNote ? () => setActionNote(null) : undefined}
+        singRef={singRef}
         onOptions={setOptions}
         onListen={() => engine && act(() => engine.listen())}
         onSing={(speakerConfirmed) => engine && act(() => engine.sing(speakerConfirmed ? { speakerConfirmed: true } : undefined))}
         onStop={() => engine?.stop()}
+        onFinish={() => (engine?.finish ? engine.finish() : engine?.stop())}
       />
     </div>
   );

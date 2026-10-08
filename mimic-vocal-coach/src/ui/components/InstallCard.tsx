@@ -1,7 +1,7 @@
 // "Install on iPhone": shown on iOS when the app runs in a browser tab instead of from the Home Screen.
 // The Home Screen version has its own storage (separate from Safari), no browser bars, and works offline.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { installHelp, type PlatformEnv } from '../../pwa/platform';
 import { getStorage } from '../../storage/local';
 import { Icon } from './Icon';
@@ -27,13 +27,34 @@ function ShareGlyph() {
   );
 }
 
+/**
+ * One sentence for places where clips are about to be saved (the import sheet): in a browser tab on an iPhone, what is saved here is
+ * not in the Home Screen app. Renders nothing in the installed app, in the native app or off iOS.
+ */
+export function BrowserTabNote(props: { env?: PlatformEnv }) {
+  if (!installHelp(props.env).show) return null;
+  return (
+    <p className="install-note" data-testid="browser-tab-note">
+      You are in a browser tab. Clips saved here will not appear in the Home Screen app, which keeps its own storage. Install Mimic first (the steps are on the Trainer
+      screen), then add your clips there.
+    </p>
+  );
+}
+
 export function InstallCard(props: { env?: PlatformEnv; /** Always show (Settings) even after the user dismissed the card on the Studio. */ persistent?: boolean }) {
   const help = installHelp(props.env);
   const [dismissed, setDismissed] = useState(() => !props.persistent && wasDismissed());
+  const cardRef = useRef<HTMLElement>(null);
   if (!help.show || dismissed) return null;
 
   const dismiss = () => {
+    // The button that was pressed leaves with the card: move focus to the next heading on the page (or the page itself), never <body>.
+    const next = cardRef.current?.nextElementSibling ?? null;
+    const heading = next?.matches('h1,h2,h3') ? next : (next?.querySelector('h1,h2,h3') ?? null);
+    const target = (heading as HTMLElement | null) ?? document.querySelector<HTMLElement>('main.main');
+    if (target && !target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
     setDismissed(true);
+    requestAnimationFrame(() => target?.focus({ preventScroll: true }));
     try {
       getStorage()?.setItem(DISMISS_KEY, '1');
     } catch {
@@ -42,7 +63,7 @@ export function InstallCard(props: { env?: PlatformEnv; /** Always show (Setting
   };
 
   return (
-    <section className="install-card" aria-labelledby="install-title">
+    <section ref={cardRef} className="install-card" aria-labelledby="install-title">
       <div className="install-card-head">
         <h2 id="install-title" className="install-card-title">
           Install Mimic on your iPhone

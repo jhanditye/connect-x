@@ -38,46 +38,17 @@ const choose = async (select: HTMLSelectElement, value: string) =>
     select.value = value;
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
-const status = (name: RegExp) => screen.qa('.status-row').find((r) => name.test(r.querySelector('dt')?.textContent ?? ''))!.querySelector('dd')!;
+
 
 describe('Settings: Trainer section', () => {
-  it('says where the clips live, how many there are, and how much room they take', () => {
+  it('says where the clips live and points to the one storage block, without repeating it', () => {
     settings();
     expect(screen.q('#trainer-heading').textContent).toBe('Trainer');
     expect(screen.text()).toMatch(/kept on this device only/);
-    expect(status(/Library/).textContent).toBe('1 clip, 12 phrases');
-    expect(status(/Space used/).textContent).toMatch(/118 MB.*of about 5\.6 GB/);
-    expect(status(/Space used/).querySelector('.st-meter')?.getAttribute('aria-label')).toBe('2 percent of the space this site may use');
-  });
-
-  it('warns that a memory-only library is lost when the app closes', () => {
-    settings(makeFakeTrainerController({ status: 'memory-only' }));
-    expect(status(/Library/).textContent).toMatch(/Lost when you close the app/);
-  });
-
-  it('says whether the browser will keep the clips, and asks it to when it has not agreed', async () => {
-    const requestPersistence = vi.fn(() => Promise.resolve(true));
-    const refreshStorage = vi.fn(() => Promise.resolve({ supported: true, usage: 1, quota: 2, persisted: true }));
-    const ctl = makeFakeTrainerController();
-    settings(ctl, { requestPersistence, refreshStorage, storageNote: 'Add Mimic to your Home Screen to keep your clips.' });
-    expect(status(/Kept safe/).textContent).toMatch(/Best effort/);
-    expect(screen.text()).toMatch(/Home Screen/);
-    await screen.clickAsync(screen.button(/Ask the browser to keep my clips/));
-    expect(requestPersistence).toHaveBeenCalledOnce();
-    expect(refreshStorage).toHaveBeenCalledOnce();
-    ctl.storage = { ...ctl.storage, persisted: true };
-    settings(ctl);
-    expect(status(/Kept safe/).textContent).toBe('Persistent');
-    expect(screen.hasButton(/Ask the browser/)).toBe(false);
-  });
-
-  it('shows unknown storage as unknown, not as zero', () => {
-    const ctl = makeFakeTrainerController();
-    ctl.storage = { supported: false, usage: null, quota: null, persisted: null };
-    settings(ctl);
-    expect(status(/Space used/).textContent).toBe('unknown');
-    expect(status(/Kept safe/).textContent).toBe('Unknown');
-    expect(screen.has('.st-meter')).toBe(false);
+    expect(screen.text()).toMatch(/Offline and storage below/);
+    // Space used, kept-safe and the "keep my data" request live in Offline and storage (StoragePanel), once.
+    expect(screen.qa('.status-row')).toHaveLength(0);
+    expect(screen.hasButton(/keep my clips|keep my data/)).toBe(false);
   });
 });
 
@@ -162,9 +133,32 @@ describe('Settings: Trainer backup', () => {
     expect(screen.q('.notice--error').textContent).toMatch(/not a Mimic backup/);
   });
 
+  it('a new backup action clears what the last one said, so messages never stack, and the pressed Export button keeps focus', async () => {
+    const { ctl } = settings();
+    const exportBtn = screen.button(/Export my library/);
+    exportBtn.focus();
+    await screen.clickAsync(exportBtn);
+    expect(screen.text()).toMatch(/Backup saved/);
+    expect(document.activeElement).toBe(exportBtn);
+    ctl.importLibrary = async () => {
+      throw new Error('That file is not a Mimic library backup.');
+    };
+    const input = screen.q<HTMLInputElement>('input[type="file"]');
+    Object.defineProperty(input, 'files', { value: [new File(['nope'], 'x.json')], configurable: true });
+    await act(async () => void input.dispatchEvent(new Event('change', { bubbles: true })));
+    await tick();
+    expect(screen.qa('.notice')).toHaveLength(1);
+    expect(screen.q('.notice').textContent).toMatch(/not a Mimic library backup/);
+    expect(screen.text()).not.toMatch(/Backup saved/);
+    await screen.clickAsync(screen.button(/Export my library/));
+    expect(screen.qa('.notice')).toHaveLength(1);
+    expect(screen.text()).toMatch(/Backup saved/);
+  });
+
   it('cannot export or import while the library is not open, and the label is still reachable', () => {
     settings(makeFakeTrainerController({ status: 'loading', clips: [] }));
-    expect(screen.button(/Export my library/).disabled).toBe(true);
+    // aria-disabled, not disabled: a pressed button that disables drops keyboard focus to the page.
+    expect(screen.button(/Export my library/).getAttribute('aria-disabled')).toBe('true');
     expect(screen.q<HTMLInputElement>('input[type="file"]').disabled).toBe(true);
   });
 });
@@ -189,26 +183,26 @@ describe('Settings: Trainer device checks and delete', () => {
 
   it('delete asks first in the page; Cancel puts focus back on the button', async () => {
     const { ctl } = settings();
-    screen.click(screen.button(/Delete all clips and scores/));
+    screen.click(screen.button(/Delete clips and scores/));
     expect(screen.q('.confirm').textContent).toMatch(/Delete every clip, phrase, practice score and kept recording from this device\?.*Export a backup first.*cannot be undone/s);
     expect(document.activeElement?.textContent).toBe('Cancel');
     await screen.clickAsync(screen.button('Cancel'));
     expect(ctl.calls).not.toContain('clearAll');
     await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
-    expect(document.activeElement).toBe(screen.button(/Delete all clips and scores/));
+    expect(document.activeElement).toBe(screen.button(/Delete clips and scores/));
   });
 
   it('Yes deletes everything and says what to do next, with focus on that message', async () => {
     const { ctl } = settings();
-    screen.click(screen.button(/Delete all clips and scores/));
-    await screen.clickAsync(screen.button(/Yes, delete the Trainer data/));
+    screen.click(screen.button(/Delete clips and scores/));
+    await screen.clickAsync(screen.button(/Yes, delete clips and scores/));
     expect(ctl.calls).toContain('clearAll');
     expect(ctl.clips).toHaveLength(0);
-    const note = screen.qa('p[role="status"]').find((p) => /Trainer data deleted/.test(p.textContent ?? ''))!;
-    expect(note.textContent).toBe('Trainer data deleted. Add a clip in the Trainer to start again.');
+    const note = screen.qa('p[role="status"]').find((p) => /Clips and scores deleted/.test(p.textContent ?? ''))!;
+    expect(note.textContent).toBe('Clips and scores deleted. Add a clip in the Trainer to start again.');
     await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
     expect(document.activeElement).toBe(note);
-    expect(status(/Library/).textContent).toBe('0 clips, 0 phrases');
+    expect(ctl.clips).toHaveLength(0);
   });
 
   it('a delete that fails says so and leaves the clips', async () => {
@@ -216,10 +210,24 @@ describe('Settings: Trainer device checks and delete', () => {
     ctl.clearAll = async () => {
       throw new Error('The library is not open. Reload the app and try again.');
     };
-    screen.click(screen.button(/Delete all clips and scores/));
-    await screen.clickAsync(screen.button(/Yes, delete the Trainer data/));
+    screen.click(screen.button(/Delete clips and scores/));
+    await screen.clickAsync(screen.button(/Yes, delete clips and scores/));
     expect(screen.q('.notice--error').textContent).toMatch(/not open/);
     expect(ctl.clips).toHaveLength(1);
+    // The confirm buttons are gone; focus goes back to the button the person started from.
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(document.activeElement).toBe(screen.button(/Delete clips and scores/));
+  });
+
+  it('Escape closes the confirmation and puts focus back', async () => {
+    const { ctl } = settings();
+    screen.click(screen.button(/Delete clips and scores/));
+    const group = screen.q('.confirm');
+    await act(async () => void group.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(screen.has('.confirm')).toBe(false);
+    expect(ctl.calls).not.toContain('clearAll');
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(document.activeElement).toBe(screen.button(/Delete clips and scores/));
   });
 
   it('renders nothing without a Trainer', () => {

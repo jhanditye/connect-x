@@ -407,6 +407,31 @@ export const CLIP_STORE_CASES: ContractCase[] = [
       }),
   },
   {
+    name: 'orphans: pruneOrphanAudio removes chunks that have no clip record and nothing else',
+    run: (env) =>
+      withStore(env, async (s) => {
+        const pcm = tonePcm(25 * SR); // three chunks
+        const rec = { pcm: new Int16Array(100), sampleRate: SR };
+        await s.putClip(clipRec('keep'));
+        const kept = await s.writeAudio('keep', 'mix', pcm, SR);
+        await s.writeAudio('keep', 'vocal', pcm, SR);
+        await s.addAttempt(attempt('k-a1', 'k-p1', 1, 'keep'), rec);
+        // An import that died after its audio and before its clip record; ids that share a prefix with a real clip.
+        await s.writeAudio('lost', 'mix', pcm, SR);
+        await s.writeAudio('lost', 'vocal', pcm, SR);
+        await s.writeAudio('keep2', 'mix', tonePcm(SR), SR);
+        const before = await s.usage();
+        eq(await s.pruneOrphanAudio(), 2, 'two clips\' worth of orphan chunks');
+        const after = await s.usage();
+        eq(after.audioBytes, before.audioBytes - (2 * pcm.byteLength + tonePcm(SR).byteLength), 'exactly the orphans\' bytes were freed');
+        eq([after.clips, after.attempts], [1, 1], 'records are untouched');
+        expectSamples(await s.readAudio('keep', kept, 11, 12), pcm, 11 * SR, 12 * SR, 'the real clip\'s audio');
+        check((await s.readAttemptAudio('k-a1')) !== null, 'the real recording');
+        await rejects(s.readAudio('lost', { ...kept }, 0, 1), (e) => e instanceof AudioMissingError, 'orphan gone');
+        eq(await s.pruneOrphanAudio(), 0, 'nothing left to remove');
+      }),
+  },
+  {
     name: 'meta: values round trip, missing keys are null, values are copies',
     run: (env) =>
       withStore(env, async (s) => {

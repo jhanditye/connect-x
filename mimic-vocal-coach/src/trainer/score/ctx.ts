@@ -15,6 +15,10 @@ export interface Ctx {
   /** Per reference note: ornament / run note. */
   ornament: boolean[];
   toneBias: Partial<Record<'breathiness' | 'brightness' | 'rasp', number>>;
+  /** The reference's melody is a rough guide (a full song with more notes than were sung): far-off notes are not charged as wrong notes. */
+  rough: boolean;
+  /** Reference notes the extractor thinks are probably the band's (mix references only): treated like a rough guide's far-off notes, note by note. */
+  doubtful: ReadonlySet<number>;
 }
 
 /** Mapped attempt window of reference note k, null when the note was not matched. */

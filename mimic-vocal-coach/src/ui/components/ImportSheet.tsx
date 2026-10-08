@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import { looksLikeMedia, MEDIA_ACCEPT } from '../../audio/decode';
 import { useTrainer } from '../../state/trainerContext';
 import { QuotaError, StoreUnavailableError } from '../../storage/clips';
+import { isAbortError } from '../../analysis/abort';
 import { findRelinkMatches, reanalyzeClip, sameSource, type CommitEdits, type ImportProgress, type PreparedClip } from '../../trainer/import';
 import { IMPORT_FORMATS, IMPORT_LEDE, IMPORT_STEPS, PRIVACY_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
 import type { ClipKind, ClipRecord } from '../../types';
@@ -108,23 +109,26 @@ function reducer(state: State, action: Action): State {
 // ---------------------------------------------------------------------------------------------
 // Helpers
 
-const OWNED_KEY = 'mimic:v1:trainer-owned';
+/**
+ * An earlier version remembered the "this file is mine" tick for the next file. It is a statement about each file, so it is asked every
+ * time; the old remembered value is removed.
+ */
+const OLD_OWNED_KEY = 'mimic:v1:trainer-owned';
 
-function readOwned(): boolean {
+function forgetOldOwnedTick(): void {
   try {
-    return localStorage.getItem(OWNED_KEY) === '1';
+    localStorage.removeItem(OLD_OWNED_KEY);
   } catch {
-    return false;
+    // Nothing to forget.
   }
 }
 
-function writeOwned(on: boolean): void {
-  try {
-    if (on) localStorage.setItem(OWNED_KEY, '1');
-    else localStorage.removeItem(OWNED_KEY);
-  } catch {
-    // Not remembered: the box starts empty next time.
-  }
+/** The page's own heading (or its main area), made focusable: where the focus goes when the control that opened the sheet is gone. */
+function focusPage(): void {
+  const el = document.querySelector<HTMLElement>('main h1') ?? document.querySelector<HTMLElement>('h1') ?? document.querySelector<HTMLElement>('main');
+  if (!el) return;
+  if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: true });
 }
 
 function messageOf(err: unknown, fallback: string): string {
@@ -196,6 +200,11 @@ export function ImportSheet(props: ImportSheetProps) {
   const [over, setOver] = useState(false);
   const [announce, setAnnounce] = useState('');
   const started = useRef(new Set<number>());
+  /** One AbortController per file being read: skipping a file, closing the sheet or leaving stops its analysis worker. */
+  const controllers = useRef(new Map<number, AbortController>());
+  /** Cancels what is not tied to one file in the queue (reading a vocal-only file in the review). */
+  const sheetAbort = useRef<AbortController | null>(null);
+  const announcedAnalysing = useRef(new Set<number>());
   const alive = useRef(true);
   const sheetRef = useRef<HTMLDivElement>(null);
   const [host] = useState(() => {
@@ -235,17 +244,34 @@ export function ImportSheet(props: ImportSheetProps) {
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     sheetRef.current?.focus();
+    forgetOldOwnedTick();
     return () => {
-      if (before && document.contains(before) && typeof before.focus === 'function') before.focus();
+      // Back to the control that opened the sheet; when it is gone (the empty-state button disappears with the first clip), to the page.
+      if (before && before !== document.body && document.contains(before) && typeof before.focus === 'function') before.focus();
+      else focusPage();
     };
+  }, []);
+
+  const abortAll = useCallback(() => {
+    for (const c of controllers.current.values()) c.abort();
+    controllers.current.clear();
+    sheetAbort.current?.abort();
+    sheetAbort.current = null;
   }, []);
 
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      abortAll(); // closing the sheet (or leaving the page) must not leave an analysis running for a result nobody will see
     };
-  }, []);
+  }, [abortAll]);
+
+  /** Stops reading one file (it was skipped); other files go on. */
+  const abortItem = (id: number) => {
+    controllers.current.get(id)?.abort();
+    controllers.current.delete(id);
+  };
 
   // ----- adding files
 
@@ -274,20 +300,46 @@ export function ImportSheet(props: ImportSheetProps) {
     addFiles(props.initialFiles);
   }, [props.initialFiles, addFiles]);
 
-  // ----- reading files: the one being reviewed and the next, so the wait is mostly hidden
+  // ----- reading files: the one being reviewed, then the next one while it is reviewed, so the wait is mostly hidden. Never more than
+  // one file is read at a time apart from that look-ahead: every file read holds its samples and an analysis worker in memory.
+
+  const currentIdRef = useRef<number | null>(null);
+  currentIdRef.current = state.items[state.current]?.id ?? null;
 
   useEffect(() => {
     if (state.step !== 'work') return;
-    const wanted = relinkMode ? [state.current] : [state.current, state.current + 1];
-    for (const index of wanted) {
-      const item = state.items[index];
-      if (!item || item.status !== 'queued' || started.current.has(item.id)) continue;
+    const cur = state.items[state.current];
+    const next = relinkMode ? undefined : state.items[state.current + 1];
+    const start = (item: Item) => {
       started.current.add(item.id);
+      const controller = new AbortController();
+      controllers.current.set(item.id, controller);
       dispatch({ type: 'preparing', id: item.id });
       trainerRef.current
-        .prepareClip(item.file, (p) => alive.current && dispatch({ type: 'progress', id: item.id, progress: p }))
-        .then((prepared) => alive.current && dispatch({ type: 'prepared', id: item.id, prepared }))
-        .catch((err: unknown) => alive.current && dispatch({ type: 'failed', id: item.id, error: messageOf(err, `Could not read ${item.file.name}. Try another file.`) }));
+        .prepareClip(
+          item.file,
+          (p) => {
+            if (!alive.current || controller.signal.aborted) return;
+            dispatch({ type: 'progress', id: item.id, progress: p });
+            // One announcement when the long part starts, not one per percent.
+            if (p.phase === 'analysing' && item.id === currentIdRef.current && !announcedAnalysing.current.has(item.id)) {
+              announcedAnalysing.current.add(item.id);
+              setAnnounce(`Listening for the melody in ${item.file.name}.`);
+            }
+          },
+          controller.signal,
+        )
+        .then((prepared) => alive.current && !controller.signal.aborted && dispatch({ type: 'prepared', id: item.id, prepared }))
+        .catch((err: unknown) => {
+          if (!alive.current || controller.signal.aborted || isAbortError(err)) return; // skipped or closed: nothing to show
+          dispatch({ type: 'failed', id: item.id, error: messageOf(err, `Could not read ${item.file.name}. Try another file.`) });
+        })
+        .finally(() => controllers.current.delete(item.id));
+    };
+    if (cur && cur.status === 'queued' && !started.current.has(cur.id)) start(cur);
+    else if (next && cur && cur.status !== 'queued' && cur.status !== 'preparing' && next.status === 'queued' && !started.current.has(next.id)) {
+      // The look-ahead starts once the file on screen has been read, and only if nothing else is being read.
+      if (!state.items.some((it) => it.status === 'preparing')) start(next);
     }
   }, [state.step, state.items, state.current, relinkMode]);
 
@@ -321,7 +373,8 @@ export function ImportSheet(props: ImportSheetProps) {
 
   useEffect(() => {
     if (!current) return;
-    if (current.status === 'ready') setAnnounce(`${current.file.name} is ready to review.`);
+    if (current.status === 'preparing') setAnnounce(`Reading ${current.file.name}.`);
+    else if (current.status === 'ready') setAnnounce(`${current.file.name} is ready to review.`);
     else if (current.status === 'failed') setAnnounce(`Could not read ${current.file.name}.`);
   }, [current?.id, current?.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -357,9 +410,14 @@ export function ImportSheet(props: ImportSheetProps) {
 
   const unsavedCount = state.items.filter((it) => it.status === 'queued' || it.status === 'preparing' || it.status === 'ready' || it.status === 'saving').length;
   const unsaved = unsavedCount > 0;
+  /** Closes for good: whatever is still being read is stopped first. */
+  const closeNow = () => {
+    abortAll();
+    props.onClose();
+  };
   const requestClose = () => {
     if (unsaved && state.step === 'work') setConfirmClose(true);
-    else props.onClose();
+    else closeNow();
   };
 
   // Escape closes the sheet wherever the focus is (it can fall to the page when the control that had it goes away).
@@ -428,7 +486,7 @@ export function ImportSheet(props: ImportSheetProps) {
                 <button type="button" className="button button--ghost" onClick={() => setConfirmClose(false)}>
                   Keep going
                 </button>
-                <button type="button" className="button button--danger" onClick={props.onClose}>
+                <button type="button" className="button button--danger" onClick={closeNow}>
                   Close without saving
                 </button>
               </div>
@@ -453,7 +511,7 @@ export function ImportSheet(props: ImportSheetProps) {
                 There is nothing to attach the file to. Close this and add the file as a new clip instead.
               </Notice>
               <div className="button-row">
-                <button type="button" className="button button--accent" onClick={props.onClose}>
+                <button type="button" className="button button--accent" onClick={closeNow}>
                   Close
                 </button>
               </div>
@@ -482,9 +540,17 @@ export function ImportSheet(props: ImportSheetProps) {
               sheet={props}
               onSave={save}
               onReattach={reattach}
-              onSkip={(id) => dispatch({ type: 'skip', id })}
+              onSkip={(id) => {
+                abortItem(id);
+                dispatch({ type: 'skip', id });
+              }}
               onNext={() => dispatch({ type: 'next' })}
-              onPickOthers={() => dispatch({ type: 'reset' })}
+              onPickOthers={() => {
+                abortAll();
+                started.current.clear();
+                dispatch({ type: 'reset' });
+              }}
+              streamSignal={() => (sheetAbort.current ??= new AbortController()).signal}
             />
           )}
 
@@ -497,7 +563,7 @@ export function ImportSheet(props: ImportSheetProps) {
                 started.current.clear();
                 dispatch({ type: 'reset' });
               }}
-              onClose={props.onClose}
+              onClose={closeNow}
             />
           )}
         </div>
@@ -619,6 +685,8 @@ function WorkStep(props: {
   onSkip(id: number): void;
   onNext(): void;
   onPickOthers(): void;
+  /** The signal that stops reading a vocal-only file when the sheet closes. */
+  streamSignal(): AbortSignal;
 }) {
   const { item, state, trainer } = props;
   const count = state.items.length;
@@ -660,14 +728,13 @@ function WorkStep(props: {
           singers={trainer.singers}
           position={{ index: state.items.slice(0, state.current).filter((it) => it.status !== 'skipped').length, count: state.items.filter((it) => it.status !== 'skipped').length }}
           storage={trainer.storage}
-          ownedDefault={readOwned()}
-          onOwnedChange={writeOwned}
           saving={item.status === 'saving'}
           saveError={item.saveError}
           onSave={(edits, prepared) => props.onSave(item, edits, prepared)}
           onSkip={count > 1 ? () => props.onSkip(item.id) : undefined}
+          onChooseOther={props.onPickOthers}
           reanalyze={props.sheet.reanalyze ?? reanalyzeClip}
-          prepareStem={(file, onProgress) => trainer.prepareClip(file, onProgress)}
+          prepareStem={(file, onProgress) => trainer.prepareClip(file, onProgress, props.streamSignal())}
           createPlayer={props.sheet.createPlayer}
           banner={
             duplicate ? (
@@ -705,7 +772,7 @@ function PreparingCard(props: { item: Item; onSkip?: () => void }) {
   const phase = p ? PHASE_WORDS[p.phase] : 'Opening the file';
   const label = `${phase}: ${props.item.file.name}`;
   return (
-    <div className="imp-preparing" role="status">
+    <div className="imp-preparing">
       <p className="imp-preparing-name">
         <Icon name="file" size={18} /> <span>{props.item.file.name}</span>
       </p>

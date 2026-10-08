@@ -46,7 +46,7 @@ export const STEM_HELP =
 export const STEM_PROMPT =
   "If you have this song's isolated vocal, add it here: Mimic uses it for the melody and the phrases, and you still hear the whole song while you practise.";
 
-export const OWNERSHIP_LABEL = 'This is a file I own or have the right to practise with. It stays on this device.';
+export const OWNERSHIP_LABEL = 'I own this file or have the right to practise with it.';
 
 export const PRIVACY_NOTE = 'Your files are read on this device and stored only here. Nothing is uploaded, and a backup export never includes audio.';
 
@@ -60,7 +60,21 @@ export const IMPORT_EMPTY_STATE = {
 
 // Reasons a clip cannot be used, and what to do next.
 
-export function littleSingingReason(voicedSec: number): string {
+/** What the analysis knew about a clip with too little singing, to choose the right advice. */
+export interface LittleSingingContext {
+  /** Length of the clip, seconds. */
+  durationSec?: number;
+  /** The clip is silent or nearly so (the analysis raised the quiet issue and found no voice at all). */
+  silent?: boolean;
+}
+
+export function littleSingingReason(voicedSec: number, context: LittleSingingContext = {}): string {
+  if (context.silent && !(voicedSec >= 0.5)) {
+    return 'This clip is silent, or too quiet to hear any singing. Check that you picked the right file, then add it again. A clip with a few seconds of singing works best.';
+  }
+  if (context.durationSec !== undefined && context.durationSec > 0 && context.durationSec < 2) {
+    return `This clip is only ${context.durationSec.toFixed(1)} s long, too short to practise from. Pick a clip with a few seconds of singing.`;
+  }
   const heard =
     !(voicedSec >= 0.5)
       ? 'No clear singing could be heard in this clip'
@@ -69,6 +83,11 @@ export function littleSingingReason(voicedSec: number): string {
     `${heard}, so there is nothing to practise yet; backing music or effects may be covering the voice. ` +
     'Pick a clip with a few seconds of singing, an isolated vocal, or switch on "This is a full song" if the voice is over a band.'
   );
+}
+
+/** The context littleSingingReason needs, read from an analysis. */
+export function littleSingingContext(analysis: { issues?: string[]; durationSec: number; voicedSec: number }): LittleSingingContext {
+  return { durationSec: analysis.durationSec, silent: (analysis.issues ?? []).includes('too-quiet') && !(analysis.voicedSec >= 0.5) };
 }
 
 export const SPEECH_REASON =

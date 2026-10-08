@@ -152,7 +152,7 @@ describe('buildCoachingPlan', () => {
         expect(plan.healthNotes.length).toBeGreaterThan(0);
         expect(plan.headline).toContain(p.name);
         expect(plan.headline).toMatch(/\d+\/100/);
-        expect(plan.headline.split(/(?<=\.)\s/).length).toBeLessThanOrEqual(3);
+        expect(plan.headline.split(/\.\s/).length).toBeLessThanOrEqual(3);
         expect(plan.nextTake.length).toBeGreaterThan(20);
         expect(plan.signatureFocus).toHaveLength(2);
         const moveIds = p.signatureMoves.map((m) => m.id);
@@ -660,7 +660,7 @@ describe('coaching copy never contradicts itself', () => {
   it('calls it head voice in every instruction to an alto, mezzo or soprano', () => {
     const rng = makeRng(31);
     // Bare "falsetto" in an instruction; descriptions of the artist ("Jalen's falsetto") and quoted drill names are fine.
-    const bare = (t: string) => t.replace(/"[^"]*"/g, '').match(/(?<!(?:'s|his) )\bfalsetto\b/i);
+    const bare = (t: string) => Array.from(t.replace(/"[^"]*"/g, '').matchAll(/((?:'s|\bhis) )?\bfalsetto\b/gi)).find((m) => !m[1]) ?? null;
     let checked = 0;
     for (let n = 0; n < 90; n++) {
       const p = SINGERS[n % 3];
@@ -682,6 +682,11 @@ describe('coaching copy never contradicts itself', () => {
     expect(forUserVoice('Find falsetto on a light "ng" hum.', mezzo)).toBe('Find head voice on a light "ng" hum.');
     expect(forUserVoice("Keep Jalen's falsetto in mind.", mezzo)).toBe("Keep Jalen's falsetto in mind.");
     expect(forUserVoice('Find falsetto on a light "ng" hum.', makeFakeAnalysis())).toBe('Find falsetto on a light "ng" hum.');
+    // the "'s " / "his " exception is written without a regex lookbehind (iOS before 16.4 cannot parse one): same results at the edges
+    expect(forUserVoice("Falsetto first. Then Jalen's Falsetto, his falsetto, this falsetto and falsetto/head, falsetto or head voice.", mezzo)).toBe(
+      "Head voice first. Then Jalen's Falsetto, his falsetto, this head voice and head voice, head voice.",
+    );
+    expect(forUserVoice('falsettos and a falsetto.', mezzo)).toBe('falsettos and a head voice.');
   });
 
   it('coaches only the tone on a speech-like take, and puts the recording first', () => {

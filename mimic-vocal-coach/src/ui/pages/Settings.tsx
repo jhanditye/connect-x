@@ -32,11 +32,12 @@ export function SettingsPage() {
   const [modelDraft, setModelDraft] = useState(settings.aiModel);
   const [confirmClear, setConfirmClear] = useState(false);
   const [cleared, setCleared] = useState(false);
+  const [clearError, setClearError] = useState<string | null>(null);
   const clearedRef = useRef<HTMLParagraphElement>(null);
   const clearButtonRef = useRef<HTMLButtonElement>(null);
 
   // The confirmation buttons disappear once used, so move focus to what replaces them: the
-  // "All data cleared." status, or back to "Clear all data" after Cancel.
+  // "All data cleared." status, or back to "Delete everything" after Cancel.
   useEffect(() => {
     if (cleared) clearedRef.current?.focus();
   }, [cleared]);
@@ -284,7 +285,7 @@ export function SettingsPage() {
             </>
           ) : null}
           , your settings and your API key are kept, in this browser’s local storage. Clips you add to the Trainer, their phrases and practice scores are kept on this device too
-          (see Trainer above).
+          (see Trainer above). Deleting only the clips and scores is under Trainer.
         </p>
         {!confirmClear ? (
           <button
@@ -296,10 +297,17 @@ export function SettingsPage() {
               setCleared(false);
             }}
           >
-            Clear all data
+            Delete everything, including settings
           </button>
         ) : (
-          <div className="confirm" role="group" aria-labelledby="confirm-text">
+          <div
+            className="confirm"
+            role="group"
+            aria-labelledby="confirm-text"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') cancelClear();
+            }}
+          >
             <p id="confirm-text">
               Delete your saved progress, settings and API key from this browser, close the current take{trainer ? ', and delete every clip, phrase and practice score in the Trainer' : ''}? This cannot be undone.
             </p>
@@ -308,11 +316,19 @@ export function SettingsPage() {
                 type="button"
                 className="button button--danger"
                 onClick={() => {
-                  app.clearAllData();
-                  // The Trainer's library is its own store; a failure here is reported on the Trainer section's own delete.
-                  void trainer?.clearAll().catch(() => undefined);
-                  setConfirmClear(false);
-                  setCleared(true);
+                  setClearError(null);
+                  // "Cleared" is said only when every place that holds data confirmed it: the Trainer's library is its own store and
+                  // can refuse (a locked or failing IndexedDB), in which case the person is told what is still there and may try again.
+                  const library = trainer ? trainer.clearAll().then(() => null, () => 'your clips and practice scores') : Promise.resolve(null);
+                  void Promise.all([Promise.resolve(app.clearAllData()).then((r) => r?.failed ?? [], () => ['some saved data']), library]).then(([failed, libraryFailed]) => {
+                    const left = [...new Set([...failed, ...(libraryFailed ? [libraryFailed] : [])])];
+                    if (left.length === 0) {
+                      setConfirmClear(false);
+                      setCleared(true);
+                    } else {
+                      setClearError(`Not everything was deleted: ${left.join(' and ')} could not be removed. Tap Yes, delete everything to try again, or clear this site's data in the browser settings (on an iPhone: Settings, Safari, Advanced, Website Data).`);
+                    }
+                  });
                 }}
               >
                 Yes, delete everything
@@ -322,6 +338,11 @@ export function SettingsPage() {
               </button>
             </div>
           </div>
+        )}
+        {clearError && confirmClear && (
+          <p className="field-error" role="alert">
+            {clearError}
+          </p>
         )}
         <p ref={clearedRef} className="field-hint" role="status" tabIndex={-1}>
           {cleared ? 'All data cleared.' : ''}

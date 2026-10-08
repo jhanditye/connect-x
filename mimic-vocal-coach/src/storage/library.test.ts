@@ -393,6 +393,15 @@ describe('findRelinkCandidates', () => {
     expect(findRelinkCandidates([a], { fingerprint: 'x', fileName: 'song.m4a' })).toEqual([]);
   });
 
+  it('treats a decoder that reports the file a few ms longer as the same file, but not a different length or hash', () => {
+    const a = missing({ id: 'a', fingerprint: '100:61200:aaaaaaaaaaaaaaaa@8500', sourceFileName: 'x.m4a', durationSec: 20 });
+    expect(findRelinkCandidates([a], { fingerprint: '100:61201:aaaaaaaaaaaaaaaa' }).map((c) => c.id)).toEqual(['a']);
+    expect(findRelinkCandidates([a], { fingerprint: '100:61499:aaaaaaaaaaaaaaaa' }).map((c) => c.id)).toEqual(['a']);
+    expect(findRelinkCandidates([a], { fingerprint: '100:61600:aaaaaaaaaaaaaaaa' })).toEqual([]);
+    expect(findRelinkCandidates([a], { fingerprint: '101:61200:aaaaaaaaaaaaaaaa' })).toEqual([]);
+    expect(findRelinkCandidates([a], { fingerprint: '100:61200:bbbbbbbbbbbbbbbb' })).toEqual([]);
+  });
+
   it('uses the stored duration when the fingerprint cannot be read', () => {
     const a = missing({ id: 'a', fingerprint: '', sourceFileName: 'song.m4a', durationSec: 30 });
     expect(findRelinkCandidates([a], { fingerprint: 'x', fileName: 'song.m4a', durationSec: 30.1 })).toHaveLength(1);

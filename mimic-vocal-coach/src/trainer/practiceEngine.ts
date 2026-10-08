@@ -15,6 +15,8 @@
 //   - every await after which the world may have changed checks `alive(run)`; a stopped, interrupted or disposed run never reports
 //   - audio is started inside the tap: duplex.prepare() is called before the first await of listen() / sing()
 //   - dispose() releases the microphone, closes the context, aborts guide renders and clears every timer; later calls do nothing
+//   - stop() cancels a take and says so; finish() ends a take that is being recorded and scores what was sung
+//   - the microphone stays open IDLE_CLOSE_MS after a take so Try again is instant, shows as `micOpen`, and releaseMicrophone() closes it at once
 //   - gated takes (no match, low evidence, sounds like the playback) are shown honestly and never counted toward mastery
 
 import { analyzeInWorker } from '../analysis/client';
@@ -58,7 +60,8 @@ export interface PracticeEngineDeps {
   createSession?: () => DuplexSession;
   loadAudio?: typeof loadPhraseAudio;
   analyzePhrase?: typeof analyzePhraseCached;
-  analyzeAttempt?: (samples: Float32Array, sampleRate: number, opts: AnalysisOptions) => Promise<VoiceAnalysis>;
+  /** `signal` aborts when the take is cancelled: a worker that supports it stops the analysis instead of finishing for nobody. */
+  analyzeAttempt?: (samples: Float32Array, sampleRate: number, opts: AnalysisOptions, signal?: AbortSignal) => Promise<VoiceAnalysis>;
   prepareGuide?: typeof preparePlayback;
   listDevices?: typeof listInputDevices;
   prefs?: () => TrainerPrefs;
@@ -73,7 +76,10 @@ export interface PracticeEngineDeps {
 }
 
 const PREFETCH_DELAY_MS = 250;
-const IDLE_CLOSE_MS = 90_000;
+/** How long the microphone stays open after a take (Try again is instant). Short, because the phone shows it as in use and a Bluetooth headset stays in call mode. */
+const IDLE_CLOSE_MS = 30_000;
+/** A Listen / hear-back waits this long for the audio context to run (a call or Siri can hold it) before it says what is wrong. */
+const RESUME_GRACE_MS = 4000;
 const TICK_MS = 50;
 const MIN_RATE = 0.5;
 const MAX_GUIDE_SHIFT = 12;
@@ -98,6 +104,10 @@ interface Run {
   ended: boolean;
   /** The attempt is being saved: stop() no longer cancels, the result will show. */
   committed: boolean;
+  /** A take only: ends the recording now and scores what there is (the Done button). Set once the take runs. */
+  finish: (() => void) | null;
+  /** finish() was called: the duplex's 'stopped' ending is a take to score, not a cancel. */
+  finishing: boolean;
   /** Playhead in phrase seconds for position(). */
   position: (() => number) | null;
   resolveStale(): void;
@@ -161,18 +171,25 @@ function hintFor(keyHint: number | null, keyMode: KeyMode, guideShift: number): 
  * is what keeps a changed key from scoring as nonsense.
  */
 function compareTake(attempt: VoiceAnalysis, ref: VoiceAnalysis, timing: PlayTiming, hint: number | undefined, guideShift: number, toneBias: ReturnType<typeof toneBiasFromCalibration>): PhraseComparison {
-  const first = comparePhrase(attempt, ref, timing, { transposeHint: hint, toneBias, guideShift });
+  // The speed the guide was played at: a take that follows a slowed guide runs 1 / rate times longer than the reference, and the scorer judges tempo against that.
+  const guideRate = timing.rate;
+  const first = comparePhrase(attempt, ref, timing, { transposeHint: hint, toneBias, guideShift, guideRate });
   if (hint === undefined || (first.score.status === 'ok' && first.coverage >= 0.6)) return first;
-  const second = comparePhrase(attempt, ref, timing, { toneBias, guideShift });
+  const second = comparePhrase(attempt, ref, timing, { toneBias, guideShift, guideRate });
   const better = second.score.status === 'ok' && (first.score.status !== 'ok' || second.coverage > first.coverage + 0.1);
   return better ? second : first;
 }
+
+type AnalyzeAttempt = NonNullable<PracticeEngineDeps['analyzeAttempt']>;
+
+/** analyzeInWorker takes the run's AbortSignal as its last parameter (after the progress callback): a cancelled take stops its analysis. */
+const defaultAnalyzeAttempt: AnalyzeAttempt = (samples, sampleRate, opts, signal) => analyzeInWorker(samples, sampleRate, opts, undefined, signal);
 
 export function createPracticeEngine(session: PracticeSession, deps: PracticeEngineDeps = {}): PracticeEngine {
   const { clip, phrase, store, settings } = session;
   const loadAudio = deps.loadAudio ?? loadPhraseAudio;
   const analyzePhrase = deps.analyzePhrase ?? analyzePhraseCached;
-  const analyzeAttempt = deps.analyzeAttempt ?? ((samples, sampleRate, opts) => analyzeInWorker(samples, sampleRate, opts));
+  const analyzeAttempt = deps.analyzeAttempt ?? defaultAnalyzeAttempt;
   const prepareGuide = deps.prepareGuide ?? preparePlayback;
   const listDevices = deps.listDevices ?? listInputDevices;
   const readPrefs = (): TrainerPrefs => {
@@ -206,6 +223,8 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     level: 0,
     reference: null,
     result: null,
+    micOpen: false,
+    speakerConfirmed: false,
   };
   const listeners = new Set<() => void>();
 
@@ -227,6 +246,12 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
   /** Sing-along was refused once for lack of headphones; choosing it again is the confirm tap. */
   let speakerWarned = false;
   let speakerOk = false;
+
+  function setSpeakerOk(on: boolean): void {
+    speakerOk = on;
+    if (!on) speakerWarned = false;
+    emit({ speakerConfirmed: on });
+  }
 
   // ---------------------------------------------------------------------------------------------
   // Snapshot plumbing
@@ -259,7 +284,7 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     // Headphones plugged in or out: the earlier warning and the confirm tap belonged to the old route.
     if (snapshot.route && snapshot.route.headphonesLikely !== route.headphonesLikely) {
       speakerWarned = false;
-      speakerOk = false;
+      setSpeakerOk(false);
     }
     emit({ route });
   }
@@ -273,7 +298,7 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     if (current) endRun(current);
     let resolveStale!: () => void;
     const stale = new Promise<Stale>((res) => (resolveStale = () => res(STALE)));
-    const run: Run = { kind, abort: new AbortController(), stale, stops: [], ended: false, committed: false, position: null, resolveStale };
+    const run: Run = { kind, abort: new AbortController(), stale, stops: [], ended: false, committed: false, finish: null, finishing: false, position: null, resolveStale };
     current = run;
     return run;
   }
@@ -337,11 +362,22 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     offInterrupt?.();
     offInterrupt = null;
     d.close().catch(noop);
+    emit({ micOpen: false });
   }
+
+  /** The microphone is open when the session has an analyser (it exists only while the stream is attached). */
+  const micIsOpen = (): boolean => {
+    try {
+      return !!duplex && !!duplex.analyser;
+    } catch {
+      return false;
+    }
+  };
 
   function armIdle(): void {
     clearTimeout(idleTimer);
     idleTimer = undefined;
+    emit({ micOpen: micIsOpen() });
     if (disposed || !duplex || current) return;
     idleTimer = setTimeout(() => {
       idleTimer = undefined;
@@ -403,6 +439,27 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     }
   }
 
+  /**
+   * Headphones plugged in or out while no audio session is open (before the first tap, after a refusal, after the microphone was
+   * let go): the device list is read again, so the screen asks about headphones from what is true now. An open session does its own.
+   */
+  async function refreshRouteFromList(): Promise<void> {
+    if (duplex) return;
+    try {
+      const devices = await listDevices();
+      if (disposed || duplex || !devices) return;
+      const labels = devices.map((d) => ({ kind: 'audioinput' as const, deviceId: d.id, label: d.label }));
+      const fresh = describeRoute(labels, snapshot.route?.inputLabel ?? '', snapshot.route?.sampleRate ?? 0, snapshot.route?.inputSampleRate ?? null);
+      // A list read while labels are hidden again must not erase names that were known.
+      if (fresh.labelsHidden && snapshot.route && !snapshot.route.labelsHidden) return;
+      setRoute(fresh);
+    } catch {
+      // The route stays as it was.
+    }
+  }
+  const mediaDevices = (globalThis.navigator as Navigator | undefined)?.mediaDevices;
+  const onDeviceChange = (): void => void refreshRouteFromList();
+
   // ---------------------------------------------------------------------------------------------
   // The guide
 
@@ -458,6 +515,36 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
   // ---------------------------------------------------------------------------------------------
   // Playback (Listen, [Original], [You], [Both])
 
+  /**
+   * Resolves true once the audio context is running, false after RESUME_GRACE_MS without it. A call, Siri or another app can hold
+   * the context (iOS 'interrupted', or a resume() that never settles); without this the screen would show "playing" in silence.
+   */
+  function waitRunning(run: Run, ctx: AudioContext): Promise<boolean> {
+    if (String(ctx.state) === 'running') return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (ok: boolean): void => {
+        clearTimeout(timer);
+        try {
+          ctx.removeEventListener('statechange', onState);
+        } catch {
+          // Already gone.
+        }
+        resolve(ok);
+      };
+      const onState = (): void => {
+        if (String(ctx.state) === 'running') finish(true);
+      };
+      try {
+        ctx.addEventListener('statechange', onState);
+      } catch {
+        // No events: the timeout still decides.
+      }
+      timer = setTimeout(() => finish(String(ctx.state) === 'running'), RESUME_GRACE_MS);
+      run.stops.push(() => finish(false));
+    });
+  }
+
   /** Plays `source` under `run` and resolves when it ends or is stopped. */
   function playUnder(run: Run, ctx: AudioContext, source: AudioBuffer | PreparedPlayback, opts: { rate?: number; from?: number; to?: number; loop?: boolean; phraseTime: boolean }): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -500,6 +587,9 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
       if (!guideReady(ctx, opts) && !snapshot.result) emit({ state: 'preparing', message: null, ...calm });
       const guide = await step(run, guideFor(ctx, opts, run.abort.signal));
       if (gone(run, guide)) return;
+      const running = await step(run, waitRunning(run, ctx));
+      if (gone(run, running)) return;
+      if (running !== true) return fail(run, 'interrupted', COPY.audioBusy);
       await playUnder(run, ctx, guide as PreparedPlayback, { from: opts.loop?.from, to: opts.loop?.to, loop: !!opts.loop, phraseTime: true });
     } catch (err) {
       if (!alive(run)) return;
@@ -529,6 +619,9 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
       if (gone(run, route)) return;
       setRoute(route as RouteInfo);
       const ctx = d.context;
+      const running = await step(run, waitRunning(run, ctx));
+      if (gone(run, running)) return;
+      if (running !== true) return fail(run, 'interrupted', COPY.audioBusy);
       if (which === 'you') {
         await playUnder(run, ctx, attemptBuffer(ctx, { samples: take.samples, sampleRate: take.sampleRate }), { rate: 1, phraseTime: false });
       } else {
@@ -598,9 +691,25 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     }, tickMs);
   }
 
+  /** Sing along needs headphones and there are none: say so, switch to listen-then-sing, and start nothing. The microphone is not kept open for it. */
+  function refuseSingAlong(): void {
+    speakerWarned = true;
+    modeSettled = true;
+    emit({ state: restState(), message: COPY.noSpeaker, options: { ...snapshot.options, mode: 'turn-taking' }, ...calm });
+    releaseDuplex();
+  }
+
   async function sing(confirm?: { speakerConfirmed?: boolean }): Promise<void> {
     if (disposed || current?.kind === 'take') return; // a double tap while a take is starting, running or being analysed
-    if (confirm?.speakerConfirmed && snapshot.options.mode === 'sing-along') speakerOk = true;
+    if (confirm?.speakerConfirmed && snapshot.options.mode === 'sing-along') setSpeakerOk(true);
+    // The route names are known (not hidden): the refusal needs no microphone, so none is opened for it.
+    const known = snapshot.route;
+    if (snapshot.options.mode === 'sing-along' && known && !known.labelsHidden && !known.headphonesLikely && !speakerOk) {
+      if (current) endRun(current);
+      clearTimeout(idleTimer);
+      refuseSingAlong();
+      return;
+    }
     const run = begin('take');
     const opts = { ...snapshot.options };
     const d = ensureDuplex();
@@ -632,14 +741,13 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
 
     if (opts.mode === 'sing-along' && !route.headphonesLikely && !speakerOk) {
       // The speaker would leak into the microphone and the score could measure the playback: listen-then-sing instead, and say so.
-      speakerWarned = true;
-      modeSettled = true;
+      // (Only reached when the names were hidden until the microphone was allowed; the microphone is released again.)
       if (!alive(run)) return;
       endRun(run);
-      emit({ state: 'interrupted', message: COPY.noSpeaker, result: null, options: { ...snapshot.options, mode: 'turn-taking' }, ...calm });
-      armIdle();
+      refuseSingAlong();
       return;
     }
+    emit({ micOpen: micIsOpen() });
     const mode = opts.mode === 'sing-along' && (route.headphonesLikely || speakerOk) ? 'sing-along' : 'turn-taking';
 
     try {
@@ -677,6 +785,10 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
       return fail(run, 'error', microphoneMessage(err));
     }
     run.stops.push(() => handle.stop());
+    run.finish = () => {
+      run.finishing = true;
+      handle.stop();
+    };
     lastTake = null;
     // The playhead is where the guide is (count-in and the singer's own turn: nothing to show).
     run.position = () => {
@@ -693,7 +805,7 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     if (!alive(run)) return;
 
     if (take.endedBy === 'interrupted') return fail(run, 'interrupted', interruptionMessage(take.interruptedBy, 'take'));
-    if (take.endedBy === 'stopped') return settle(run); // stopped by something other than stop(): nothing to score
+    if (take.endedBy === 'stopped' && !run.finishing) return settle(run); // stopped by something other than stop() or finish(): nothing to score
     if (!takeIsUsable(take)) return fail(run, 'interrupted', take.samples.length === 0 ? COPY.empty : COPY.gap);
 
     emit({ state: 'processing', ...calm });
@@ -720,7 +832,7 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     const trimmed: TrimmedTake = trimTake(take, mode);
     const probe: ClickProbe | null = take.clickTimesInCaptureSec.length > 0 ? probeClicks(take.samples, take.sampleRate, take.clickTimesInCaptureSec) : null;
 
-    const analysed = await step(run, analyzeAttempt(trimmed.samples, trimmed.sampleRate, analysisOptions));
+    const analysed = await step(run, analyzeAttempt(trimmed.samples, trimmed.sampleRate, analysisOptions, run.abort.signal));
     if (gone(run, analysed)) return;
     const attemptAnalysis = analysed as VoiceAnalysis;
 
@@ -800,7 +912,7 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     if (patch.mode === 'sing-along' || patch.mode === 'turn-taking') {
       next.mode = patch.mode;
       modeSettled = true;
-      if (patch.mode === 'sing-along' && speakerWarned) speakerOk = true; // choosing it again after the warning is the confirm tap
+      if (patch.mode === 'sing-along' && speakerWarned) setSpeakerOk(true); // choosing it again after the warning is the confirm tap
     }
     if (typeof patch.countInBeats === 'number' && Number.isFinite(patch.countInBeats)) next.countInBeats = clamp(Math.round(patch.countInBeats), 2, 4);
     if (patch.loop !== undefined) {
@@ -816,13 +928,34 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     if (next.rate !== cur.rate || next.guideShift !== cur.guideShift) schedulePrefetch();
   }
 
+  /** Stops the guide, or cancels a take (before it is scored) and says so, so the screen is never left looking as if nothing happened. */
   function stop(): void {
     if (disposed) return;
     const run = current;
     if (!run || run.committed) return;
+    const wasTake = run.kind === 'take';
     endRun(run);
-    emit({ state: restState(), message: null, ...calm });
+    emit({ state: restState(), message: wasTake ? COPY.cancelled : null, ...calm });
     armIdle();
+  }
+
+  /** The Done button: while recording, end the take now and score what was sung. Anywhere else it is stop(). */
+  function finish(): void {
+    if (disposed) return;
+    const run = current;
+    if (run && !run.committed && !run.ended && run.kind === 'take' && run.finish && snapshot.state === 'singing') {
+      run.finish();
+      return;
+    }
+    stop();
+  }
+
+  /** Turns the microphone and the audio context off now (the "Turn off" button). Does nothing while a guide plays or a take runs. */
+  function releaseMicrophone(): void {
+    if (disposed || current) return;
+    clearTimeout(idleTimer);
+    idleTimer = undefined;
+    releaseDuplex();
   }
 
   function dispose(): void {
@@ -839,6 +972,11 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     loadCtl.abort();
     memo = null;
     lastTake = null;
+    try {
+      mediaDevices?.removeEventListener?.('devicechange', onDeviceChange);
+    } catch {
+      // Already gone.
+    }
     releaseDuplex();
     emit({ state: 'closed', countIn: null, liveMidi: null, level: 0 });
     listeners.clear();
@@ -846,6 +984,11 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
 
   // The reference and the route load in the background; Listen and Sing wait for them (and retry a failed load).
   void probeRoute();
+  try {
+    mediaDevices?.addEventListener?.('devicechange', onDeviceChange);
+  } catch {
+    // No device events here: the route is read at each Sing.
+  }
   ensureLoaded().catch((err: unknown) => {
     if (disposed || isAbort(err) || current) return;
     emit({ state: 'error', message: loadMessage(err) });
@@ -874,6 +1017,8 @@ export function createPracticeEngine(session: PracticeSession, deps: PracticeEng
     listen,
     sing,
     stop,
+    finish,
+    releaseMicrophone,
     playAttempt,
     dispose,
   };

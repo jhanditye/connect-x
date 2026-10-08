@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { makeDemoTake } from './demo';
-import { synthMelody, whiteNoise } from '../testing/synth';
+import { mix, synthMelody, whiteNoise } from '../testing/synth';
 import type { VoiceAnalysis } from '../types';
 import { analyzeTake } from './analyze';
 
@@ -38,6 +38,17 @@ describe('solo analyses are bit-for-bit what they were before mix mode', () => {
 
   it('white noise (tenor)', () => {
     expect(digest(analyzeTake(whiteNoise(3, 0.05, 22050), 22050, { voiceType: 'tenor' }))).toBe('5487d34cd3ec87c2:70928');
+  });
+
+  it('a sung line with background noise, which the lead-vocal comparison looks at (no silence to measure SNR from) and agrees with', () => {
+    // Digest taken from the code before the comparison existed: when the two trackers agree, nothing in the analysis moves.
+    const notes = [55, 57, 59, 62, 64, 62, 59, 57, 55, 57, 59, 62].map((midi) => ({ midi, durSec: 0.45 }));
+    const x = synthMelody(notes, { sampleRate: 22050, vibrato: { rateHz: 5.5, extentCents: 30, delaySec: 0.2 } });
+    const noisy = mix(x, whiteNoise(x.length / 22050, 0.02, 22050, 11));
+    const a = analyzeTake(noisy, 22050, { voiceType: 'baritone' });
+    expect(a.issues).not.toContain('accompaniment');
+    expect(digest(a)).toBe('bf3b6d7777b75d64:184672');
+    expect(digest(analyzeTake(x, 22050, { voiceType: 'baritone' }))).toBe('3927467a26f69d8b:182722');
   });
 
   it('carries no mode and no lead-extraction field', () => {

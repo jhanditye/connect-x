@@ -22,6 +22,19 @@ export const MAX_RASP_REFERENCE = 0.25;
 const ORD = { chest: 0, mix: 1, head: 2 } as const;
 const LABEL: Record<ToneKey, string> = { breathiness: 'Breathiness', brightness: 'Brightness', rasp: 'Rasp' };
 
+/** Reference rasp index above which the reference counts as rough (roughness also reads as breathiness; see scoreTone). */
+const REF_ROUGH = 0.1;
+const TONE_ESTIMATE = ' This is an estimate: your microphone and the vowel you sing move it too.';
+
+/**
+ * 'a little' | 'clearly' | 'much' for a tone difference of `mag` index units against a dead zone of `dead`: by how many dead zones it
+ * is past (under 1.6, under 2.6, beyond). The one size scale for the fix card and the tone panel.
+ */
+export function toneSize(mag: number, dead: number): 'a little' | 'clearly' | 'much' {
+  const strength = dead > 0 ? mag / dead : Infinity;
+  return strength < 1.6 ? 'a little' : strength < 2.6 ? 'clearly' : 'much';
+}
+
 export interface ToneDiff {
   key: ToneKey;
   user: number;
@@ -136,37 +149,51 @@ export function scoreTone(ctx: Ctx, T: number): SkillResult {
     const c = comps.find((x) => x.id === id);
     return c && c.score !== null ? (c.weight / cw) * (100 - c.score) : 0;
   };
+  // Rasp and breathiness are read from overlapping evidence (a rough voice also measures as less periodic, so as "airier"). When the rasp
+  // index differs past its own dead zone, rasp is the better explanation: breathiness advice then ranks below it, and "let more air in"
+  // is never given to copy a reference that has any roughness (it would be adding air to copy grit).
+  const raspD = diffs.find((d) => d.key === 'rasp');
+  const raspDiffers = !!raspD && Math.abs(raspD.corrected) > raspD.dead;
+  const refRough = (ctx.ref.a.style.rasp ?? 0) > REF_ROUGH;
   for (const d of diffs) {
     const c = comps.find((x) => x.id === `tone.${d.key}`) as ScoreComponent;
     if ((c.score as number) >= 75) continue;
-    const mag = Math.abs(d.corrected);
-    const size = mag < d.dead + 0.1 ? 'a little' : mag < d.dead + 0.25 ? 'clearly' : 'much';
+    const size = toneSize(Math.abs(d.corrected), d.dead);
     const more = d.corrected > 0;
     if (d.key === 'breathiness') {
+      if (!more && (raspDiffers || refRough)) {
+        insights.push({
+          id: 'tone.breathiness', skill: 'tone', kind: 'info', title: 'Firmer than the reference',
+          text: `Your tone is ${size} firmer and cleaner than the reference, whose sound has some roughness in it. That is not something to copy by adding air.${TONE_ESTIMATE}`,
+          advice: '', lossSkill: 0, notes: [],
+        });
+        continue;
+      }
+      const raspLoss = raspD && raspDiffers && raspD.corrected > 0 ? loss('tone.rasp') : Infinity;
       insights.push({
         id: 'tone.breathiness', skill: 'tone', kind: 'fix', title: more ? 'Airier than the reference' : 'Firmer than the reference',
-        text: `Your tone is ${size} ${more ? 'airier' : 'firmer and cleaner'} than the reference (breathiness ${d.user.toFixed(2)} vs ${d.ref.toFixed(2)}).`,
+        text: `Your tone is ${size} ${more ? 'airier' : 'firmer and cleaner'} than the reference.${TONE_ESTIMATE}`,
         advice: more ? 'Close the sound up a little: say "nay" or "gee" on the melody at a comfortable volume, then relax it into the vowel. Do not push; it should feel easy.' : 'Let a little more air into the tone, like a sung sigh on the vowel, staying light and relaxed.',
-        lossSkill: loss(c.id), notes: [],
+        lossSkill: Math.min(loss(c.id), raspLoss * 0.9), notes: [],
       });
     } else if (d.key === 'brightness') {
       insights.push({
         id: 'tone.brightness', skill: 'tone', kind: 'fix', title: more ? 'Brighter than the reference' : 'Darker than the reference',
-        text: `Your tone is ${size} ${more ? 'brighter and more forward' : 'darker and rounder'} than the reference (brightness ${d.user.toFixed(2)} vs ${d.ref.toFixed(2)}).`,
+        text: `Your tone is ${size} ${more ? 'brighter and more forward' : 'darker and rounder'} than the reference.${TONE_ESTIMATE}`,
         advice: more ? 'Round the vowel a touch (more "oh" shape), relax the jaw and keep the sound at the same easy volume.' : 'Narrow the vowel slightly toward "ee"/"eh" and aim the sound forward; do not get louder to do it.',
         lossSkill: loss(c.id), notes: [],
       });
     } else if (more) {
       insights.push({
         id: 'tone.rasp', skill: 'tone', kind: 'fix', title: 'More grit than the reference',
-        text: `There is more rasp in your tone than in the reference (${d.user.toFixed(2)} vs ${d.ref.toFixed(2)}).`,
+        text: `There is more rasp in your tone than in the reference.${TONE_ESTIMATE}`,
         advice: 'Back off to a cleaner tone: lighter, more breath flow. If your throat feels scratchy or tight, stop and rest your voice.',
         lossSkill: loss(c.id), notes: [],
       });
     } else {
       insights.push({
         id: 'tone.rasp', skill: 'tone', kind: 'info', title: 'Cleaner than the reference',
-        text: `The reference has a little grit that your clean tone does not (${d.ref.toFixed(2)} vs ${d.user.toFixed(2)}). That is not something to force.`,
+        text: 'The reference has a little grit that your clean tone does not. That is not something to force.',
         advice: 'Do not manufacture grit by squeezing; a clean tone is a healthy choice.', lossSkill: 0, notes: [],
       });
     }

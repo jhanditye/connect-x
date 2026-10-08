@@ -67,7 +67,7 @@
   -webkit-user-select: none;
 }
 @media (hover: hover) {
-  .tr-chip:hover:not(:disabled) {
+  .tr-chip:hover:not(:disabled):not([aria-disabled='true']) {
     border-color: var(--ink-3);
   }
 }
@@ -76,7 +76,8 @@
   border-color: var(--accent);
   color: var(--accent-ink);
 }
-.tr-chip:disabled {
+.tr-chip:disabled,
+.tr-chip[aria-disabled='true'] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -133,7 +134,8 @@
   transform: translateX(20px);
   background: var(--accent-ink);
 }
-.tr-switch input:disabled {
+.tr-switch input:disabled,
+.tr-switch input[aria-disabled='true'] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -413,6 +415,9 @@ a.button {
 }
 
 /* The Add clips button floats above the tab bar so it stays under the thumb. */
+.tr-add-head {
+  margin-top: var(--space-3);
+}
 .tr-dock {
   position: sticky;
   bottom: calc(76px + env(safe-area-inset-bottom));
@@ -986,7 +991,8 @@ a.button {
   border-color: var(--accent);
   color: var(--accent-ink);
 }
-.ps-chip:disabled {
+.ps-chip:disabled,
+.ps-chip[aria-disabled='true'] {
   opacity: 0.5;
 }
 
@@ -1122,7 +1128,12 @@ a.button {
   background: var(--ink);
   color: var(--paper);
 }
+.pc-listen svg,
+.pc-sing svg {
+  flex: none;
+}
 .pc-sing-dot {
+  flex: none;
   width: 16px;
   height: 16px;
   border-radius: 50%;
@@ -1130,7 +1141,9 @@ a.button {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-ink) 35%, transparent);
 }
 .pc-listen:disabled,
-.pc-sing:disabled {
+.pc-sing:disabled,
+.pc-listen[aria-disabled='true'],
+.pc-sing[aria-disabled='true'] {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1313,7 +1326,8 @@ a.button {
 .rs-notechip--flag svg {
   color: var(--warn);
 }
-.rs-notechip:disabled {
+.rs-notechip:disabled,
+.rs-notechip[aria-disabled='true'] {
   opacity: 0.6;
   cursor: default;
 }
@@ -1478,14 +1492,18 @@ a.button {
 }
 .pp-clip-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
+  gap: 0 var(--space-3);
   font-size: var(--fs-sm);
 }
 .pp-clip-name {
   display: inline-flex;
   align-items: center;
+  /* With large text the count wraps under the name instead of squeezing the name into a one-letter column. */
+  flex: 1 1 8rem;
+  min-width: min(8rem, 100%);
   min-height: 44px;
   font-weight: 700;
   overflow-wrap: anywhere;

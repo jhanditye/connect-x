@@ -118,8 +118,8 @@ describe('words and the adapter', () => {
       [{ key: 'vibratoStart', diff: 0.95, strength: 3.8 }, /about 0\.9 s later|about 1\.0 s later|about 0\.95 s later/],
       [{ key: 'vibratoRateHz', diff: -1.2, strength: 1.2 }, /slower than the original by 1\.2 Hz/],
       [{ key: 'vibratoExtentCents', diff: 25, strength: 1.3 }, /wider than the original by about 25 cents/],
-      [{ key: 'level', diff: 5, strength: 1, detail: 'E4,F4' }, /Louder than the original on E4,F4/],
-      [{ key: 'level', diff: -5, strength: 1, detail: 'E4,F4' }, /no need to push/],
+      [{ key: 'level', diff: 5, strength: 1, detail: 'E4, F4' }, /leaned in more than the original does on E4, F4/],
+      [{ key: 'level', diff: -5, strength: 1, detail: 'E4, F4' }, /held back more than the original does.*no need to push/],
     ];
     for (const [f, re] of cases) {
       const w = toneWords(f);

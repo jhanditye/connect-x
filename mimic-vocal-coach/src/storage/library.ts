@@ -5,7 +5,7 @@
 // Parsing follows storage/history.ts and measurements.ts: every field is checked, malformed entries are dropped with a
 // warning, nothing is half-read, and a record written by a NEWER app version is refused rather than guessed at.
 
-import { parseFingerprint, sourceKey } from '../audio/pcm';
+import { parseFingerprint, sameSourceFile } from '../audio/pcm';
 import { afterAttempt, MIN_MASTER_RATE, type AttemptLite } from '../trainer/srs';
 import type {
   AnalysisIssue,
@@ -117,9 +117,10 @@ export function buildLibraryExport(clips: ClipRecord[], attempts: AttemptRecord[
   };
 }
 
-/** mimic-library-2026-10-08.json */
+/** mimic-library-2026-10-08.json, named for the person's own calendar day (a backup made at 9 pm in California is not "tomorrow"). */
 export function exportFileName(now: Date = new Date()): string {
-  return `mimic-library-${now.toISOString().slice(0, 10)}.json`;
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `mimic-library-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.json`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -516,8 +517,9 @@ const SAME_DURATION_SEC = 0.3;
 const stripExt = (n: string): string => n.replace(/\.[a-z0-9]{1,5}$/i, '').trim().toLowerCase();
 
 /**
- * Clips that this file probably is, best match first: an exact fingerprint, then the same file name with a duration within
- * 0.3 s. Only clips whose audio is missing are offered unless `includeWithAudio` is set (a duplicate-import warning).
+ * Clips that this file probably is, best match first: the same fingerprint (size and content hash; the decoded length may differ by
+ * 0.3 s), then the same file name with a duration within 0.3 s of the SOURCE file's length (read from the fingerprint: a clip's own
+ * duration is only the excerpt that was kept). Only clips whose audio is missing are offered unless `includeWithAudio` is set (a duplicate-import warning).
  */
 export function findRelinkCandidates(clips: ClipRecord[], probe: FileProbe, opts: { includeWithAudio?: boolean } = {}): ClipRecord[] {
   const exact: ClipRecord[] = [];
@@ -525,7 +527,7 @@ export function findRelinkCandidates(clips: ClipRecord[], probe: FileProbe, opts
   const probeName = probe.fileName ? stripExt(probe.fileName) : '';
   for (const c of clips) {
     if (!opts.includeWithAudio && !c.audioMissing) continue;
-    if (probe.fingerprint && c.fingerprint && sourceKey(c.fingerprint) === sourceKey(probe.fingerprint)) {
+    if (probe.fingerprint && c.fingerprint && sameSourceFile(c.fingerprint, probe.fingerprint)) {
       exact.push(c);
       continue;
     }

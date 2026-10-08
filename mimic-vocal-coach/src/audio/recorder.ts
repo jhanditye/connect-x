@@ -2,8 +2,9 @@
 // suppression, automatic gain) is switched off because it gates quiet breathy tone, pumps the
 // level and smears harmonics, which would corrupt every measurement the analysis makes.
 
-import { setAudioSessionType } from './audioSession';
+import { prepareForCapture } from './audioSession';
 import { loadMicChoice, looksBluetooth } from './micChoice';
+import { isIos, isNativeApp, isStandalone, readEnv } from '../pwa/platform';
 import { keepScreenAwake, type ScreenWakeLock } from './wakeLock';
 
 export type RecorderErrorKind = 'denied' | 'unsupported' | 'no-device';
@@ -60,7 +61,22 @@ export const MAX_RECORD_SEC = 300;
 const MSG_UNSUPPORTED = 'This browser does not give web pages microphone access.';
 const MSG_INSECURE = 'The microphone only works on secure (https) pages, and this page is not one.';
 const MSG_FRAME = 'This page is embedded in a frame that does not allow the microphone.';
-const MSG_DENIED = 'Microphone access was blocked. Allow it in your browser’s site settings, then try again.';
+const MSG_DENIED_GENERIC = 'Microphone access was blocked. Allow it in your browser’s site settings, then try again.';
+
+/** Where to turn the microphone back on, in the words of the device: an iPhone has no "site settings". */
+export function deniedMessage(): string {
+  try {
+    const env = readEnv();
+    if (isNativeApp(env)) return 'Microphone access was blocked. Open Settings, then Mimic, turn on Microphone, then try again.';
+    if (isIos(env) && isStandalone(env)) {
+      return 'Microphone access was blocked. Open Settings, then Safari, then Microphone, and choose Ask or Allow; then open Mimic again. If it still does not ask, remove Mimic from your Home Screen and add it again.';
+    }
+    if (isIos(env)) return 'Microphone access was blocked. Tap aA in the address bar, then Website Settings, then Microphone, and choose Allow (or open Settings, then Safari, then Microphone). Then try again.';
+  } catch {
+    // Not a browser we can read: the general words do.
+  }
+  return MSG_DENIED_GENERIC;
+}
 const MSG_NO_DEVICE = 'No microphone was found. Plug one in or check your system sound settings.';
 const MSG_BUSY = 'The microphone is busy or failed to start (another app may be using it).';
 
@@ -89,7 +105,7 @@ export function toRecorderError(err: unknown): RecorderError {
   switch (name) {
     case 'NotAllowedError':
     case 'PermissionDeniedError':
-      return new RecorderError('denied', MSG_DENIED);
+      return new RecorderError('denied', deniedMessage());
     case 'SecurityError':
       return new RecorderError('denied', `${MSG_FRAME} (or the browser blocked it for security reasons).`);
     case 'NotFoundError':
@@ -329,8 +345,10 @@ export function createRecorder(): Recorder {
       const Ctor = audioContextCtor();
       if (!Ctor) throw new RecorderError('unsupported', MSG_UNSUPPORTED);
       interrupted = null;
+      // Ask to keep the screen on now, inside the tap: Safari grants the lock only within about 5 s of a touch, and a first-time permission sheet takes longer.
+      wake ??= keepScreenAwake();
       // A 'playback' session left over from the practice tones would stop the microphone from capturing.
-      setAudioSessionType('auto');
+      prepareForCapture();
       // Create and resume the context before awaiting the permission prompt: iOS Safari only lets
       // audio start synchronously inside the tap that called start().
       let resumed: Promise<void> = Promise.resolve();
@@ -386,7 +404,6 @@ export function createRecorder(): Recorder {
             else void audioCtx.resume().catch(() => undefined);
           });
         }
-        wake = keepScreenAwake();
         watchdog = setTimeout(() => {
           if (active && captured === 0) interrupt('no-audio');
         }, WATCHDOG_MS);

@@ -47,7 +47,9 @@ function PhraseRow(props: { clip: ClipRecord; phrase: PhraseRecord; now: number 
           <span className="num">{phraseLength(p.voicedEnd - p.voicedStart)}</span>
           {sum && sum.lowMidi !== null && sum.highMidi !== null && (
             <>
+              {/* Seen as a dot; read (and named) as a comma, so the card is "7.3 s, G3–E4" and not "7.3 sG3–E4". */}
               <span aria-hidden="true"> · </span>
+              <span className="visually-hidden">, </span>
               <span className="num">{noteRange(sum.lowMidi, sum.highMidi)}</span>
             </>
           )}
@@ -88,6 +90,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
   const renameInput = useRef<HTMLInputElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
+  const editHeading = useRef<HTMLHeadingElement>(null);
   // The waveform and pitch line under the phrase editor, and a way to hear a phrase: loaded only while the editor is open.
   const editorAudio = useClipAudio(trainer, clip, editing !== null);
   const playerRef = useRef<SamplePlayer | null>(null);
@@ -162,7 +165,10 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
   const start = firstOpen ?? visible[0];
   const startsAtFirst = !start || start.id === visible[0]?.id;
 
+  // While a change is being saved the controls stay where they are (aria-disabled, not disabled), so the one just pressed keeps keyboard
+  // and VoiceOver focus; this guard is what makes them inert.
   const run = async (task: () => Promise<void>, done?: string) => {
+    if (busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -212,8 +218,11 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
   const toggleTargets = (on: boolean) => void run(() => trainer.setContributes(clip.id, on), on ? `Counting toward ${who}'s targets.` : 'No longer counting toward targets.');
 
   const beginEdit = () => {
+    if (busy) return;
     setError(null);
     setEditing(segmentsFromRecords(clip.phrases));
+    // The Edit phrases button leaves with the page it was on: focus the editor's heading, not <body>.
+    requestAnimationFrame(() => editHeading.current?.focus());
   };
 
   const playPhrase = async (index: number) => {
@@ -233,6 +242,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
   };
 
   const cancelEdit = () => {
+    if (busy) return;
     stopPlayback();
     setEditing(null);
     requestAnimationFrame(() => editButton.current?.focus());
@@ -299,7 +309,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
                   }
                 }}
               />
-              <button type="submit" className="button button--accent" disabled={busy}>
+              <button type="submit" className="button button--accent" aria-disabled={busy || undefined}>
                 Save
               </button>
               <button
@@ -410,7 +420,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
             ) : (
               <span className="field-hint">{clip.audioMissing ? 'Add the file again to practise.' : 'This clip has no phrases to practise. Use Edit phrases to add one.'}</span>
             )}
-            <button ref={editButton} type="button" className="button button--ghost" onClick={beginEdit} disabled={busy}>
+            <button ref={editButton} type="button" className="button button--ghost" onClick={beginEdit} aria-disabled={busy || undefined}>
               <Icon name="edit" size={16} /> Edit phrases
             </button>
           </div>
@@ -449,7 +459,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
         </>
       ) : (
         <section className="cl-section" aria-labelledby="cl-edit-h">
-          <h2 id="cl-edit-h" className="section-title">
+          <h2 id="cl-edit-h" ref={editHeading} tabIndex={-1} className="section-title">
             Edit phrases
           </h2>
           <p className="section-sub">
@@ -486,10 +496,10 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
             </Notice>
           )}
           <div className="button-row">
-            <button type="button" className="button button--accent" onClick={() => void saveEdit()} disabled={busy || problems.length > 0}>
+            <button type="button" className="button button--accent" onClick={() => void saveEdit()} aria-disabled={busy || problems.length > 0 || undefined}>
               <Icon name="save" size={16} /> Save phrases
             </button>
-            <button type="button" className="button button--ghost" onClick={cancelEdit} disabled={busy}>
+            <button type="button" className="button button--ghost" onClick={cancelEdit} aria-disabled={busy || undefined}>
               Cancel
             </button>
           </div>
@@ -505,11 +515,11 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
           <legend className="field-label">Whose voice is it?</legend>
           <div className="tr-filter" role="group" aria-label="Singer">
             {trainer.singers.map((s) => (
-              <button key={s.id} type="button" className="tr-chip" aria-pressed={clip.singerId === s.id} onClick={() => pickSinger(s.id)} disabled={busy}>
+              <button key={s.id} type="button" className="tr-chip" aria-pressed={clip.singerId === s.id} onClick={() => pickSinger(s.id)} aria-disabled={busy || undefined}>
                 {s.name}
               </button>
             ))}
-            <button type="button" className="tr-chip" aria-pressed={clip.singerId === null} onClick={() => pickSinger(null)} disabled={busy}>
+            <button type="button" className="tr-chip" aria-pressed={clip.singerId === null} onClick={() => pickSinger(null)} aria-disabled={busy || undefined}>
               Someone else
             </button>
           </div>
@@ -542,7 +552,8 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
               type="checkbox"
               role="switch"
               checked={clip.contributesToSinger}
-              disabled={busy || (blocker !== null && !clip.contributesToSinger)}
+              disabled={blocker !== null && !clip.contributesToSinger}
+              aria-disabled={busy || undefined}
               onChange={(e) => toggleTargets(e.currentTarget.checked)}
               aria-describedby={`${ids.singer}-hint`}
             />
@@ -583,7 +594,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
           <div className="confirm" role="group" aria-labelledby="cl-delete-q">
             <p id="cl-delete-q">Delete this clip, its phrases and every practice score from this device? This cannot be undone.</p>
             <div className="button-row">
-              <button type="button" className="button button--danger" onClick={() => void deleteClip()} disabled={busy}>
+              <button type="button" className="button button--danger" onClick={() => void deleteClip()} aria-disabled={busy || undefined}>
                 Yes, delete the clip
               </button>
               <button

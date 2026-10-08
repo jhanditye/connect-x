@@ -4,11 +4,13 @@
 //   first visit       -> worker installs and precaches everything -> state.offlineReady = true
 //   later deploy      -> new worker installs in the background and waits -> state.updateReady = true
 //   user taps Update  -> applyUpdate() posts SKIP_WAITING; on controllerchange the page reloads once
+//   other tabs        -> never reloaded behind the user's back: they keep running their old code and say "updated in another tab"
+//   busy tab          -> a tab that is recording or analysing (markBusy) defers its own update and its reload until the take is done
 // iOS keeps a Home Screen web app alive in the app switcher for days without navigating, and browsers
 // only check for a new worker on navigation, so we also ask for an update whenever the app comes back
 // to the foreground (at most every 30 minutes) and when the network returns.
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { detectNative } from './platform';
 
 export interface PwaState {
@@ -20,14 +22,37 @@ export interface PwaState {
   updateReady: boolean;
   /** Build id of the running worker once known (the cache name suffix). */
   version: string | null;
+  /** The person hid the "new version" bar; it comes back at the next foreground check or in Settings. */
+  updateDismissed: boolean;
+  /** This tab is recording or analysing, so applying the update waits until the take is done. */
+  busy: boolean;
+  /** The person pressed Update while busy: it will be applied as soon as the take is done. */
+  updateQueued: boolean;
+  /** Another tab applied an update. This tab still runs the old code and should be reloaded when convenient. */
+  updatedElsewhere: boolean;
 }
 
-let state: PwaState = { supported: false, offlineReady: false, updateReady: false, version: null };
+let state: PwaState = {
+  supported: false,
+  offlineReady: false,
+  updateReady: false,
+  version: null,
+  updateDismissed: false,
+  busy: false,
+  updateQueued: false,
+  updatedElsewhere: false,
+};
 const listeners = new Set<() => void>();
 let registration: ServiceWorkerRegistration | null = null;
 let started = false;
 let reloading = false;
 let lastCheck = 0;
+/** True only in the tab where the person pressed Update: controllerchange reloads that tab and no other. */
+let applying = false;
+/** The new worker took over while this tab was busy: reload once the take is done. */
+let reloadWhenIdle = false;
+let hadController = false;
+const busyTokens = new Set<symbol>();
 
 const CHECK_EVERY_MS = 30 * 60 * 1000;
 
@@ -45,6 +70,54 @@ export function getPwaState(): PwaState {
 }
 export function usePwa(): PwaState {
   return useSyncExternalStore(subscribePwa, getPwaState, getPwaState);
+}
+
+/**
+ * Tell the update flow that this tab must not be reloaded: a recording, a take being analysed, a practice attempt. Returns the function
+ * that says it is over. While anything is busy, "Update now" is queued and a reload for an update waits.
+ */
+export function markBusy(): () => void {
+  const token = Symbol('busy');
+  busyTokens.add(token);
+  if (!state.busy) set({ busy: true });
+  return () => {
+    if (!busyTokens.delete(token)) return;
+    if (busyTokens.size > 0) return;
+    set({ busy: false });
+    if (reloadWhenIdle) reloadNow();
+    else if (state.updateQueued) applyUpdate();
+  };
+}
+export function isBusy(): boolean {
+  return busyTokens.size > 0;
+}
+/** React: this component's screen is busy while `active` is true. */
+export function useMarkBusy(active: boolean): void {
+  useEffect(() => {
+    if (!active) return;
+    return markBusy();
+  }, [active]);
+}
+
+function reloadNow(): void {
+  if (reloading) return;
+  reloading = true;
+  location.reload();
+}
+
+/** Hide the "new version" bar for now. It returns on the next foreground check (see checkForUpdate) and stays in Settings. */
+export function dismissUpdate(): void {
+  set({ updateDismissed: true });
+}
+
+/** Reload this tab so it runs the version another tab installed. Waits while a take is running. */
+export function reloadForUpdate(): void {
+  if (isBusy()) {
+    reloadWhenIdle = true;
+    set({ updateQueued: true });
+    return;
+  }
+  reloadNow();
 }
 
 function watch(worker: ServiceWorker | null): void {
@@ -67,6 +140,8 @@ function askVersion(): void {
 /** Ask the browser to look for a newer sw.js now. Cheap; safe to call often (throttled by callers). */
 export async function checkForUpdate(): Promise<void> {
   lastCheck = Date.now();
+  // A bar the person hid comes back with each check while the update is still waiting.
+  if (state.updateDismissed) set({ updateDismissed: false });
   try {
     await registration?.update();
   } catch {
@@ -74,13 +149,22 @@ export async function checkForUpdate(): Promise<void> {
   }
 }
 
-/** Activate the waiting worker and reload once it takes over. */
+/**
+ * Activate the waiting worker and reload this tab once it takes over. Only the tab that asks is reloaded. If a take is being recorded
+ * or analysed here, nothing happens yet: the request is queued and runs when the take is done (state.updateQueued tells the screen).
+ */
 export function applyUpdate(): void {
-  const waiting = registration?.waiting;
-  if (!waiting) {
-    location.reload();
+  if (isBusy()) {
+    if (!state.updateQueued) set({ updateQueued: true });
     return;
   }
+  if (state.updateQueued) set({ updateQueued: false });
+  const waiting = registration?.waiting;
+  if (!waiting) {
+    reloadNow();
+    return;
+  }
+  applying = true;
   waiting.postMessage({ type: 'SKIP_WAITING' });
 }
 
@@ -97,14 +181,24 @@ export function startPwa(): void {
   // Production builds only; the single-file build (--mode single) ships no sw.js.
   if (!import.meta.env.PROD || import.meta.env.MODE === 'single' || (typeof isSecureContext !== 'undefined' && !isSecureContext)) return;
   started = true;
+  hadController = !!navigator.serviceWorker.controller;
   set({ supported: true });
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (reloading) return;
-    // The very first install also fires controllerchange (clients.claim): only reload when replacing a worker.
-    if (!state.updateReady) return;
-    reloading = true;
-    location.reload();
+    const replaced = hadController;
+    hadController = true;
+    if (!applying) {
+      // The very first install also fires controllerchange (clients.claim): that is not an update. Otherwise another tab applied one;
+      // this tab keeps running its current code (it may be mid-take) and offers a reload instead of doing one.
+      if (replaced || state.updateReady) set({ updatedElsewhere: true, updateReady: false, updateQueued: false });
+      return;
+    }
+    if (isBusy()) {
+      reloadWhenIdle = true;
+      return;
+    }
+    reloadNow();
   });
   navigator.serviceWorker.addEventListener('message', (e: MessageEvent<{ type?: string; version?: string }>) => {
     if (e.data?.type === 'VERSION' && e.data.version) set({ version: e.data.version });

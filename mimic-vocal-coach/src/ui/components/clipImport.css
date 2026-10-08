@@ -752,3 +752,26 @@ html.imp-open body {
   min-height: 44px;
   margin-top: var(--space-1);
 }
+
+/* Controls that cannot do anything right now stay in the tab order (aria-disabled) so the focus is never dropped to the page. */
+.icon-button[aria-disabled='true'],
+.rev-switch input[aria-disabled='true'] ~ * {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The ownership tick sits in the pinned footer next to Save: keep it compact (the 44 px target is the whole row). */
+.rev-owned {
+  padding: 0;
+}
+.rev-owned > span {
+  padding-top: 0;
+  align-content: center;
+}
+.rev-owned input {
+  margin-top: 0;
+  align-self: center;
+}
+.rev-owned-file {
+  overflow-wrap: anywhere;
+}

@@ -51,7 +51,7 @@ function centsLabel(c: number): string {
 
 export function describeReferenceDiff(c: ReferenceComparison): string {
   const shift = Math.round(c.transposeSemitones);
-  const shiftText = shift === 0 ? 'no key shift' : `compared ${Math.abs(shift)} semitones ${shift < 0 ? 'lower' : 'higher'} than the reference`;
+  const shiftText = shift === 0 ? 'no key shift' : `compared ${Math.abs(shift)} ${Math.abs(shift) === 1 ? 'semitone' : 'semitones'} ${shift < 0 ? 'lower' : 'higher'} than the reference`;
   return `Pitch difference from the reference along your take: ${Math.round(c.withinFiftyCents * 100)}% of aligned frames within 50 cents, average ${Math.round(c.meanAbsCents)} cents off, ${shiftText}. Positive means sharp.`;
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sine } from '../testing/synth';
-import { AUDIO_ACCEPT, decodeAudioFile, DecodeError, downmix, relabelMp4Brand } from './decode';
+import { AUDIO_ACCEPT, decodeAudioFile, DecodeError, downmix, relabelMp4Brand, UNKNOWN_LENGTH_BYTES } from './decode';
+import { flacHeader, mp3Bytes } from './probeTestKit';
 import { encodeWav } from './wav';
 
 function wavBlob(channels: Float32Array | Float32Array[], rate: number, name = 'take.wav'): File {
@@ -262,5 +263,111 @@ describe('iOS-friendly file picking and decoding', () => {
     const err = await decodeAudioFile(new File([ftyp('mp42')], 'x.m4a')).catch((e: unknown) => e);
     expect(decodeAudioData).toHaveBeenCalledTimes(1);
     expect(err).toBeInstanceOf(DecodeError);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Not reading more of a file than the import can use
+
+function stubDecoder(frames = 480, rate = 48000) {
+  const decoded = { sampleRate: rate, length: frames, numberOfChannels: 1, getChannelData: () => new Float32Array(frames).fill(0.2) };
+  const decodeAudioData = vi.fn(async () => decoded);
+  vi.stubGlobal(
+    'OfflineAudioContext',
+    class {
+      decodeAudioData = decodeAudioData;
+    },
+  );
+  return decodeAudioData;
+}
+
+describe('decodeAudioFile: a WAV is read only as far as maxSeconds needs', () => {
+  it('slices the header and the first seconds instead of the whole file, and still reports the whole length', async () => {
+    const rate = 8000;
+    const file = wavBlob(sine(220, 12, rate, 0.4), rate, 'long.wav');
+    const whole = vi.spyOn(file, 'arrayBuffer');
+    const slices: [number | undefined, number | undefined][] = [];
+    const slice = file.slice.bind(file);
+    vi.spyOn(file, 'slice').mockImplementation((a, b, c) => (slices.push([a, b]), slice(a, b, c)));
+    const out = await decodeAudioFile(file, { maxSeconds: 5 });
+    expect(out.samples.length).toBe(5 * rate);
+    expect(out.sourceDurationSec).toBeCloseTo(12, 3);
+    expect(whole).not.toHaveBeenCalled();
+    expect(slices.some(([a, b]) => a === 0 && b === 44 + 5 * rate * 2)).toBe(true);
+  });
+
+  it('reads a stereo WAV the same way and keeps the channel mix', async () => {
+    const rate = 8000;
+    const left = new Float32Array(rate * 6).fill(0.5);
+    const right = new Float32Array(rate * 6).fill(-0.25);
+    const out = await decodeAudioFile(wavBlob([left, right], rate), { maxSeconds: 2 });
+    expect(out.samples.length).toBe(2 * rate);
+    expect(out.samples[100]).toBeCloseTo(0.125, 3);
+    expect(out.sourceDurationSec).toBeCloseTo(6, 3);
+  });
+
+  it('reads a file that is shorter than maxSeconds whole, with no notice of a cut', async () => {
+    const rate = 8000;
+    const out = await decodeAudioFile(wavBlob(sine(220, 2, rate, 0.4), rate), { maxSeconds: 5 });
+    expect(out.samples.length).toBe(2 * rate);
+    expect(out.sourceDurationSec).toBeCloseTo(2, 3);
+  });
+});
+
+describe('decodeAudioFile: the length of a compressed file is read from its header before it is opened', () => {
+  it('refuses an MP3 whose Xing header says it is longer than the limit, without decoding it', async () => {
+    const decode = stubDecoder();
+    const frames = Math.ceil((40 * 60 * 44100) / 1152); // 40 minutes
+    const file = new File([mp3Bytes({ xingFrames: frames, size: 20000 })], 'long.mp3', { type: 'audio/mpeg' });
+    const err = await decodeAudioFile(file, { maxSourceSec: 15 * 60 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DecodeError);
+    expect((err as DecodeError).reason).toBe('too-long');
+    expect((err as Error).message).toMatch(/about 40 minutes long.*limit is 15 minutes/);
+    expect(decode).not.toHaveBeenCalled();
+  });
+
+  it('refuses a constant-bitrate MP3 by its size and bitrate (no Xing header)', async () => {
+    stubDecoder();
+    // 128 kbps = 16000 bytes/s: 20 minutes is 19.2 MB, under every size limit.
+    const file = new File([mp3Bytes({ size: 20 * 60 * 16000 })], 'podcast.mp3', { type: 'audio/mpeg' });
+    await expect(decodeAudioFile(file, { maxSourceSec: 15 * 60 })).rejects.toMatchObject({ reason: 'too-long' });
+  });
+
+  it('refuses a long FLAC and opens a FLAC under the limit even above 30 MB', async () => {
+    const decode = stubDecoder();
+    const long = new File([flacHeader(44100, 44100 * 45 * 60), new Uint8Array(1000)], 'long.flac', { type: 'audio/flac' });
+    await expect(decodeAudioFile(long, { maxSourceSec: 15 * 60 })).rejects.toMatchObject({ reason: 'too-long' });
+    expect(decode).not.toHaveBeenCalled();
+    const song = new File([flacHeader(44100, 44100 * 5 * 60), new Uint8Array(40 * 1024 * 1024)], 'song.flac', { type: 'audio/flac' });
+    const out = await decodeAudioFile(song, { maxSourceSec: 15 * 60 });
+    expect(out.samples.length).toBe(480);
+    expect(decode).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens an MP3 under the limit', async () => {
+    const decode = stubDecoder();
+    const file = new File([mp3Bytes({ xingFrames: Math.ceil((4 * 60 * 44100) / 1152), size: 20000 })], 'song.mp3', { type: 'audio/mpeg' });
+    await decodeAudioFile(file, { maxSourceSec: 15 * 60 });
+    expect(decode).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a file of a kind whose length cannot be read once it is bigger than a long song at an ordinary bitrate', async () => {
+    const decode = stubDecoder();
+    const webm = new Uint8Array(UNKNOWN_LENGTH_BYTES + 1024);
+    webm.set([0x1a, 0x45, 0xdf, 0xa3], 0);
+    const err = await decodeAudioFile(new File([webm], 'meeting.webm', { type: 'audio/webm' }), { maxSourceSec: 15 * 60 }).catch((e: unknown) => e);
+    expect((err as DecodeError).reason).toBe('too-large');
+    expect(decode).not.toHaveBeenCalled();
+    // The same kind of file under the limit is opened, as before.
+    await decodeAudioFile(new File([new Uint8Array(2 * 1024 * 1024)], 'memo.webm', { type: 'audio/webm' }), { maxSourceSec: 15 * 60 });
+    expect(decode).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not apply the unknown-length limit to uncompressed AIFF', async () => {
+    const decode = stubDecoder();
+    const aiff = new Uint8Array(UNKNOWN_LENGTH_BYTES + 1024);
+    aiff.set([0x46, 0x4f, 0x52, 0x4d], 0); // FORM
+    await decodeAudioFile(new File([aiff], 'take.aiff', { type: 'audio/aiff' }), { maxSourceSec: 15 * 60 });
+    expect(decode).toHaveBeenCalledTimes(1);
   });
 });

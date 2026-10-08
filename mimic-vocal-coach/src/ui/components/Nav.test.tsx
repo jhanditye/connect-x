@@ -59,15 +59,21 @@ describe('Nav', () => {
     expect(tabs().filter((a) => a.getAttribute('aria-current') === 'page').map(label)).toEqual(['More']);
   });
 
-  it('Results is disabled with a reason until there is a take, in both bars', () => {
+  it('Results is always a real link; before a take it is only drawn quieter and says so in text, not in a tooltip', () => {
     render('trainer', false);
     for (const a of [...tabs(), ...top()].filter((x) => /Results/.test(x.textContent ?? ''))) {
-      expect(a.getAttribute('aria-disabled')).toBe('true');
-      expect(a.getAttribute('title')).toBe('Analyse a take first');
-      expect(a.getAttribute('href')).toBeNull();
+      expect(a.getAttribute('href')).toBe('#results');
+      expect(a.getAttribute('aria-disabled')).toBeNull();
+      expect(a.getAttribute('title')).toBeNull();
+      expect(a.getAttribute('data-empty')).toBe('true');
+      expect(a.textContent).toMatch(/Results \(no take yet\)/);
     }
     render('trainer', true);
-    for (const a of [...tabs(), ...top()].filter((x) => /Results/.test(x.textContent ?? ''))) expect(a.getAttribute('href')).toBe('#results');
+    for (const a of [...tabs(), ...top()].filter((x) => /Results/.test(x.textContent ?? ''))) {
+      expect(a.getAttribute('href')).toBe('#results');
+      expect(a.getAttribute('data-empty')).toBeNull();
+      expect(a.textContent).not.toMatch(/no take yet/);
+    }
   });
 
   it('the wordmark goes to the Trainer', () => {

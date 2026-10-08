@@ -714,12 +714,56 @@ describe('export and import', () => {
     expect(await store.getMeta('attemptsSinceExport')).toBe(1);
   });
 
-  it('still produces a backup of what is on screen when the store can no longer be read', async () => {
+  it('still produces a file of what is on screen when the store can no longer be read, says it is partial and does not clear the reminder', async () => {
     const store = await seededStore();
+    await store.setMeta('attemptsSinceExport', 12);
     const h = await mount({ props: { store } });
     vi.spyOn(store, 'listClips').mockRejectedValue(new Error('gone'));
     const blob = await act1(() => h.c.exportLibrary());
     expect(JSON.parse(await blob.text()).clips).toHaveLength(1);
+    expect(h.c.lastExportReport?.()).toMatchObject({ complete: false, clips: 1 });
+    expect(h.c.lastExportReport?.()?.warnings.join(' ')).toMatch(/only the clips on screen/);
+    expect(h.x.exportReminder.due).toBe(true);
+    expect(await store.getMeta('attemptsSinceExport')).toBe(12);
+  });
+
+  it('does not call a file without the practice history a backup: it says what is missing and the reminder stays on', async () => {
+    const store = await seededStore();
+    await store.setMeta('attemptsSinceExport', 12);
+    const h = await mount({ props: { store } });
+    expect(h.x.exportReminder.due).toBe(true);
+    const fail = vi.spyOn(store, 'listAttempts').mockRejectedValue(new Error('read failed'));
+    for (const options of [undefined, { markDone: false }]) {
+      const blob = await act1(() => h.c.exportLibrary(options));
+      const json = JSON.parse(await blob.text());
+      expect(json.clips).toHaveLength(1);
+      expect(json.attempts).toEqual([]);
+      const report = h.c.lastExportReport?.();
+      expect(report).toMatchObject({ complete: false, clips: 1, attempts: 0 });
+      expect(report?.warnings.join(' ')).toMatch(/practice history.*could not be read/);
+      await act1(() => h.c.markExported!());
+      expect(h.x.exportReminder.due).toBe(true);
+      expect(await store.getMeta('attemptsSinceExport')).toBe(12);
+      expect(await store.getMeta('lastExportAt')).toBeNull();
+    }
+    // Once the history can be read again, the same action is a real backup.
+    fail.mockRestore();
+    await act1(() => h.c.exportLibrary());
+    expect(h.c.lastExportReport?.()).toMatchObject({ complete: true, warnings: [] });
+    expect(h.x.exportReminder.due).toBe(false);
+  });
+
+  it('counts the clips it cannot open in the report, without holding the reminder on for ever', async () => {
+    const store = await seededStore();
+    await store.putClip({ id: 'broken', title: 'Old take', addedAt: '2026-09-01T00:00:00Z' } as unknown as ClipRecord);
+    await store.setMeta('attemptsSinceExport', 12);
+    const h = await mount({ props: { store } });
+    const blob = await act1(() => h.c.exportLibrary());
+    expect(JSON.parse(await blob.text()).clips).toHaveLength(1);
+    const report = h.c.lastExportReport?.();
+    expect(report?.complete).toBe(true);
+    expect(report?.warnings.join(' ')).toMatch(/1 saved clip could not be read.*not in this backup/);
+    expect(h.x.exportReminder.due).toBe(false);
   });
 
   it('round trip: export, wipe, import on a clean install, then relink the audio by fingerprint', async () => {
@@ -817,6 +861,21 @@ describe('export and import', () => {
     const lib = { format: 'mimic-library', version: 1, exportedAt: '2026-10-08T00:00:00Z', clips: [makeFakeClip({ singerId: 'retired-singer', contributesToSinger: true })], attempts: [], calibration: {} };
     await act1(() => h.c.importLibrary(new File([JSON.stringify(lib)], 'x.json')));
     expect(h.c.getClip('fake-clip')?.contributesToSinger).toBe(false);
+  });
+
+  it('takes a clip out of the singer\'s targets when the newer copy in the backup does not count', async () => {
+    const stored = makeFakeClip({ contributesToSinger: true, updatedAt: '2026-10-01T00:00:00Z' });
+    const store = await seededStore([stored]);
+    const app = createFakeApp({ 'shawn-mendes': [measuredFromClip(stored)] });
+    const h = await mount({ props: { store }, app });
+    expect(h.c.getClip('fake-clip')?.contributesToSinger).toBe(true);
+    const newer = makeFakeClip({ contributesToSinger: false, updatedAt: '2026-10-05T00:00:00Z' });
+    const lib = { format: 'mimic-library', version: 1, exportedAt: '2026-10-08T00:00:00Z', clips: [newer], attempts: [], calibration: {} };
+    await act1(() => h.c.importLibrary(new File([JSON.stringify(lib)], 'x.json')));
+    expect(app.handle.calls).toContain('remove:shawn-mendes:fake-clip');
+    expect(app.handle.measured['shawn-mendes'] ?? []).toEqual([]);
+    expect(h.c.getClip('fake-clip')?.contributesToSinger).toBe(false);
+    expect((await store.getClip('fake-clip'))?.contributesToSinger).toBe(false);
   });
 
   it('keeps this device\'s calibration and learns routes it did not have', async () => {
@@ -1175,6 +1234,160 @@ describe('inside the real AppProvider', () => {
     await act1(() => trainer.deleteClip('fake-clip'));
     expect(app.builtins.find((b) => b.id === singer)?.source).toBe('builtin');
     expect(app.state.measurements[singer] ?? []).toEqual([]);
+  });
+});
+
+describe('a library that failed to open', () => {
+  const timeoutFailure = () => new StoreUnavailableError('Your library is taking too long to open. Your saved clips are not deleted. Close and reopen the app, or tap Try again.', 'timeout');
+
+  it('goes memory-only with a reason and a way to try again when opening timed out, and says a refusal cannot be retried', async () => {
+    const retry = await mount({ props: { openStore: () => Promise.reject(timeoutFailure()) } });
+    expect(retry.c.status).toBe('memory-only');
+    expect(retry.x.canRetryOpen).toBe(true);
+    expect(retry.x.memoryReason).toMatch(/not deleted/);
+    const refused = await mount({ props: { openStore: () => Promise.reject(new StoreUnavailableError('This browser is blocking IndexedDB.')) } });
+    expect(refused.c.status).toBe('memory-only');
+    expect(refused.x.canRetryOpen).toBe(false);
+  });
+
+  it('reload() opens the library again and copies what was added in the meantime into it', async () => {
+    const real = await seededStore([makeFakeClip({ id: 'old-clip', title: 'Saved before' })], []);
+    let working = false;
+    const openStore = vi.fn(async () => {
+      if (!working) throw timeoutFailure();
+      return real;
+    });
+    const importer: Partial<TrainerImporter> = {
+      ...fakeImporter(),
+      commitClip: async (_prepared, edits, store) => {
+        const info = await store.writeAudio('imported-1', 'mix', new Int16Array(44100), 44100);
+        const clip = makeFakeClip({ id: 'imported-1', title: edits.title, audio: { mix: info, vocal: null }, durationSec: 1 });
+        await store.putClip(clip);
+        return { clip, measured: null };
+      },
+    };
+    const h = await mount({ props: { openStore, importer } });
+    expect(h.c.status).toBe('memory-only');
+    expect(h.c.clips).toEqual([]); // the saved clips are not shown while the library is closed
+    const added = await act1(() => h.c.commitClip(makeFakePreparedClip(), EDITS()));
+    expect(openStore).toHaveBeenCalledTimes(2); // saving looked again before putting the clip in memory
+    expect(h.c.status).toBe('memory-only');
+
+    working = true;
+    await act1(() => h.x.reload());
+    expect(openStore).toHaveBeenCalledTimes(3);
+    expect(h.c.status).toBe('ready');
+    expect(h.x.memoryReason).toBeNull();
+    expect(h.x.canRetryOpen).toBe(false);
+    expect(h.c.clips.map((c) => c.id).sort()).toEqual([added.id, 'old-clip'].sort());
+    expect((await real.getClip(added.id))?.title).toBe('Imported');
+    await expect(real.readAudio(added.id, (await real.getClip(added.id))!.audio.mix, 0, 1)).resolves.toHaveLength(44100);
+    expect(h.x.warnings.join(' ')).toMatch(/opened again.*clip you added in this session was copied/);
+    // From now on it works like any library, and does not keep reopening.
+    await act1(() => h.x.reload());
+    expect(openStore).toHaveBeenCalledTimes(3);
+  });
+
+  it('saving a clip while the library has come back goes straight into the library', async () => {
+    const real = createMemoryClipStore();
+    let working = false;
+    const openStore = vi.fn(async () => {
+      if (!working) throw timeoutFailure();
+      return real;
+    });
+    const h = await mount({ props: { openStore, importer: fakeImporter() } });
+    working = true;
+    const clip = await act1(() => h.c.commitClip(makeFakePreparedClip(), EDITS()));
+    expect(h.c.status).toBe('ready');
+    expect((await real.getClip(clip.id))?.id).toBe(clip.id);
+  });
+
+  it('a failed second try leaves the session as it was and can be tried again', async () => {
+    const openStore = vi.fn(async () => {
+      throw timeoutFailure();
+    });
+    const h = await mount({ props: { openStore } });
+    await act1(() => h.x.reload());
+    await act1(() => h.x.reload());
+    expect(openStore).toHaveBeenCalledTimes(3);
+    expect(h.c.status).toBe('memory-only');
+    expect(h.x.canRetryOpen).toBe(true);
+  });
+
+  it('tries again by itself when the app comes back to the foreground, but not more than every 20 seconds', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const real = createMemoryClipStore();
+    let working = false;
+    const openStore = vi.fn(async () => {
+      if (!working) throw timeoutFailure();
+      return real;
+    });
+    const h = await mount({ props: { openStore } });
+    await act(async () => void window.dispatchEvent(new Event('focus')));
+    await settle();
+    expect(openStore).toHaveBeenCalledTimes(1); // too soon
+    vi.setSystemTime(Date.now() + 21_000);
+    working = true;
+    await act(async () => void window.dispatchEvent(new Event('focus')));
+    await settle();
+    expect(openStore).toHaveBeenCalledTimes(2);
+    expect(h.c.status).toBe('ready');
+  });
+
+  it('never leaves "Opening your library" up for ever when the open does not answer', async () => {
+    const openStore = vi.fn(() => new Promise<ClipStore>(() => undefined));
+    const h = await mount({ props: { openStore, openWatchdogMs: 20 } });
+    expect(h.c.status).toBe('loading');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 60));
+    });
+    await settle();
+    expect(h.c.status).toBe('memory-only');
+    expect(h.x.memoryReason).toMatch(/taking too long to open/);
+    expect(h.x.canRetryOpen).toBe(true);
+  });
+
+  it('closes a store that opens after the watchdog gave up', async () => {
+    let release!: (s: ClipStore) => void;
+    const late = createMemoryClipStore();
+    const close = vi.spyOn(late, 'close');
+    const h = await mount({ props: { openStore: () => new Promise<ClipStore>((r) => (release = r)), openWatchdogMs: 20 } });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 60));
+    });
+    release(late);
+    await settle();
+    expect(close).toHaveBeenCalled();
+    expect(h.c.status).toBe('memory-only');
+  });
+
+  it('removes audio chunks that have no clip when an IndexedDB library opens (an import killed half way), and leaves memory stores alone', async () => {
+    const real = await seededStore();
+    await real.writeAudio('lost-clip', 'mix', new Int16Array(44100), 44100);
+    Object.defineProperty(real, 'kind', { value: 'indexeddb' });
+    const prune = vi.spyOn(real, 'pruneOrphanAudio');
+    const h = await mount({ props: { openStore: async () => real } });
+    expect(h.c.status).toBe('ready');
+    expect(prune).toHaveBeenCalledTimes(1);
+    expect((await real.usage()).audioBytes).toBe(2 * 44100);
+    const mem = await seededStore();
+    const memPrune = vi.spyOn(mem, 'pruneOrphanAudio');
+    await mount({ props: { openStore: async () => mem } });
+    expect(memPrune).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancelling an import', () => {
+  it('hands the signal to the importer, and nothing when there is none', async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const importer: Partial<TrainerImporter> = {
+      prepareClip: async (file, _settings, _progress, options) => (seen.push(options?.signal), makeFakePreparedClip({ file: { name: file.name, size: file.size } })),
+    };
+    const h = await mount({ props: { store: createMemoryClipStore(), importer } });
+    const ctl = new AbortController();
+    await act1(() => h.c.prepareClip(new File(['x'], 'a.wav'), undefined, ctl.signal));
+    await act1(() => h.c.prepareClip(new File(['x'], 'b.wav')));
+    expect(seen).toEqual([ctl.signal, undefined]);
   });
 });
 

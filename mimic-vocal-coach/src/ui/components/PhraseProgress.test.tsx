@@ -4,7 +4,7 @@ import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
 import { attemptFromComparison, FAKE_NOW, makeFakeAttempts, makeFakeClip, makeFakePhraseComparison, makeFakeTrainerController } from '../../testing/trainerFixtures';
 import { tick, useScreen } from '../../testing/trainerUi';
-import { attemptsToSessions, dayKey, PhraseProgress, practiceDays, STREAK_DAYS } from './PhraseProgress';
+import { attemptsToSessions, dayKey, isDrawableAttempt, PhraseProgress, practiceDays, STREAK_DAYS } from './PhraseProgress';
 
 const DAY = 86_400_000;
 
@@ -133,6 +133,21 @@ describe('PhraseProgress', () => {
     expect(screen.text()).toMatch(/No clips in the Trainer yet\./);
     expect(screen.link(/Add a clip/).getAttribute('href')).toBe('#trainer/add');
     expect(screen.has('.pp-counts')).toBe(false);
+  });
+
+  it('leaves out a stored try it cannot draw (a damaged row) instead of blanking the screen', async () => {
+    const good = makeFakeAttempts();
+    const damaged = { ...good[0], id: 'bad-time', at: 'yesterday' as unknown as number };
+    const noScores = { ...good[0], id: 'bad-scores', scores: null as unknown as typeof good[0]['scores'] };
+    const ctl = makeFakeTrainerController();
+    ctl.listAttempts = async () => [damaged, noScores, ...good];
+    screen.mount(<PhraseProgress now={FAKE_NOW} />, ctl);
+    await tick();
+    expect(screen.q('.pp-streak').textContent).toMatch(/days in a row/);
+    expect(screen.has('svg[role="img"][aria-label]')).toBe(true);
+    expect(isDrawableAttempt(damaged)).toBe(false);
+    expect(isDrawableAttempt(noScores)).toBe(false);
+    expect(isDrawableAttempt(good[0])).toBe(true);
   });
 
   it('shows nothing at all when there is no Trainer', () => {

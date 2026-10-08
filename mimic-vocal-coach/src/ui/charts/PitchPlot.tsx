@@ -168,7 +168,7 @@ export function describePitchPlot(analysis: VoiceAnalysis, hasReference: boolean
   parts.push(`estimated registers ${pct(r.chest)} chest, ${pct(r.mix)} mix, ${pct(r.head)} head`);
   const vib = analysis.notes.filter((n) => n.vibrato).length;
   if (vib > 0) parts.push(`${vib} note${vib === 1 ? '' : 's'} with vibrato`);
-  if (hasReference) parts.push(`reference contour overlaid${shift ? `, shifted ${shift > 0 ? 'up' : 'down'} ${Math.abs(Math.round(shift))} semitones` : ''}`);
+  if (hasReference) parts.push(`reference contour overlaid${shift ? `, shifted ${shift > 0 ? 'up' : 'down'} ${Math.abs(Math.round(shift))} ${Math.abs(Math.round(shift)) === 1 ? 'semitone' : 'semitones'}` : ''}`);
   return `${parts.join('; ')}.`;
 }
 

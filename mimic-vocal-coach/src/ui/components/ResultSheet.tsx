@@ -7,12 +7,12 @@
 // the number; a short phrase is rounded to the nearest 5 (the scorer is about twice as noisy there); tone is "not compared"
 // for a full song. The number is `comparison.score.overall` and nothing else: there is no second overall.
 
-import { useId, useState, type JSX, type Ref } from 'react';
+import { useId, useState, type JSX, type ReactNode, type Ref } from 'react';
 import { attemptLite } from '../../storage/library';
 import { keyLine } from '../../trainer/keys';
 import { inOriginalTerms, type TrainerFix } from '../../trainer/feedback';
 import { isShortPhrase, scoreBand } from '../../trainer/score/score';
-import { masteryProgress, nextStep } from '../../trainer/srs';
+import { MASTER_SCORE, masteryProgress, nextStep } from '../../trainer/srs';
 import type { PracticeResult } from '../../trainer/engine';
 import type { AttemptRecord, ClipKind, NoteCompare, PhraseRecord, SkillKey, VoiceAnalysis } from '../../types';
 import { PhraseOverlayPlot } from '../charts/PhraseOverlayPlot';
@@ -41,6 +41,8 @@ export interface ResultSheetProps {
   triesThisVisit: number;
   /** This phrase's earlier attempts, newest first, for the history and the mastery count. */
   history: readonly AttemptRecord[];
+  /** `history` includes this take (it was loaded after the result). false: the mastery count is not shown yet, instead of a stale or empty one. Default true. */
+  historyReady?: boolean;
   keepRecordings: boolean;
   onKeepRecordings?(on: boolean): void;
   onHear(which: Hear): void;
@@ -106,6 +108,15 @@ export function resultAnnouncement(result: PracticeResult, reference: VoiceAnaly
   return `Score ${n} out of 100. ${lead}${first ? ` First thing to fix: ${first.title}.` : ' Nothing stood out to fix.'}`;
 }
 
+/** A Notice that is not a live region (the same look, no role): for words the page announces in its own sentence. */
+function QuietNotice(props: { tone: 'info' | 'warn'; children: ReactNode }): JSX.Element {
+  return (
+    <div className={`notice notice--${props.tone}`}>
+      <div className="notice-body">{props.children}</div>
+    </div>
+  );
+}
+
 function SkillRow(props: { label: string; value: number | null; why: string }): JSX.Element {
   const { value } = props;
   if (value === null) {
@@ -158,6 +169,8 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
   const mastery = masteryProgress(lite);
   const step = nextStep({ overall: scored ? (s.overall as number) : null, rate: props.rate, triesThisVisit: props.triesThisVisit, mastered: phrase.srs.rung > 0 });
   const flagged = c.notes.filter(isFlagged);
+  // The next phrase is offered as soon as this one is as good as the mastery mark (not only after three tries), within thumb reach.
+  const offerNext = step.next || (scored && (s.overall as number) >= MASTER_SCORE);
 
   const loopNote = (n: NoteCompare) => props.onLoop?.({ from: Math.max(0, n.refStart - 0.1), to: n.refEnd + 0.1, rate: 0.75 });
   const history = [...props.history].sort((a, b) => a.at - b.at);
@@ -168,15 +181,16 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
         {scored ? 'How close you got' : 'This take was not scored'}
       </h2>
 
+      {/* These two say what the page's own announcement of the result already says, so they are not live regions as well. */}
       {result.notice && (
-        <Notice tone="warn">
+        <QuietNotice tone="warn">
           <p>{result.notice}</p>
-        </Notice>
+        </QuietNotice>
       )}
       {!result.notice && !scored && (
-        <Notice tone="info">
+        <QuietNotice tone="info">
           <p>{inOriginalTerms(s.notes[0] ?? 'Mimic could not line this take up with the phrase. Listen to it once more, then try again.')}</p>
-        </Notice>
+        </QuietNotice>
       )}
       {scored && s.trust.level === 'caution' && (
         <Notice tone="warn" title="Treat this score with care">
@@ -246,19 +260,20 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
             Back to full speed
           </button>
         )}
-        {step.next && props.onNext && (
+        {offerNext && props.onNext && (
           <button type="button" className="button" onClick={props.onNext}>
             Next phrase <Icon name="forward" size={16} />
           </button>
         )}
       </div>
 
-      {scored && (
-        <p className="rs-mastery" role="status">
+      {/* Not a live region: the page already announces the score. Shown once the history includes this take. */}
+      {scored && props.historyReady !== false && (
+        <p className="rs-mastery">
           {phrase.srs.rung > 0
             ? 'Mastered. It will come back for review.'
             : mastery.considered === 0
-              ? `Mastered after ${mastery.needed} good tries at full speed.`
+              ? `Counts toward mastery when sung at full speed: ${mastery.needed} good tries are needed.`
               : `${mastery.hits} of ${mastery.needed} good tries at full speed so far. A good try is 85 or more with no wrong note.`}
         </p>
       )}

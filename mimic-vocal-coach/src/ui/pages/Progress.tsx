@@ -2,9 +2,10 @@
 // saved-session list with delete, and deleting one take or the whole history behind in-page
 // confirmations. After a delete, focus moves to the next row (or the list heading), never <body>.
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type JSX, type KeyboardEvent } from 'react';
 import { STYLE_LABELS } from '../../coach/profiles';
 import { isReferenceProfileId } from '../../storage/history';
+import { TrainerContext } from '../../state/trainerContext';
 import type { SessionRecord, StyleKey } from '../../types';
 import { DIM_DISPLAY, fmtSigned, singerVar } from '../charts/chartKit';
 import { hasScores, ProgressChart } from '../charts/ProgressChart';
@@ -142,6 +143,9 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
   const emptyRef = useRef<HTMLParagraphElement>(null);
   const clearButtonRef = useRef<HTMLButtonElement>(null);
   const focusRequest = useRef<FocusRequest | null>(null);
+  // The Trainer is the main way to practise: with clips in it, the page is about them and Studio takes are the side note.
+  const trainer = useContext(TrainerContext);
+  const trainerHasClips = !!trainer && trainer.clips.length > 0;
 
   // Buttons that disappear (a deleted row, the confirm prompts) would drop focus to <body>, so move
   // it on purpose once the list has caught up with the change.
@@ -160,6 +164,27 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
     focusRequest.current = null;
     target?.focus();
   });
+
+  if (sessions.length === 0 && trainerHasClips) {
+    return (
+      <div className="page page--progress">
+        <header className="page-head">
+          <p className="eyebrow">Progress</p>
+          <h1 className="page-title">Your progress</h1>
+        </header>
+        <PhraseProgress />
+        <section className="hist-section" aria-labelledby="hist-studio">
+          <h2 id="hist-studio" className="section-title">
+            Studio takes
+          </h2>
+          <p ref={emptyRef} tabIndex={-1} className="muted">
+            {cleared ? 'History cleared. ' : ''}Takes you save from the <a href="#studio">Studio</a>’s Results page appear here. Only scores and measurements are saved, on this device; the
+            audio is not.
+          </p>
+        </section>
+      </div>
+    );
+  }
 
   if (sessions.length === 0) {
     return (

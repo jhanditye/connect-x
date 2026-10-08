@@ -112,12 +112,15 @@ describe('App', () => {
     expect(container.querySelector('h1')?.textContent).toMatch(/Practise with the voices you love/);
   });
 
-  it('starts in the Studio with Results disabled', () => {
+  it('starts in the Studio with Results quiet (still a link, no take yet)', () => {
     act(() => root.render(<App />));
     expect(container.querySelector('h1')?.textContent).toMatch(/Sing a take/);
     const resultsLinks = Array.from(container.querySelectorAll('a.nav-link')).filter((a) => /Results/.test(a.textContent ?? ''));
     expect(resultsLinks.length).toBeGreaterThan(0);
-    for (const a of resultsLinks) expect(a.getAttribute('aria-disabled')).toBe('true');
+    for (const a of resultsLinks) {
+      expect(a.getAttribute('href')).toBe('#results');
+      expect(a.getAttribute('data-empty')).toBe('true');
+    }
     expect(container.querySelectorAll('.singer-card')).toHaveLength(SINGERS.length + 1);
   });
 
@@ -223,13 +226,13 @@ describe('App', () => {
     await act(async () => {
       window.dispatchEvent(new HashChangeEvent('hashchange'));
     });
-    await clickAsync(buttonNamed(/Clear all data/));
+    await clickAsync(buttonNamed(/Delete everything, including settings/));
     expect(loadSessions()).toHaveLength(1);
     await clickAsync(buttonNamed(/Yes, delete everything/));
     expect(loadSessions()).toHaveLength(0);
     // Focus moves to the confirmation instead of falling to the page body.
     expect(document.activeElement?.textContent).toBe('All data cleared.');
     const resultsLink = Array.from(container.querySelectorAll('a.nav-link')).find((a) => /Results/.test(a.textContent ?? ''));
-    expect(resultsLink?.getAttribute('aria-disabled')).toBe('true');
+    expect(resultsLink?.getAttribute('data-empty')).toBe('true');
   });
 });

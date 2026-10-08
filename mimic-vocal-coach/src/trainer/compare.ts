@@ -18,6 +18,7 @@ import { midiToNoteName } from '../dsp/music';
 import { clamp, median } from '../dsp/stats';
 import type { AttemptScore, NoteCompare, PhraseComparison, PlayTiming, ReferenceComparison, ToneFinding, VoiceAnalysis } from '../types';
 import { isMixReference, scoreAttempt } from './score/score';
+import { MASTER_SCORE, REVIEW_FAIL, REVIEW_PASS } from './srs';
 import { toneIndexDiffs } from './score/tone';
 
 export { LATE_EARLY_MS, OFF_CENTS as FLAT_SHARP_CENTS, WRONG_NOTE_CENTS } from './score/constants';
@@ -65,14 +66,33 @@ export function vibratoStartDelay(a: VoiceAnalysis, t0: number, t1: number): num
 const roundToFive = (x: number): number => Math.round(x / 5) * 5;
 
 /**
+ * A short phrase's shown number: the nearest 5, never 100 below 98, and never across a mark that means something (mastery 85, a passed
+ * review 80, a failed review 65) from below: 83 is shown as 80, not as the 85 that would count as a good attempt.
+ */
+function shortPhraseScore(overall: number): number {
+  let r = Math.min(roundToFive(overall), overall >= 98 ? 100 : 95);
+  for (const mark of [MASTER_SCORE, REVIEW_PASS, REVIEW_FAIL]) if (overall < mark && r >= mark) r = mark - 5;
+  return r;
+}
+
+/**
  * Flat copy of the authority's numbers: `overall` is 0 when the scorer could not measure it (low evidence), pitch is 0 when it
  * could not measure that. For short phrases (under 5 notes or 4 s of singing, about twice as noisy) the overall is rounded to the
- * nearest 5 here, so the one number shown, stored and used for mastery is the honest one; it never rounds up to 100 below 98.
+ * nearest 5 here (see shortPhraseScore), so the one number shown, stored and used for mastery is the honest one.
  */
 export function scoresOf(score: AttemptScore): PhraseComparison['scores'] {
   let overall = score.overall ?? 0;
-  if (score.overall !== null && score.diagnostics.shortPhrase === true) overall = Math.min(roundToFive(overall), overall >= 98 ? 100 : 95);
+  if (score.overall !== null && score.diagnostics.shortPhrase === true) overall = shortPhraseScore(overall);
   return { overall, pitch: score.skills.pitch ?? 0, timing: score.skills.timing, tone: score.skills.tone, expression: score.skills.expression };
+}
+
+/**
+ * Reference notes the singer sang as a different note: what the result sentence ("Close, with 2 wrong notes") and mastery count. One
+ * definition for the screen, the stored attempt and the ladder. Run and ornament notes are never wrong notes (they are judged loosely),
+ * and an octave-displaced note is information, not a mistake: the note name is right (and a tracker slip reads the same way).
+ */
+export function wrongNoteCount(c: Pick<PhraseComparison, 'notes'>): number {
+  return c.notes.filter((n) => n.flags.includes('wrong-note') && !n.flags.includes('ornament')).length;
 }
 
 /** True when `scores.overall` was rounded to the nearest 5 because the phrase is short. */
@@ -249,7 +269,7 @@ function toneFindingsOf(
     // Relative level (each take against its own median): the scorer must have measured loudness shape too.
     if (comp('expr.dynamics') !== null) {
       const lv = rows.filter((n) => n.levelDeltaDb !== null && Math.abs(n.levelDeltaDb) >= 4);
-      if (lv.length >= 2) out.push({ key: 'level', diff: median(lv.map((n) => n.levelDeltaDb as number)), strength: lv.length / 2, detail: lv.map((n) => n.refName).join(',') });
+      if (lv.length >= 2) out.push({ key: 'level', diff: median(lv.map((n) => n.levelDeltaDb as number)), strength: lv.length / 2, detail: Array.from(new Set(lv.map((n) => n.refName))).join(', ') });
     }
   }
   return out.sort((a, b) => b.strength - a.strength);
@@ -266,6 +286,8 @@ export interface PhraseOptions {
   forceSpeech?: boolean;
   /** The guide that played was moved this many semitones (PracticeOptions.guideShift). In 'locked' key mode the singer is then expected in that key. */
   guideShift?: number;
+  /** The speed the guide was played at (0.5..1, default: PlayTiming.rate). A take after a slowed guide is expected to run 1 / guideRate times longer; tempo and the no-match gate are judged against that. */
+  guideRate?: number;
 }
 
 export function comparePhrase(attempt: VoiceAnalysis, ref: VoiceAnalysis, timing: PlayTiming, opts: PhraseOptions = {}): PhraseComparison {
@@ -278,6 +300,7 @@ export function comparePhrase(attempt: VoiceAnalysis, ref: VoiceAnalysis, timing
     mode: timing.mode,
     keyMode: timing.keyMode,
     rate,
+    guideRate: Number.isFinite(opts.guideRate) ? clamp(opts.guideRate as number, 0.25, 1.5) : rate,
     refStartInCaptureSec: timing.refStartInCaptureSec,
     latencyMs: timing.latencyMs,
     toneBias: opts.toneBias,

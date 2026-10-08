@@ -152,6 +152,18 @@ describe('wake lock', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it('is not reported as supported where it is known to do nothing (a Home Screen app before iOS 18.4)', () => {
+    vi.stubGlobal('navigator', {
+      wakeLock: { request: async () => ({}) },
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+      platform: 'iPhone',
+      maxTouchPoints: 5,
+      standalone: true,
+    });
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    expect(wakeLockSupported()).toBe(false);
+  });
+
   it('does nothing, without throwing, where the browser has no wake lock or refuses it', async () => {
     vi.stubGlobal('navigator', {});
     expect(wakeLockSupported()).toBe(false);

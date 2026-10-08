@@ -25,6 +25,18 @@ const STEP_PENALTY = 0.08;
 /** Cost per target bin left unaligned at either end: mild, so a nearly complete take covers its first and last notes, but a partial take can still sit anywhere. */
 const SKIP_PENALTY = 0.1;
 const MAX_CELLS = 3e6;
+/** Second pitch reading at the time model (see step 5 of alignContours): how far the mapped note window may stray from the model, and which part of the note is read. */
+const RIGID_START_TOL = 0.09;
+const RIGID_END_TOL = 0.15;
+const RIGID_TRIM = 0.2;
+const RIGID_STABLE_ST = 0.24;
+const RIGID_MIN_BINS = 3;
+const RIGID_AGREE_CENTS = 100;
+/** A transposition of more than this many semitones away from an octave multiple is never second-guessed. */
+const KEY_SNAP_MAX_SEMITONES = 2;
+/** A take is "tidy in its key" when this share of its aligned frames sit within KEY_TIDY_CENTS of one constant offset. */
+const KEY_TIDY_SHARE = 0.7;
+const KEY_TIDY_CENTS = 25;
 
 export interface Contour {
   /** Bin centre times (s) of voiced bins only. */
@@ -225,7 +237,8 @@ export interface Alignment {
   lag: number;
   tempo: number;
   tempoFitted: boolean;
-  onsetPairs: { k: number; ref: number; user: number }[];
+  /** `found`: the take has a sound of its own at this entrance (a voiced-run start, or the pitch step in the right direction) near where the time model expects it. When it has not, `user` is only the warp's corner and is no evidence of timing. */
+  onsetPairs: { k: number; ref: number; user: number; found: boolean }[];
   /** End of a note that is followed by a rest (or ends the phrase): end of the voiced run, reference and attempt. */
   endPairs: { k: number; ref: number; user: number }[];
   /** Mean capped semitone distance along the path, per reference bin. */
@@ -302,11 +315,13 @@ export function alignContours(
   let pathCost = 0;
   let total = bestT * 100; // best estimate of attempt minus reference, cents (integer shift + constant detune)
   let T = bestT;
+  let passT = bestT; // the integer shift rawErr was last computed against (T itself is re-derived from `total` when the passes end)
   for (let pass = 0; pass < 3; pass++) {
     // The DTW runs with the constant detune already removed: without that, a take ~50 cents from every note makes every bin
     // equally "wrong" and the warp starts hunting for cheaper-looking matches. The integer shift is re-derived each pass so
     // the detune stays within +-50 cents (a poor take can sit a whole semitone from the first guess).
     T = Math.round(total / 100) || 0; // `|| 0` turns -0 into 0
+    passT = T;
     mapMin.fill(NaN);
     mapMed.fill(NaN);
     mapMax.fill(NaN);
@@ -343,6 +358,27 @@ export function alignContours(
       break;
     }
   }
+  // the last pass may have ended with a different rounding of `total` than the one its errors were measured against
+  if (passT !== T) for (let i = 0; i < nR; i++) if (Number.isFinite(rawErr[i])) rawErr[i] += (passT - T) * 100;
+  // A poor take's notes scatter by tens of cents, so "a semitone lower" and "a little flat all the way through" cannot be told apart, and
+  // the constant detune happily absorbs either. Calling it a transposition is a claim ("you sang this 1 semitone lower, a different key
+  // is fine") that only holds when the take is also tidy in the shifted key; otherwise it is read in the nearest octave multiple.
+  let looseKey = false;
+  if (opts.keyMode === 'free' && T % 12 !== 0) {
+    const Tn = 12 * Math.round(T / 12) || 0;
+    if (Math.abs(T - Tn) <= KEY_SNAP_MAX_SEMITONES) {
+      const ds: number[] = [];
+      for (let i = 0; i < nR; i++) if (Number.isFinite(rawErr[i])) ds.push(foldOctave(rawErr[i]).folded);
+      if (ds.length >= 5) {
+        const off = median(ds);
+        if (ds.filter((d) => Math.abs(d - off) <= KEY_TIDY_CENTS).length / ds.length < KEY_TIDY_SHARE) {
+          for (let i = 0; i < nR; i++) if (Number.isFinite(rawErr[i])) rawErr[i] += (T - Tn) * 100;
+          T = Tn;
+          looseKey = true;
+        }
+      }
+    }
+  }
   const guide = Number.isFinite(opts.guideShift) ? Math.round(opts.guideShift as number) : 0;
   const teff = opts.keyMode === 'free' ? T : guide + 12 * Math.round((T - guide) / 12) || 0;
   // errors against the integer shift actually used for scoring (rawErr was computed against T of the last pass)
@@ -351,7 +387,7 @@ export function alignContours(
   for (let i = 0; i < nR; i++) {
     if (!Number.isFinite(rawErr[i])) continue;
     const f = foldOctave(rawErr[i]).folded;
-    if (Math.abs(f) < 100) plausible.push(f);
+    if (Math.abs(f) < (looseKey ? 250 : 100)) plausible.push(f);
   }
   const keyOffset = plausible.length ? median(plausible) : 0;
   const delta = opts.keyMode === 'free' ? keyOffset : 0;
@@ -387,7 +423,7 @@ export function alignContours(
   // transition near the MODEL's prediction (so a DTW corner that was dragged by a pitch error cannot mislead) and refits.
   const refRuns = voicedRuns(ref);
   const attRuns = voicedRuns(att);
-  interface Tr { k: number; kind: 'gap' | 'step'; dir: number; ref: number; user: number; dtw: number }
+  interface Tr { k: number; kind: 'gap' | 'step'; dir: number; ref: number; user: number; dtw: number; found: boolean }
   const trs: Tr[] = [];
   const ends: { k: number; ref: number; user: number; dtw: number }[] = [];
   for (const nm of notes) {
@@ -402,13 +438,13 @@ export function alignContours(
       if (k === 0 || r.start - prevEnd >= 0.08) {
         const tr = nearest(refRuns.starts, r.start, 0.3) ?? r.start;
         const tu = nearest(attRuns.starts, dtw - (r.start - tr), 0.4);
-        trs.push({ k, kind: 'gap', dir: 0, ref: tr, user: tu ?? dtw, dtw });
+        trs.push({ k, kind: 'gap', dir: 0, ref: tr, user: tu ?? dtw, dtw, found: tu !== null });
       } else {
         const dir = Math.sign(rP[k] - rP[k - 1]);
         const tr = stepTime(ref, r.start, 0.15, dir);
         const tu = stepTime(att, dtw, 0.25, dir);
-        if (tr !== null && tu !== null) trs.push({ k, kind: 'step', dir, ref: tr, user: tu, dtw });
-        else trs.push({ k, kind: 'step', dir, ref: r.start, user: dtw, dtw });
+        if (tr !== null && tu !== null) trs.push({ k, kind: 'step', dir, ref: tr, user: tu, dtw, found: true });
+        else trs.push({ k, kind: 'step', dir, ref: r.start, user: dtw, dtw, found: false });
       }
     }
     const last = k === rn.length - 1;
@@ -458,9 +494,12 @@ export function alignContours(
       if (t.kind === 'gap') {
         const tu = nearest(attRuns.starts, pred, 0.35);
         if (tu !== null) t.user = tu;
+        t.found = tu !== null;
       } else {
-        const tu = stepTime(att, pred, 0.2, t.dir);
+        // the pitch step in the right direction, or (the singer breathed or cut the note short where the original runs on) the start of a voiced run
+        const tu = stepTime(att, pred, 0.2, t.dir) ?? nearest(attRuns.starts, pred, 0.2);
         if (tu !== null) t.user = tu;
+        t.found = tu !== null;
       }
     }
     for (const e of ends) {
@@ -469,7 +508,7 @@ export function alignContours(
     }
     fitModel();
   }
-  const onsetPairs = trs.map((t) => ({ k: t.k, ref: t.ref, user: t.user }));
+  const onsetPairs = trs.map((t) => ({ k: t.k, ref: t.ref, user: t.user, found: t.found }));
   const endPairs = ends.map((e) => ({ k: e.k, ref: e.ref, user: e.user }));
   // refined mapped windows: from the note's start transition to its end transition (or the next note's start)
   const startAt = new Map(onsetPairs.map((p) => [p.k, p.user]));
@@ -496,6 +535,37 @@ export function alignContours(
   }
   const L = lag;
   const Tm = tempo;
+  // ---- 5. a second reading of each sustained note's pitch, where the time model says it was sung ---------------------------
+  // The warp is free to slide along a note that moves (a fall, a scoop): 50 cents sharp on a note that falls 250 cents reads as
+  // "right" when the attempt is lined up a few tens of ms later. For a note whose mapped window agrees with the time model, the
+  // flat middle of the reference note is read again at the model time, with no warp, and the larger of the two errors stands
+  // (never the smaller: the warp's reading is the lenient one). Notes whose timing is off keep the warp's reading.
+  for (const nm of notes) {
+    if (!nm.matched || !Number.isFinite(nm.err) || nm.mappedBins.length === 0) continue;
+    const r = rn[nm.k];
+    if (Math.abs(nm.u0 - (L + Tm * r.start)) > RIGID_START_TOL || Math.abs(nm.u1 - (L + Tm * r.end)) > RIGID_END_TOL) continue;
+    const dur = r.end - r.start;
+    const read: number[] = [];
+    nm.mappedBins.forEach((i, n) => {
+      const t = refC.t[i];
+      if (t < r.start + RIGID_TRIM * dur || t > r.end - RIGID_TRIM * dur) return;
+      const lo = refC.m[Math.max(0, i - 1)];
+      const hi = refC.m[Math.min(nR - 1, i + 1)];
+      if (Math.abs(hi - lo) > RIGID_STABLE_ST) return;
+      const x = (L + Tm * t) / att.hop;
+      const j = Math.floor(x);
+      const a0 = att.centre[j];
+      const a1 = att.centre[j + 1];
+      if (!Number.isFinite(a0) || !Number.isFinite(a1)) return;
+      const e = foldOctave((a0 + (a1 - a0) * (x - j) - refC.m[i] - teff) * 100 - delta).folded;
+      if (Math.abs(e - nm.binErr[n]) > RIGID_AGREE_CENTS) return;
+      read.push(e);
+      if (Math.abs(e) > Math.abs(nm.binErr[n])) nm.binErr[n] = e;
+    });
+    if (read.length < RIGID_MIN_BINS) continue;
+    const e = median(read);
+    if (Math.abs(e - nm.err) <= RIGID_AGREE_CENTS && Math.abs(e) > Math.abs(nm.err)) nm.err = e;
+  }
   // agreement with the rigid model: is this the same phrase at roughly the same pace?
   let rigidN = 0;
   let rigidOk = 0;

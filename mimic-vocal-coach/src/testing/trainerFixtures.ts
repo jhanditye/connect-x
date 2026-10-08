@@ -387,7 +387,7 @@ export function makeFakePhraseComparison(scenario: ComparisonScenario, opts: { s
     notes: spec.lines,
     fixes: spec.fixes,
     trust: spec.trust,
-    diagnostics: { refNotes: 8, matchedNotes: rows.filter((r) => r.matched).length },
+    diagnostics: { refNotes: 8, matchedNotes: rows.filter((r) => r.matched).length, mode, noMatchWhy: null, roughGuide: false, refLowConfidence: false },
   };
   return {
     transposeSemitones: shift,

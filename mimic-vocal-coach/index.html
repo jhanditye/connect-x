@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Nothing here ever leaves the device, and the browser enforces it: no network except this origin and, for the optional AI coach
+         (your own key, numbers only), api.anthropic.com. No forms, no <base>, no plug-ins, no frames. Workers and the audio worklet
+         come from this origin or blob:/data: (the single-file build inlines its worker as data:). Scripts need 'unsafe-inline' because
+         the single-file build inlines its module and the start-up check below is inline; the privacy guarantee is connect-src,
+         img-src, media-src, font-src, form-action and base-uri, not script-src. Keep this in step with docs/IPHONE_CHECKLIST.md. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob: data:; manifest-src 'self'; connect-src 'self' blob: data: https://api.anthropic.com; base-uri 'none'; form-action 'none'"
+    />
     <!-- viewport-fit=cover makes env(safe-area-inset-*) real (notch, Dynamic Island, home indicator). Do NOT add
          maximum-scale=1 or user-scalable=no: inputs are already 16px so iOS never zooms on focus, and blocking
          pinch-zoom is an accessibility failure. -->
@@ -29,6 +38,21 @@
   </head>
   <body>
     <div id="root"></div>
+    <noscript><p style="padding:24px;font:16px/1.5 system-ui,sans-serif">Mimic needs JavaScript to run. Turn it on in your browser settings and reload.</p></noscript>
+    <!-- Start-up check, a classic script so it runs even when the app script cannot: an iPhone older than iOS 16.4 fails to parse the
+         whole bundle and would otherwise show a blank page with no explanation. If nothing has drawn shortly after load, say so. -->
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          var root = document.getElementById('root');
+          if (!root || root.firstChild) return;
+          var p = document.createElement('p');
+          p.setAttribute('style', 'padding:24px;font:16px/1.5 system-ui,sans-serif');
+          p.textContent = 'Mimic could not start. It needs iOS 16.4 or newer (Safari or the Home Screen app) or a current desktop browser. If your device is up to date, reload the page.';
+          root.appendChild(p);
+        }, 3000);
+      });
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

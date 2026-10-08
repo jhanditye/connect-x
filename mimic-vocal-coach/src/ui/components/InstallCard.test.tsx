@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformEnv } from '../../pwa/platform';
-import { InstallCard } from './InstallCard';
+import { BrowserTabNote, InstallCard } from './InstallCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -66,5 +66,58 @@ describe('InstallCard', () => {
     act(() => root.render(<InstallCard key="settings" env={env()} persistent />));
     expect(container.textContent).toContain('Install Mimic on your iPhone');
     expect(container.querySelector('button[aria-label^="Hide"]')).toBeNull();
+  });
+
+  it('hiding the card moves focus to the next heading, never to <body>', async () => {
+    act(() =>
+      root.render(
+        <main className="main" tabIndex={-1}>
+          <InstallCard env={env()} />
+          <section>
+            <h2 id="next-h">Today</h2>
+          </section>
+        </main>,
+      ),
+    );
+    const hide = container.querySelector<HTMLButtonElement>('button[aria-label^="Hide"]')!;
+    hide.focus();
+    expect(document.activeElement).toBe(hide);
+    await act(async () => {
+      hide.click();
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    });
+    expect(container.querySelector('.install-card')).toBeNull();
+    expect(document.activeElement?.id).toBe('next-h');
+  });
+
+  it('falls back to the page when nothing follows the card', async () => {
+    act(() =>
+      root.render(
+        <main className="main" tabIndex={-1}>
+          <InstallCard env={env()} />
+        </main>,
+      ),
+    );
+    const hide = container.querySelector<HTMLButtonElement>('button[aria-label^="Hide"]')!;
+    hide.focus();
+    await act(async () => {
+      hide.click();
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+    });
+    expect(document.activeElement).toBe(container.querySelector('main'));
+  });
+});
+
+describe('BrowserTabNote', () => {
+  it('warns on an iPhone browser tab that clips saved here will not be in the Home Screen app', () => {
+    act(() => root.render(<BrowserTabNote env={env()} />));
+    expect(container.textContent).toMatch(/You are in a browser tab\. Clips saved here will not appear in the Home Screen app/);
+  });
+
+  it('says nothing in the installed app or off iOS', () => {
+    act(() => root.render(<BrowserTabNote env={env({ standaloneFlag: true })} />));
+    expect(container.textContent).toBe('');
+    act(() => root.render(<BrowserTabNote env={env({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/140', platform: 'Linux', maxTouchPoints: 0 })} />));
+    expect(container.textContent).toBe('');
   });
 });

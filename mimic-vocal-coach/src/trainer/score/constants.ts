@@ -119,3 +119,31 @@ export const NO_MATCH_RIGID = 0.4;
 export const NO_MATCH_WARP_MS = 400;
 /** Nobody copies a phrase more than two octaves away: a key shift beyond this means the take is of something else. */
 export const MAX_KEY_SHIFT = 24;
+
+// ---- which fixes are listed ------------------------------------------------------------------------------------------
+/** A fix must be worth at least this many points of the overall to exist at all. */
+export const FIX_LISTED_POINTS = 0.7;
+/**
+ * ...and this many to be shown. Identical performances through phone-like channels (noise, level, roll-off, reverb) moved the top
+ * fix by about a point and changed which fix came first in 56 % of takes; at 1.5 points that falls to about a fifth. Below it a fix
+ * is still shown when it is the one thing to say about a take that is not near-perfect (overall under FIX_ONLY_BELOW).
+ */
+export const FIX_SHOWN_POINTS = 1.5;
+export const FIX_ONLY_BELOW = 95;
+/** Median level of the voiced frames (dBFS) below which a take counts as very quiet: unmatched notes at its start and end may simply not have been heard. */
+export const QUIET_VOICED_DB = -40;
+
+// ---- references whose melody is a rough guide (full songs) ----------------------------------------------------------------
+/** The original has at least this many times the notes the take has... */
+export const ROUGH_NOTE_RATIO = 1.4;
+/** ...while the take still matches at least this share of the original's time span. (Measured on 103 synthetic takes of 9-note phrases over a band, 0 dB to -6 dB: flags every complete take that scored under 85, no half-sung or 60 % take.) */
+export const ROUGH_SPAN_SHARE = 0.6;
+/** Extractor confidence below this (the app's own MIX_CONFIDENCE_WARN): the reference is uncertain and its takes are not counted toward mastery. */
+export const ROUGH_CONFIDENCE = 0.8;
+
+// ---- words for a score ----------------------------------------------------------------------------------------------------
+/** 'excellent' normally starts at 90; when pitch is under this, it starts at EXCELLENT_IF_PITCH_LOOSE (see scoreBand). */
+export const EXCELLENT_PITCH_MIN = 85;
+export const EXCELLENT_IF_PITCH_LOOSE = 93;
+/** A reference note the extractor gives less than this probability of being the lead voice (MIX `leadExtraction.noteTrust`) is not charged as missed, and a far-off answer to it is not a wrong note. */
+export const DOUBTFUL_NOTE_TRUST = 0.4;

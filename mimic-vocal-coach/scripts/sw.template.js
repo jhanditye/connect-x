@@ -5,8 +5,10 @@
  *  - Serve the app offline-first: navigations get the cached index.html, assets come from the cache.
  *  - Never touch cross-origin requests (the optional Claude coach talks to api.anthropic.com) or non-GET requests.
  *  - Updates are safe: a new worker installs in the background and WAITS. The page shows "Update ready"; the
- *    user taps it, the page posts SKIP_WAITING, and the app reloads on controllerchange. A running recording
- *    or analysis is never reloaded behind the user's back.
+ *    user taps it, the page posts SKIP_WAITING, and only THAT tab reloads on controllerchange (src/pwa/register.ts).
+ *    skipWaiting() makes the new worker take over every open tab, so register.ts does not reload the others: they keep
+ *    running their current code and offer a reload. A tab that is recording or analysing defers its own update until the
+ *    take is done. Nothing here reloads a page.
  */
 const VERSION = '__MIMIC_VERSION__';
 const PRECACHE = __MIMIC_PRECACHE__;

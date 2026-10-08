@@ -134,6 +134,61 @@ describe('Trainer library', () => {
   });
 });
 
+describe('Trainer library: install guidance and the floating Add clips button', () => {
+  const SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
+
+  it('on an iPhone browser tab shows the Home Screen steps in the empty state and above Today, because clips added there are not in the installed app', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(SAFARI);
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('iPhone');
+    try {
+      page(makeFakeTrainerController({ clips: [] }));
+      expect(screen.has('.install-card')).toBe(true);
+      expect(screen.text()).toMatch(/Add to Home Screen/);
+      expect(screen.text()).toMatch(/clips you add in a Safari tab are not carried over/);
+      // The steps come before the invitation to add clips.
+      expect(screen.q('.install-card').compareDocumentPosition(screen.q('.te')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      page();
+      expect(screen.has('.install-card')).toBe(true);
+      expect(screen.q('.install-card').compareDocumentPosition(screen.q('.tr-today')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('shows no install card on a desktop browser', () => {
+    page();
+    expect(screen.has('.install-card')).toBe(false);
+  });
+
+  it('the page has its own Add clips button and the floating one appears only once that one has scrolled out of view', () => {
+    const observers: { cb: (e: { isIntersecting: boolean }[]) => void }[] = [];
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (e: { isIntersecting: boolean }[]) => void) {
+          observers.push({ cb });
+        }
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    );
+    try {
+      page();
+      expect(screen.has('.tr-add-head')).toBe(true);
+      expect(screen.has('.tr-dock')).toBe(false);
+      act(() => observers[observers.length - 1].cb([{ isIntersecting: false }]));
+      expect(screen.has('.tr-dock')).toBe(true);
+      act(() => observers[observers.length - 1].cb([{ isIntersecting: true }]));
+      expect(screen.has('.tr-dock')).toBe(false);
+      screen.click(screen.q('.tr-add-head'));
+      expect(window.location.hash).toBe('#trainer/add');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe('Trainer library: empty, loading, error', () => {
   it('an empty library explains how to get a vocal and offers Add clips and the Studio', () => {
     page(makeFakeTrainerController({ clips: [] }));

@@ -166,26 +166,38 @@ describe('ResultSheet: a scored take', () => {
     expect(hasBtn(/Try it at 75%/)).toBe(false);
   });
 
-  it('offers the next phrase after three tries in a visit, or once it is mastered', () => {
+  it('offers the next phrase as soon as the take is as good as the mastery mark, after three tries otherwise, or once it is mastered', () => {
     const onNext = vi.fn();
-    sheet({ onNext, triesThisVisit: 2 });
-    expect(hasBtn(/Next phrase/)).toBe(false);
-    sheet({ onNext, triesThisVisit: 3 });
+    sheet({ onNext, triesThisVisit: 1 }); // a 91: no need to wait for the third try
     click(btn(/Next phrase/));
     expect(onNext).toHaveBeenCalledOnce();
-    sheet({ onNext, triesThisVisit: 1, phrase: clip.phrases[3] });
+    sheet({ onNext, triesThisVisit: 2, scenario: 'partial' }); // a weaker take on the second try: keep practising
+    expect(hasBtn(/Next phrase/)).toBe(false);
+    sheet({ onNext, triesThisVisit: 3, scenario: 'partial' });
     expect(hasBtn(/Next phrase/)).toBe(true);
-    sheet({ triesThisVisit: 5 });
+    sheet({ onNext, triesThisVisit: 1, scenario: 'partial', phrase: clip.phrases[3] });
+    expect(hasBtn(/Next phrase/)).toBe(true);
+    sheet({ triesThisVisit: 5 }); // no next phrase to go to
     expect(hasBtn(/Next phrase/)).toBe(false);
   });
 
   it('counts good tries toward mastery, and says when it is mastered', () => {
     sheet({ history: [] });
-    expect(text()).toContain('Mastered after 3 good tries at full speed.');
+    expect(text()).toContain('Counts toward mastery when sung at full speed: 3 good tries are needed.');
+    expect(text()).not.toContain('Mastered after');
     sheet({ history: attempts('perfect', 2) });
     expect(text()).toContain('2 of 3 good tries at full speed so far');
     sheet({ history: attempts('perfect', 2), phrase: clip.phrases[3] });
     expect(text()).toContain('Mastered. It will come back for review.');
+  });
+
+  it('shows no mastery count until the history includes this take, and never as a live region', () => {
+    sheet({ history: [], historyReady: false });
+    expect(container.querySelector('.rs-mastery')).toBeNull();
+    sheet({ history: attempts('perfect', 1), historyReady: true });
+    const line = container.querySelector('.rs-mastery');
+    expect(line?.textContent).toContain('1 of 3 good tries');
+    expect(line?.getAttribute('role')).toBeNull();
   });
 
   it('rounds a short phrase to the nearest 5 and says so', () => {
@@ -282,6 +294,18 @@ describe('ResultSheet: a take that cannot be scored', () => {
     expect(btn(/You/).disabled).toBe(true);
     expect(btn(/Both/).disabled).toBe(true);
     expect(btn(/Original/).disabled).toBe(false);
+  });
+
+  it('a not-scored take\'s words are on screen once as plain text, not as a second live region next to the page\'s announcement', () => {
+    const r = result('perfect');
+    r.comparison.score.trust = { level: 'invalid', reasons: ['Sounds like the playback.'] };
+    r.notice = 'This sounds like the playback, not you. Use headphones and try again.';
+    sheet({ result: r });
+    const quiet = Array.from(container.querySelectorAll('.notice')).find((n) => /sounds like the playback, not you/.test(n.textContent ?? ''));
+    expect(quiet).toBeTruthy();
+    expect(quiet?.getAttribute('role')).toBeNull();
+    sheet({ scenario: 'no-match' });
+    expect(Array.from(container.querySelectorAll('.notice')).every((n) => n.getAttribute('role') === null)).toBe(true);
   });
 
   it('too little singing is not a score of zero', () => {

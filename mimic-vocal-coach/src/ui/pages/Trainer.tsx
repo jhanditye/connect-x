@@ -16,6 +16,7 @@ import type { ClipRecord, PhraseRecord } from '../../types';
 import { ClipCard, clipColor } from '../components/ClipCard';
 import { Icon } from '../components/Icon';
 import { ImportSheet } from '../components/ImportSheet';
+import { InstallCard } from '../components/InstallCard';
 import { Notice } from '../components/Notice';
 import { StatusChip } from '../components/StatusChip';
 import { TrainerEmpty } from '../components/TrainerEmpty';
@@ -102,6 +103,10 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
   const [over, setOver] = useState(false);
   const [backupNote, setBackupNote] = useState<{ ok: boolean; message: string } | null>(null);
   const dragDepth = useRef(0);
+  // The floating Add clips button covered the second queue card at first view, so the page has its own Add clips button under the
+  // heading and the floating one only appears once that one has scrolled out of sight (and never where IntersectionObserver is missing).
+  const headAddRef = useRef<HTMLButtonElement>(null);
+  const [headAddVisible, setHeadAddVisible] = useState(true);
 
   const ready = trainer.status === 'ready' || trainer.status === 'memory-only';
   const groups = useMemo(() => groupClips(trainer.clips, trainer.singers), [trainer.clips, trainer.singers]);
@@ -109,11 +114,38 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
   const activeFilter = filter !== null && groups.some((g) => g.key === filter) ? filter : null;
   const shown = activeFilter ? groups.filter((g) => g.key === activeFilter) : groups;
 
+  const hasClips = trainer.clips.length > 0;
+  useEffect(() => {
+    const el = headAddRef.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver((entries) => {
+      const last = entries[entries.length - 1];
+      if (last) setHeadAddVisible(last.isIntersecting);
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ready, hasClips]);
+
   const openAdd = useCallback(() => goTrainer({ view: 'add' }), []);
   const closeAdd = useCallback(() => {
     clearPendingImport();
     goTrainer({ view: 'library' });
   }, []);
+
+  // Opening the library again can succeed (and the notice then goes away with the button that was pressed): keep the focus in the page.
+  const [retrying, setRetrying] = useState(false);
+  const tryOpenAgain = async () => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await extras.reload();
+    } finally {
+      setRetrying(false);
+      requestAnimationFrame(() => {
+        if (!document.activeElement || document.activeElement === document.body) headingRef.current?.focus({ preventScroll: true });
+      });
+    }
+  };
 
   const backup = async () => {
     setBackupNote(null);
@@ -168,6 +200,11 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
           Practise with the voices you love
         </h1>
         <p className="lede">Copy a singer phrase by phrase: listen, sing along, and see exactly what to fix. Everything stays on this device.</p>
+        {ready && trainer.clips.length > 0 && (
+          <button ref={headAddRef} type="button" className="button button--accent tr-add-head" onClick={openAdd}>
+            <Icon name="add" size={18} /> Add clips
+          </button>
+        )}
       </header>
 
       {trainer.status === 'loading' && (
@@ -195,14 +232,25 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
       )}
 
       {trainer.status === 'memory-only' && (
-        <Notice tone="warn" title="Clips will be lost when you close the app">
+        <Notice tone="warn" title={extras.canRetryOpen ? 'Your library did not open' : 'Clips will be lost when you close the app'}>
           <p>{extras.memoryReason ?? 'This browser would not give Mimic a place to keep clips.'}</p>
-          <p>Add Mimic to your Home Screen to keep them, or save a backup after adding clips. A backup holds your phrases and scores; the audio itself would need to be added again.</p>
-          {trainer.clips.length > 0 && (
+          {extras.canRetryOpen ? (
+            <p>Clips you add now are kept only until you close the app, unless the library opens again: then they are copied into it. Mimic tries again when you come back to the app.</p>
+          ) : (
+            <p>Add Mimic to your Home Screen to keep them, or save a backup after adding clips. A backup holds your phrases and scores; the audio itself would need to be added again.</p>
+          )}
+          {(extras.canRetryOpen || trainer.clips.length > 0) && (
             <div className="button-row">
-              <button type="button" className="button button--small" onClick={() => void backup()}>
-                Back up my library
-              </button>
+              {extras.canRetryOpen && (
+                <button type="button" className="button button--small" aria-disabled={retrying || undefined} aria-busy={retrying || undefined} onClick={() => void tryOpenAgain()}>
+                  {retrying ? 'Trying again…' : 'Try again'}
+                </button>
+              )}
+              {trainer.clips.length > 0 && (
+                <button type="button" className="button button--small" onClick={() => void backup()}>
+                  Back up my library
+                </button>
+              )}
             </div>
           )}
         </Notice>
@@ -254,6 +302,10 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
         </Notice>
       )}
 
+      {/* On an iPhone, clips added in a Safari tab are not carried over to the installed app (it has its own storage): say so before
+          the first import, and keep the steps near the library until the app is installed or the card is hidden. */}
+      {ready && <InstallCard />}
+
       {ready && trainer.clips.length === 0 && <TrainerEmpty onAdd={openAdd} />}
 
       {ready && trainer.clips.length > 0 && (
@@ -300,7 +352,7 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
         </>
       )}
 
-      {ready && trainer.clips.length > 0 && (
+      {ready && trainer.clips.length > 0 && !headAddVisible && (
         <div className="tr-dock">
           <button type="button" className="add-button" onClick={openAdd}>
             <Icon name="add" size={22} /> Add clips

@@ -9,15 +9,22 @@
 //
 // Rules this file keeps: every change reads the clip fresh from the store before it writes (so a stale screen cannot
 // overwrite newer data), changes to one clip run one after another, a clip is either fully stored or absent, and a store
-// that stops answering turns into an `error` status with the next step instead of a hang.
+// that stops answering turns into an `error` status with the next step instead of a hang. A library that fails to open (a timeout,
+// one of Safari's random errors) does not stay memory-only for good: it is opened again on `reload()`, before a clip is saved and
+// when the app returns to the foreground, and the clips added in the meantime are copied into it. A backup file that could not
+// include everything is reported (`lastExportReport`) and does not clear the backup reminder.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react';
 import {
+  copyLibrary,
+  createMemoryClipStore,
   META,
+  OPEN_TIMEOUT_MESSAGE,
   openClipStoreWithFallback,
   QuotaError,
   StoreUnavailableError,
   type ClipStore,
+  type OpenedStore,
 } from '../storage/clips';
 import {
   applyAttempt,
@@ -42,7 +49,7 @@ import type { PracticeEngine } from '../trainer/engine';
 import { MAX_STORE_RATE } from '../audio/pcm';
 import type { AppSettings, AttemptRecord, ClipRecord, PhraseRecord } from '../types';
 import { AppContext, type AppController } from './context';
-import { TrainerContext, type TrainerController } from './trainerContext';
+import { TrainerContext, type ExportReport, type TrainerController } from './trainerContext';
 import {
   applyClipPatch,
   findPhrase,
@@ -92,11 +99,17 @@ export interface TrainerImporter {
 export interface TrainerExtras {
   /** The browser's reason when the library is memory-only. */
   memoryReason: string | null;
+  /** Memory-only because opening the library failed in a way that opening it again can fix: `reload()` (a "Try again" button) tries. */
+  canRetryOpen?: boolean;
   /** Records that could not be read when the library loaded, in plain words. */
   warnings: string[];
   exportReminder: ExportReminder;
   /** One plain sentence about where the clips live (install to the Home Screen, memory-only, nearly full), or null. */
   storageNote: string | null;
+  /**
+   * Reads the library again. While the library is memory-only after a failed open (a timeout, one of Safari's random errors), it first
+   * tries to open IndexedDB again and, when that works, copies the clips added in this session into it.
+   */
   reload(): Promise<void>;
   refreshStorage(): Promise<StorageStatus>;
   /** Asks the browser to keep this site's data. Call it from a tap. */
@@ -105,6 +118,7 @@ export interface TrainerExtras {
 
 const INERT_EXTRAS: TrainerExtras = {
   memoryReason: null,
+  canRetryOpen: false,
   warnings: [],
   exportReminder: { due: false, message: null },
   storageNote: null,
@@ -232,7 +246,13 @@ export interface TrainerProviderProps {
   now?: () => number;
   /** Tell other tabs when the library changes, and reload when they do. Default: only for an IndexedDB store. */
   syncTabs?: boolean;
+  /** How long the library may take to open before the session goes memory-only with a "try again" (default 15 s; clips.ts has its own, shorter bound). */
+  openWatchdogMs?: number;
 }
+
+const OPEN_WATCHDOG_MS = 15_000;
+/** The app coming back to the foreground retries a failed open at most this often. */
+const RETRY_OPEN_EVERY_MS = 20_000;
 
 export function TrainerProvider(props: TrainerProviderProps) {
   const { children, store: injected } = props;
@@ -253,6 +273,12 @@ export function TrainerProvider(props: TrainerProviderProps) {
   const persistAskedRef = useRef(false);
   const clearing = useRef<Promise<void> | null>(null);
   const pendingExport = useRef<{ at: string; attemptsAtBuild: number } | null>(null);
+  const lastExport = useRef<ExportReport | null>(null);
+  /** Opens IndexedDB again after a failed open and moves this session's clips into it; set by the effect that owns the store. */
+  const recoverRef = useRef<(() => Promise<boolean>) | null>(null);
+  const retryRef = useRef(false);
+  /** Why the library is memory-only right now; read synchronously by the actions that reload (the state lags a render behind). */
+  const memoryRef = useRef<{ reason: string | null; retryable: boolean }>({ reason: null, retryable: false });
   const queue = useMemo(createKeyedQueue, []);
 
   const send = useCallback((action: TrainerAction) => dispatch(action), []);
@@ -519,19 +545,46 @@ export function TrainerProvider(props: TrainerProviderProps) {
         queue('*library*', () =>
           guard(async () => {
             const store = await getStore();
+            const warnings: string[] = [];
+            // `complete` is false when something that EXISTS could not be read: such a file is still worth saving, but it is not
+            // "a backup", so it does not clear the reminder. Records the app cannot open at all (a newer version's, damaged ones)
+            // are reported but do not hold the reminder on: no later try would include them.
+            let complete = true;
             let clips: ClipRecord[];
             let attempts: AttemptRecord[] = [];
             let calibration: Record<string, number> = {};
             try {
-              clips = (await store.listClips()).map((r) => inspectClipRecord(r)).flatMap((i) => (i.ok ? [i.clip] : []));
+              const raw = await store.listClips();
+              clips = [];
+              let unreadable = 0;
+              for (const r of raw) {
+                const i = inspectClipRecord(r);
+                if (i.ok) clips.push(i.clip);
+                else unreadable++;
+              }
+              if (unreadable > 0) warnings.push(`${unreadable} saved ${unreadable === 1 ? 'clip' : 'clips'} could not be read by this version of Mimic and ${unreadable === 1 ? 'is' : 'are'} not in this backup.`);
+            } catch {
+              // A library that cannot be read back still gets a file of what the screen is showing, labelled as partial.
+              clips = stateRef.current.clips;
+              complete = false;
+              warnings.push('Your saved clips could not be read, so this file holds only the clips on screen and may be missing some.');
+            }
+            try {
               attempts = await store.listAttempts({});
+            } catch {
+              complete = false;
+              warnings.push('Your practice history (scores and attempts) could not be read, so it is not in this file.');
+            }
+            try {
               calibration = (await store.getMeta<Record<string, number>>(META.calibration)) ?? {};
             } catch {
-              // A library that cannot be read back still gets a backup of what the screen is showing.
-              clips = stateRef.current.clips;
+              // The microphone timing is learned again within a few takes; it is not worth a warning.
             }
             const lib = buildLibraryExport(clips, attempts, calibration, new Date((propsRef.current.now ?? Date.now)()));
             const blob = new Blob([JSON.stringify(lib)], { type: 'application/json' });
+            lastExport.current = { complete, warnings, clips: lib.clips.length, attempts: lib.attempts.length };
+            pendingExport.current = null;
+            if (!complete) return blob; // not counted as a backup: the reminder stays
             if (options?.markDone === false) {
               pendingExport.current = { at: lib.exportedAt, attemptsAtBuild: stateRef.current.attemptsSinceExport };
             } else {
@@ -586,7 +639,12 @@ export function TrainerProvider(props: TrainerProviderProps) {
             const touchedIds = new Set(changed.map((c) => c.id));
             if (a) {
               for (const c of merged.clips) {
-                if (!touchedIds.has(c.id) || !c.contributesToSinger) continue;
+                if (!touchedIds.has(c.id)) continue;
+                if (!c.contributesToSinger) {
+                  // A newer copy that does not count (or no longer counts): the singer's measured targets must not keep it.
+                  dropMeasured(c.id);
+                  continue;
+                }
                 const ok = contributionBlocker(c) === null && c.singerId !== null && a.builtins.some((b) => b.id === c.singerId);
                 if (ok) a.addMeasuredClip(c.singerId as string, measuredFromClip(c));
                 else await store.putClip({ ...c, contributesToSinger: false });
@@ -594,15 +652,15 @@ export function TrainerProvider(props: TrainerProviderProps) {
             }
 
             const loaded = await loadLibrary(store);
-            send({ type: 'loaded', ...loaded, warnings: [...loaded.warnings], memoryReason: stateRef.current.memoryReason });
+            send({ type: 'loaded', ...loaded, warnings: [...loaded.warnings], memoryReason: memoryRef.current.reason, memoryRetryable: memoryRef.current.retryable });
             notifyTabs();
             void refreshStorage();
             return { added: merged.added, updated: merged.updated, warnings };
           }),
         ),
 
-      prepareClip: async (file: File, onProgress?: (p: ImportProgress) => void): Promise<PreparedClip> => {
-        const prepared = await importer().prepareClip(file, settings(), onProgress);
+      prepareClip: async (file: File, onProgress?: (p: ImportProgress) => void, signal?: AbortSignal): Promise<PreparedClip> => {
+        const prepared = await importer().prepareClip(file, settings(), onProgress, signal ? { signal } : undefined);
         const check = checkImportSpace(estimateImportBytes(prepared.samples.length * (Math.min(prepared.sampleRate, MAX_STORE_RATE) / prepared.sampleRate)), stateRef.current.storage);
         return check.message ? { ...prepared, warnings: [...prepared.warnings, check.message] } : prepared;
       },
@@ -610,6 +668,9 @@ export function TrainerProvider(props: TrainerProviderProps) {
       commitClip: (prepared: PreparedClip, edits: CommitEdits, onProgress?: (p: ImportProgress) => void): Promise<ClipRecord> => {
         maybeRequestPersistence();
         return guard(async () => {
+          // Memory-only because the library failed to open (not because the browser refuses to store): look again before the clip,
+          // which took minutes to analyse, goes into a place that is lost when the app closes.
+          if (stateRef.current.status === 'memory-only' && stateRef.current.memoryRetryable) await recoverRef.current?.();
           const store = await getStore();
           const roomError = spaceError(prepared, edits);
           if (roomError) throw roomError;
@@ -732,7 +793,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
     const loadOnce = async (): Promise<void> => {
       const store = await getStore();
       const loaded = await guard(() => loadLibrary(store));
-      send({ type: 'loaded', ...loaded, memoryReason: stateRef.current.memoryReason });
+      send({ type: 'loaded', ...loaded, memoryReason: memoryRef.current.reason, memoryRetryable: memoryRef.current.retryable });
     };
 
     const requestPersistence = async (): Promise<boolean> => {
@@ -749,17 +810,112 @@ export function TrainerProvider(props: TrainerProviderProps) {
     return { controller, loadOnce, requestPersistence };
   }, [queue, refreshStorage, send]);
 
-  // Open the store and load the library; reload when another tab changes it.
+  // Open the store and load the library; reload when another tab changes it; and, while the library is memory-only only because
+  // opening it failed in a way that can pass, open it again when asked (reload, a clip about to be saved, the app coming back).
   useEffect(() => {
     let alive = true;
     let owned: ClipStore | null = null;
     let reloadTimer: ReturnType<typeof setTimeout> | undefined;
     let channel: BroadcastChannel | null = null;
+    let lastTry = Date.now();
+    let recovering: Promise<boolean> | null = null;
+    /** The in-memory store standing in for IndexedDB after a failed open (null when the real library is open). */
+    let fallbackStore: ClipStore | null = null;
+
+    /** The open, with a bound of its own: an injected or custom opener that never settles must not leave "Opening your library" up. */
+    const openWithWatchdog = async (): Promise<OpenedStore> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const slow = new Promise<'slow'>((resolve) => {
+        timer = setTimeout(() => resolve('slow'), propsRef.current.openWatchdogMs ?? OPEN_WATCHDOG_MS);
+      });
+      const opening = openClipStoreWithFallback(propsRef.current.openStore);
+      const first = await Promise.race([opening, slow]);
+      clearTimeout(timer);
+      if (first === 'slow') {
+        void opening.then((late) => late.store.close()); // it arrived too late to be used: do not leak the connection
+        return { store: createMemoryClipStore(), fallback: { reason: OPEN_TIMEOUT_MESSAGE, retryable: true } };
+      }
+      return first;
+    };
+
+    const attachSync = (store: ClipStore): void => {
+      const sync = propsRef.current.syncTabs ?? store.kind === 'indexeddb';
+      if (!alive || !sync || channel || typeof BroadcastChannel !== 'function') return;
+      try {
+        channel = new BroadcastChannel(CHANNEL);
+        channelRef.current = channel;
+        channel.onmessage = () => {
+          clearTimeout(reloadTimer);
+          reloadTimer = setTimeout(() => void actions.loadOnce().catch(() => undefined), 250);
+        };
+      } catch {
+        channel = null;
+      }
+    };
+
+    /** Chunks whose clip record is missing (an import killed half way by an older version) are removed once per open. */
+    const sweep = (store: ClipStore): void => {
+      if (store.kind !== 'indexeddb') return;
+      void store
+        .pruneOrphanAudio()
+        .then((n) => (n > 0 && alive ? refreshStorage() : undefined))
+        .catch(() => undefined);
+    };
+
+    const recover = (): Promise<boolean> => {
+      if (!alive || !fallbackStore || !retryRef.current) return Promise.resolve(false);
+      if (!recovering) {
+        lastTry = Date.now();
+        recovering = queue('*library*', async () => {
+          const memory = fallbackStore;
+          if (!alive || !memory) return false;
+          const attempt = await openWithWatchdog();
+          if (attempt.fallback) {
+            attempt.store.close();
+            retryRef.current = attempt.fallback.retryable;
+            return false;
+          }
+          if (!alive) {
+            attempt.store.close();
+            return false;
+          }
+          const real = attempt.store;
+          let copied = { clips: 0, attempts: 0 };
+          try {
+            copied = await copyLibrary(memory, real);
+          } catch {
+            real.close(); // the session's clips stay in memory; whatever was copied is a complete clip or swept chunks
+            return false;
+          }
+          storeRef.current = real;
+          owned = real;
+          fallbackStore = null;
+          memory.close();
+          retryRef.current = false;
+          memoryRef.current = { reason: null, retryable: false };
+          attachSync(real);
+          const loaded = await loadLibrary(real);
+          const note = copied.clips > 0 ? [`Your library opened again. ${copied.clips === 1 ? 'The clip' : `The ${copied.clips} clips`} you added in this session ${copied.clips === 1 ? 'was' : 'were'} copied into it.`] : [];
+          if (alive) dispatch({ type: 'loaded', ...loaded, warnings: [...note, ...loaded.warnings], memoryReason: null });
+          sweep(real);
+          void refreshStorage();
+          return true;
+        })
+          .catch(() => false)
+          .finally(() => {
+            recovering = null;
+          });
+      }
+      return recovering;
+    };
+    recoverRef.current = recover;
+
     const run = (async () => {
       let store = injected;
       let reason: string | null = null;
+      let retryable = false;
       if (!store) {
-        const opened = await openClipStoreWithFallback(propsRef.current.openStore);
+        const opened = await openWithWatchdog();
         if (!alive) {
           opened.store.close(); // unmounted while IndexedDB was opening (React StrictMode does this)
           return;
@@ -767,39 +923,43 @@ export function TrainerProvider(props: TrainerProviderProps) {
         store = opened.store;
         owned = store;
         reason = opened.fallback?.reason ?? null;
+        retryable = opened.fallback?.retryable ?? false;
+        fallbackStore = opened.fallback ? store : null;
+        retryRef.current = retryable;
+        memoryRef.current = { reason, retryable };
+        lastTry = Date.now();
       }
       storeRef.current = store;
       try {
         const loaded = await loadLibrary(store);
-        if (alive) dispatch({ type: 'loaded', ...loaded, memoryReason: reason });
+        if (alive) dispatch({ type: 'loaded', ...loaded, memoryReason: reason, memoryRetryable: retryable });
+        if (alive && owned) sweep(store);
       } catch (err) {
         if (alive) dispatch({ type: 'failed', message: errorMessage(err, 'The library could not be read. Export a backup, then reload the app.') });
       }
-      const sync = propsRef.current.syncTabs ?? store.kind === 'indexeddb';
-      if (alive && sync && typeof BroadcastChannel === 'function') {
-        try {
-          channel = new BroadcastChannel(CHANNEL);
-          channelRef.current = channel;
-          channel.onmessage = () => {
-            clearTimeout(reloadTimer);
-            reloadTimer = setTimeout(() => void actions.loadOnce().catch(() => undefined), 250);
-          };
-        } catch {
-          channel = null;
-        }
-      }
+      attachSync(store);
       if (alive) void refreshStorage();
     })();
     loadedRef.current = run;
+
+    const onForeground = (): void => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (fallbackStore && retryRef.current && Date.now() - lastTry >= RETRY_OPEN_EVERY_MS) void recover();
+    };
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('focus', onForeground);
     return () => {
       alive = false;
+      recoverRef.current = null;
       clearTimeout(reloadTimer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onForeground);
+      window.removeEventListener('focus', onForeground);
       channel?.close();
       channelRef.current = null;
       storeRef.current = null;
       owned?.close();
     };
-  }, [injected, actions, refreshStorage]);
+  }, [injected, actions, refreshStorage, queue]);
 
   // The practice queue depends on the date: look again when the app comes back to the foreground.
   useEffect(() => {
@@ -816,10 +976,10 @@ export function TrainerProvider(props: TrainerProviderProps) {
   }, []);
 
   // AppController.clearAllData should also wipe the library: it calls every hook registered here.
-  const onClear = (app as (AppController & { onClear?: (fn: () => void | Promise<void>) => () => void }) | null)?.onClear;
+  const onClear = app?.onClear;
   useEffect(() => {
     if (typeof onClear !== 'function') return;
-    return onClear(() => actions.controller.clearAll());
+    return onClear(() => actions.controller.clearAll(), 'your clips and practice scores');
   }, [onClear, actions]);
 
   const singerIds = app?.builtins;
@@ -852,6 +1012,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
       setContributes: c.setContributes,
       exportLibrary: c.exportLibrary,
       markExported: c.markExported,
+      lastExportReport: () => lastExport.current,
       readClipSamples: c.readClipSamples,
       importLibrary: c.importLibrary,
       prepareClip: c.prepareClip,
@@ -869,14 +1030,18 @@ export function TrainerProvider(props: TrainerProviderProps) {
     const oldest = state.clips.reduce<string | null>((o, c) => (o === null || Date.parse(c.addedAt) < Date.parse(o) ? c.addedAt : o), null);
     return {
       memoryReason: state.memoryReason,
+      canRetryOpen: memoryOnly && state.memoryRetryable,
       warnings: state.warnings,
       exportReminder: computeExportReminder({ clipCount: state.clips.length, attemptsSinceExport: state.attemptsSinceExport, lastExportAt: state.lastExportAt, oldestClipAt: oldest }, state.now),
       storageNote: state.status === 'loading' ? null : storageNote(state.storage, { memoryOnly, installed: isInstalledPwa() }),
-      reload: () => actions.loadOnce(),
+      reload: async () => {
+        // A recovery has just read the library it opened; otherwise read the one that is open again.
+        if (!(await recoverRef.current?.())) await actions.loadOnce();
+      },
       refreshStorage,
       requestPersistence: actions.requestPersistence,
     };
-  }, [state.status, state.memoryReason, state.warnings, state.clips, state.attemptsSinceExport, state.lastExportAt, state.now, state.storage, actions, refreshStorage]);
+  }, [state.status, state.memoryReason, state.memoryRetryable, state.warnings, state.clips, state.attemptsSinceExport, state.lastExportAt, state.now, state.storage, actions, refreshStorage]);
 
   return (
     <TrainerContext.Provider value={value}>

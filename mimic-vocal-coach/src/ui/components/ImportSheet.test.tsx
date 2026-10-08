@@ -97,7 +97,7 @@ function controllerReading(prepared: Record<string, PreparedClip | Error>, opts:
 }
 
 async function tickAndSave() {
-  const owned = $$<HTMLInputElement>('.rev-section input[type="checkbox"]').pop()!;
+  const owned = $<HTMLInputElement>('.rev-footer .rev-owned input[type="checkbox"]');
   if (!owned.checked) click(owned);
   await clickAsync(button(/Save clip/));
 }
@@ -261,17 +261,23 @@ describe('ImportSheet: one clip from file to library', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('remembers that the user confirmed ownership, so the next clip starts ticked', async () => {
+  it('asks about ownership for every file: the tick is not remembered, and an old remembered tick is forgotten', async () => {
+    localStorage.setItem('mimic:v1:trainer-owned', '1'); // left by an earlier version
     const { ctl } = controllerReading({ 'a.wav': fakePrepared({ name: 'a.wav' }), 'b.wav': fakePrepared({ name: 'b.wav' }) });
     mount(ctl);
+    expect(localStorage.getItem('mimic:v1:trainer-owned')).toBeNull();
     await choose(audioFile('a.wav'));
+    const first = $<HTMLInputElement>('.rev-footer .rev-owned input[type="checkbox"]');
+    expect(first.checked).toBe(false);
+    expect($('.rev-footer .rev-owned').textContent).toContain('a.wav');
     await tickAndSave();
-    expect(localStorage.getItem('mimic:v1:trainer-owned')).toBe('1');
+    expect(localStorage.getItem('mimic:v1:trainer-owned')).toBeNull();
     click(button(/Add more clips/));
     await choose(audioFile('b.wav'));
-    const owned = $$<HTMLInputElement>('.rev-section input[type="checkbox"]').pop()!;
-    expect(owned.checked).toBe(true);
-    expect(button(/Save clip/).disabled).toBe(false);
+    const second = $<HTMLInputElement>('.rev-footer .rev-owned input[type="checkbox"]');
+    expect(second.checked).toBe(false);
+    expect($('.rev-footer .rev-owned').textContent).toContain('b.wav');
+    expect(button(/Save clip/).getAttribute('aria-disabled')).toBe('true');
   });
 
   it('passes the user\'s edits to the library', async () => {
@@ -300,7 +306,7 @@ describe('ImportSheet: one clip from file to library', () => {
     await tickAndSave();
     expect(text()).toMatch(/The clip was not saved/);
     expect(text()).toMatch(/Not enough room on this device.*Remove clips you no longer practise.*keep a shorter part/);
-    expect(button(/Save clip/).disabled).toBe(false);
+    expect(button(/Save clip/).getAttribute('aria-disabled')).toBeNull();
     await clickAsync(button(/Save clip/));
     expect(text()).toMatch(/does not offer IndexedDB.*Reload the app.*export a backup/);
     await clickAsync(button(/Save clip/));
@@ -534,7 +540,7 @@ describe('ImportSheet with the real import code and a store', () => {
     await choose(wavFile(speechLike(), KIT_RATE, 'Talking.wav'));
     for (let i = 0; i < 200 && $$('.rev').length === 0; i++) await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
     expect($('.notice--error').textContent).toMatch(/speech-like syllables.*sung section/);
-    expect(button(/Save clip/).disabled).toBe(true);
+    expect(button(/Save clip/).getAttribute('aria-disabled')).toBe('true');
     expect(await store.listClips()).toEqual([]);
   }, 60000);
 });
@@ -558,5 +564,171 @@ describe('helpers', () => {
     expect(saveErrorMessage(new StoreUnavailableError('No IndexedDB.'))).toMatch(/No IndexedDB\. Reload the app/);
     expect(saveErrorMessage(new Error('boom'))).toBe('boom');
     expect(saveErrorMessage('x')).toMatch(/could not be saved/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Cancelling what is not wanted, reading one file at a time, announcing sparingly, and not losing the focus
+
+/** A controller whose files stay "being read" until released, recording the signal each read was given. */
+function controllerHolding(names: string[]) {
+  const ctl = makeFakeTrainerController({ clips: [] });
+  const reads: { name: string; signal: AbortSignal | undefined; release: () => void; onProgress?: (p: ImportProgress) => void }[] = [];
+  ctl.prepareClip = vi.fn(async (file: File, onProgress?: (p: ImportProgress) => void, signal?: AbortSignal) => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    reads.push({ name: file.name, signal, release, onProgress });
+    await held;
+    if (signal?.aborted) throw Object.assign(new Error('The import was cancelled.'), { name: 'AbortError' });
+    return fakePrepared({ name: file.name });
+  });
+  void names;
+  return { ctl, reads, live: () => reads.filter((r) => !r.signal?.aborted).length };
+}
+
+describe('ImportSheet: stopping reads nobody wants', () => {
+  it('skipping a file stops its analysis, and skipping through a long queue never leaves more than one read running', async () => {
+    const names = Array.from({ length: 10 }, (_, i) => `song${i}.wav`);
+    const { ctl, reads, live } = controllerHolding(names);
+    mount(ctl);
+    await choose(...names.map(audioFile));
+    expect(reads.map((r) => r.name)).toEqual(['song0.wav']); // one at a time: the look-ahead waits until this one is read
+    for (let i = 0; i < 8; i++) {
+      await clickAsync(button(/Skip this file/));
+      expect(live()).toBeLessThanOrEqual(1);
+    }
+    expect(reads).toHaveLength(9);
+    expect(reads.slice(0, 8).every((r) => r.signal?.aborted)).toBe(true);
+    expect(reads[8].signal?.aborted).toBe(false);
+    expect(text()).toMatch(/song8\.wav/);
+  });
+
+  it('starts the look-ahead only after the file on screen has been read, and never beside another read', async () => {
+    const { ctl, reads } = controllerHolding(['a.wav', 'b.wav', 'c.wav']);
+    mount(ctl);
+    await choose(audioFile('a.wav'), audioFile('b.wav'), audioFile('c.wav'));
+    expect(reads.map((r) => r.name)).toEqual(['a.wav']);
+    await act(async () => reads[0].release());
+    expect(reads.map((r) => r.name)).toEqual(['a.wav', 'b.wav']); // a is on screen; b is read while it is reviewed
+    expect(reads[1].signal?.aborted).toBe(false);
+  });
+
+  it('closing the sheet stops every read, whether it asks first or not', async () => {
+    const { ctl, reads } = controllerHolding(['a.wav', 'b.wav']);
+    const { onClose } = mount(ctl);
+    await choose(audioFile('a.wav'), audioFile('b.wav'));
+    click(button(/^Close$/));
+    expect(text()).toMatch(/have not been saved yet/);
+    expect(reads[0].signal?.aborted).toBe(false); // "Keep going" must leave the work alone
+    click(button(/Keep going/));
+    expect(reads[0].signal?.aborted).toBe(false);
+    click(button(/^Close$/));
+    click(button(/Close without saving/));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(reads.every((r) => r.signal?.aborted)).toBe(true);
+  });
+
+  it('leaving the page (unmounting) stops the reads too', async () => {
+    const { ctl, reads } = controllerHolding(['a.wav']);
+    mount(ctl);
+    await choose(audioFile('a.wav'));
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(reads[0].signal?.aborted).toBe(true);
+  });
+
+  it('a file whose read was cancelled shows nothing: no error, no "problem" chip', async () => {
+    const { ctl, reads } = controllerHolding(['a.wav', 'b.wav']);
+    mount(ctl);
+    await choose(audioFile('a.wav'), audioFile('b.wav'));
+    await clickAsync(button(/Skip this file/));
+    await act(async () => reads[0].release()); // the cancelled read finishes and rejects with an AbortError
+    expect(text()).not.toMatch(/Could not use/);
+    expect($$('.imp-queue-item')[0].textContent).toMatch(/left out/);
+  });
+
+  it('a clip that cannot be used offers a way back to choosing files, and stops anything still being read', async () => {
+    const ctl = makeFakeTrainerController({ clips: [] });
+    ctl.prepareClip = vi.fn(async (file: File) => fakePrepared({ name: file.name, blockers: ['This clip is silent, or too quiet to hear any singing. Check that you picked the right file.'] }));
+    mount(ctl);
+    await choose(audioFile('quiet.wav'));
+    expect(text()).toMatch(/This clip is silent/);
+    expect(text()).not.toMatch(/backing music/);
+    click(button(/Choose a different file/));
+    expect($('input[type="file"]')).toBeTruthy();
+    expect(text()).toMatch(/Add clips from music you own/);
+  });
+
+  it('hands the vocal-only file read the sheet\'s signal, which closing the sheet aborts', async () => {
+    const ctl = makeFakeTrainerController({ clips: [] });
+    const signals: (AbortSignal | undefined)[] = [];
+    const real = ctl.prepareClip;
+    ctl.prepareClip = vi.fn(async (file: File, _onProgress?: (p: ImportProgress) => void, signal?: AbortSignal) => {
+      signals.push(signal);
+      return file.name === 'stem.wav' ? fakePrepared({ name: 'stem.wav' }) : fakePrepared({ name: file.name, kind: 'mix', analysis: { mode: 'mix', issues: ['accompaniment'] } });
+    });
+    void real;
+    mount(ctl);
+    await choose(audioFile('song.wav'));
+    const input = $<HTMLInputElement>('.rev-section input[type="file"]');
+    Object.defineProperty(input, 'files', { value: [audioFile('stem.wav')], configurable: true });
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(signals).toHaveLength(2);
+    expect(signals[1]).toBeInstanceOf(AbortSignal);
+    expect(signals[1]).not.toBe(signals[0]);
+    act(() => root.unmount());
+    root = createRoot(container);
+    expect(signals[1]?.aborted).toBe(true);
+  });
+});
+
+describe('ImportSheet: announcing progress', () => {
+  it('is not a live region that changes with every percent: it announces the start, the long part once, and the end', async () => {
+    const { ctl, reads } = controllerHolding(['long.wav']);
+    mount(ctl);
+    await choose(audioFile('long.wav'));
+    expect($('.imp-preparing').getAttribute('role')).toBeNull();
+    expect($('.imp-preparing').closest('[role="status"], [aria-live]')).toBeNull();
+    const live = $<HTMLElement>('.imp-sheet > p[role="status"]');
+    expect(live.textContent).toBe('Reading long.wav.');
+    const heard: string[] = [];
+    const watcher = new MutationObserver(() => heard.push(live.textContent ?? ''));
+    watcher.observe(live, { childList: true, characterData: true, subtree: true });
+    for (let i = 1; i <= 40; i++) {
+      await act(async () => reads[0].onProgress?.({ fileIndex: 0, fileCount: 1, name: 'long.wav', phase: 'analysing', fraction: i / 40 }));
+    }
+    watcher.disconnect();
+    expect(heard).toEqual(['Listening for the melody in long.wav.']);
+    await act(async () => reads[0].release());
+    expect(live.textContent).toBe('long.wav is ready to review.');
+    // The progress bar itself still reports its value.
+    expect(heard.length).toBe(1);
+  });
+});
+
+describe('ImportSheet: focus when it closes', () => {
+  it('returns to the control that opened it, and to the page heading when that control is gone', () => {
+    const opener = document.createElement('button');
+    opener.textContent = 'Add clips';
+    document.body.appendChild(opener);
+    const h1 = document.createElement('h1');
+    h1.textContent = 'Trainer';
+    document.body.appendChild(h1);
+    opener.focus();
+    mount(makeFakeTrainerController({ clips: [] }));
+    expect(sheet().contains(document.activeElement)).toBe(true);
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(opener);
+
+    root = createRoot(container);
+    opener.focus();
+    mount(makeFakeTrainerController({ clips: [] }));
+    opener.remove(); // the empty-state button disappears with the first clip
+    act(() => root.unmount());
+    expect(document.activeElement).toBe(h1);
+    expect(document.activeElement).not.toBe(document.body);
+    h1.remove();
   });
 });

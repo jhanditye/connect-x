@@ -2,6 +2,7 @@
 // window (a few seconds of Int16 PCM from one or two 10 s chunks) and analysing that window once; the analysis of the
 // reference phrase is what every attempt is compared with, so it is cached rather than redone for each take.
 
+import { abortError } from '../analysis/abort';
 import { analyzeInWorker } from '../analysis/client';
 import type { ClipStore } from '../storage/clips';
 import type { AnalysisOptions, ClipRecord, PhraseRecord, VoiceAnalysis } from '../types';
@@ -50,18 +51,19 @@ export async function loadPhraseAudio(store: ClipStore, clip: ClipRecord, phrase
   return { samples, sampleRate: info.sampleRate, startSec: firstFrame / info.sampleRate, source: info.kind };
 }
 
-function abortError(): Error {
-  if (typeof DOMException === 'function') return new DOMException('The analysis was cancelled.', 'AbortError');
-  const err = new Error('The analysis was cancelled.');
-  err.name = 'AbortError';
-  return err;
-}
-
 /** How many phrase analyses are kept (the current phrase, the neighbours and a few recent ones). */
 export const PHRASE_CACHE_SIZE = 6;
 
 const cache = new Map<string, VoiceAnalysis>(); // insertion order = least recently used first
-const inflight = new Map<string, Promise<VoiceAnalysis>>();
+
+/** One analysis in flight, shared by every caller that asked for the same phrase; the last caller to leave cancels it. */
+interface Job {
+  promise: Promise<VoiceAnalysis>;
+  controller: AbortController;
+  /** Callers still waiting for the result. */
+  waiters: number;
+}
+const inflight = new Map<string, Job>();
 
 /**
  * The options a phrase is analysed with. A phrase of a clip analysed from a full mix must be analysed as a mix again, whatever
@@ -79,13 +81,15 @@ export function phraseCacheKey(clip: Pick<ClipRecord, 'id'>, phrase: Pick<Phrase
 
 export function clearPhraseAnalysisCache(): void {
   cache.clear();
+  for (const job of inflight.values()) job.controller.abort();
   inflight.clear();
 }
 
 /**
  * Analysis of one phrase window, cached in an LRU of PHRASE_CACHE_SIZE keyed by (phrase id, window, voice type, a4Hz, mode,
  * analysis version). Callers must treat the result as read-only: the same object is handed to every caller. Rejects with an
- * AbortError when `signal` aborts (the analysis itself finishes in the background and is cached for the next caller).
+ * AbortError when `signal` aborts. The analysis is shared by every caller that asks for the same phrase: it is cancelled (the
+ * worker is stopped) only when no caller is left waiting for it, so one caller leaving does not cost another its result.
  */
 export function analyzePhraseCached(clip: ClipRecord, phrase: PhraseRecord, audio: PhraseAudio, opts: AnalysisOptions, signal?: AbortSignal): Promise<VoiceAnalysis> {
   if (signal?.aborted) return Promise.reject(abortError());
@@ -101,33 +105,56 @@ export function analyzePhraseCached(clip: ClipRecord, phrase: PhraseRecord, audi
 
   let job = inflight.get(key);
   if (!job) {
-    job = analyzeInWorker(audio.samples, audio.sampleRate, effective).then(
+    const controller = new AbortController();
+    const promise = analyzeInWorker(audio.samples, audio.sampleRate, effective, undefined, controller.signal).then(
       (analysis) => {
-        inflight.delete(key);
+        if (inflight.get(key) === made) inflight.delete(key);
         cache.set(key, analysis);
         while (cache.size > PHRASE_CACHE_SIZE) cache.delete(cache.keys().next().value as string);
         return analysis;
       },
       (err: unknown) => {
-        inflight.delete(key);
+        if (inflight.get(key) === made) inflight.delete(key);
         throw err;
       },
     );
+    promise.catch(() => undefined); // a cancelled job with nobody left listening is not an unhandled rejection
+    const made: Job = { promise, controller, waiters: 0 };
+    job = made;
     inflight.set(key, job);
   }
-  if (!signal) return job;
+  const shared = job;
+  shared.waiters++;
+  let left = false;
+  /** This caller no longer waits. Nobody left and not finished: stop the worker instead of finishing a result nobody will read. */
+  const leave = (cancelled: boolean): void => {
+    if (left) return;
+    left = true;
+    shared.waiters--;
+    if (cancelled && shared.waiters <= 0 && inflight.get(key) === shared) {
+      inflight.delete(key);
+      shared.controller.abort();
+    }
+  };
+  if (!signal) {
+    return shared.promise.finally(() => leave(false));
+  }
 
-  const pending = job;
   return new Promise<VoiceAnalysis>((resolve, reject) => {
-    const onAbort = () => reject(abortError());
+    const onAbort = () => {
+      leave(true);
+      reject(abortError());
+    };
     signal.addEventListener('abort', onAbort, { once: true });
-    pending.then(
+    shared.promise.then(
       (analysis) => {
         signal.removeEventListener('abort', onAbort);
+        leave(false);
         resolve(analysis);
       },
       (err: unknown) => {
         signal.removeEventListener('abort', onAbort);
+        leave(false);
         reject(err);
       },
     );

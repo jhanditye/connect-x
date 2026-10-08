@@ -10,13 +10,12 @@
 // running take as 'interrupted' and are announced through onInterrupted().
 
 import type { PlayMode } from '../types';
+import { prepareForCapture, setAudioSessionType } from './audioSession';
 import { loadMicChoice } from './micChoice';
 import { microphoneUnavailableReason, RecorderError, toRecorderError } from './recorder';
 import { classifyRoute, describeRoute, listInputDevices } from './route';
 
 export { classifyRoute };
-
-export type AudioSessionType = 'auto' | 'playback' | 'transient' | 'transient-solo' | 'ambient' | 'play-and-record';
 
 export interface RouteInfo {
   inputLabel: string;
@@ -108,18 +107,6 @@ export const MAX_DROPPED_SEC = 0.02;
  */
 export function takeIsUsable(r: Pick<TakeResult, 'endedBy' | 'samples' | 'sampleRate' | 'droppedFrames'>): boolean {
   return r.endedBy !== 'interrupted' && r.samples.length > 0 && r.droppedFrames <= MAX_DROPPED_SEC * r.sampleRate;
-}
-
-/** navigator.audioSession (Safari 16.4+). Missing elsewhere: then the call does nothing. */
-export function setAudioSessionType(type: AudioSessionType): boolean {
-  const nav = globalThis.navigator as unknown as { audioSession?: { type: AudioSessionType } } | undefined;
-  if (!nav?.audioSession) return false;
-  try {
-    nav.audioSession.type = type;
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // The capture worklet. Each batch is posted with the frame number of its first sample; batches are flushed on request so the
@@ -256,7 +243,8 @@ export function createDuplexSession(hooks: DuplexTestHooks = {}): DuplexSession 
 
   function applySessionType(): void {
     // Always set explicitly per mode: a leftover 'playback' would stop capture, a leftover 'play-and-record' keeps other apps ducked.
-    setAudioSessionType(micWanted || micReady ? 'play-and-record' : 'playback');
+    if (micWanted || micReady) prepareForCapture('play-and-record');
+    else setAudioSessionType('playback');
   }
 
   function ensureContext(): AudioContext {
@@ -284,10 +272,7 @@ export function createDuplexSession(hooks: DuplexTestHooks = {}): DuplexSession 
     }
     // Headphones plugged or unplugged (this also ends a guide that was playing into them), with or without a microphone open.
     on(globalThis.navigator?.mediaDevices as unknown as Target, 'devicechange', () => notify('device-change'), sessionCleanups);
-    const audioSession = (globalThis.navigator as unknown as { audioSession?: Target & { state?: string } } | undefined)?.audioSession;
-    if (audioSession) on(audioSession, 'statechange', () => {
-      if (audioSession.state === 'interrupted') notify('audio-session');
-    }, sessionCleanups);
+    // (navigator.audioSession's own state / statechange are off in shipping WebKit; the context's statechange above is what reports.)
     return c;
   }
 

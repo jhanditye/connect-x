@@ -51,12 +51,13 @@ describe('Practice: opening a phrase', () => {
   it('shows a plain "getting ready" line and cannot start while the phrase loads', async () => {
     const { engine } = await open(5, { engine: { initialState: 'preparing' } });
     expect(screen.q('.pr-preparing').textContent).toBe('Getting the phrase ready…');
-    expect((screen.q('.pc-sing') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.q('.pc-listen') as HTMLButtonElement).disabled).toBe(true);
+    // aria-disabled, not disabled: a pressed control that disables would drop keyboard and VoiceOver focus to the page.
+    expect(screen.q('.pc-sing').getAttribute('aria-disabled')).toBe('true');
+    expect(screen.q('.pc-listen').getAttribute('aria-disabled')).toBe('true');
     expect(live()).toBe('Getting the phrase ready.');
     force(engine, { state: 'idle' });
     expect(screen.has('.pr-preparing')).toBe(false);
-    expect((screen.q('.pc-sing') as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.q('.pc-sing').getAttribute('aria-disabled')).toBeNull();
   });
 
   it('has visible previous and next links, and none past the ends', async () => {
@@ -75,7 +76,17 @@ describe('Practice: opening a phrase', () => {
     await open(5, { clips: [clip] });
     expect(screen.link(/Next phrase, 7/).getAttribute('href')).toBe('#trainer/c/fake-clip/p/7');
     await open(6, { clips: [clip] });
-    expect(screen.q('h1').textContent).toBe('Phrase 6 of 11');
+    expect(screen.q('h1').textContent).toMatch(/^Phrase 6 of 12/);
+  });
+
+  it('never says "Phrase 5 of 4": the number is the phrase\'s own and the total counts the hidden ones too', async () => {
+    const clip = makeFakeClip();
+    clip.phrases = clip.phrases.map((p, i) => (i === 0 ? { ...p, hidden: true } : p));
+    await open(12, { clips: [clip] });
+    const h1 = screen.q('h1').textContent ?? '';
+    expect(h1).toMatch(/^Phrase 12 of 12/);
+    expect(h1).toContain('(1 hidden)'); // for a screen reader; the sentence is still honest
+    expect(screen.link(/Previous phrase, 11/).getAttribute('href')).toBe('#trainer/c/fake-clip/p/11');
   });
 
   it('starts at the phrase\'s own speed, the count-in from Settings, and sing-along when headphones look connected', async () => {
@@ -189,19 +200,90 @@ describe('Practice: listening and singing', () => {
     const { engine } = await open();
     force(engine, { state: 'countin', countIn: 3 });
     expect(screen.q('.ps-count-n').textContent).toBe('3');
-    expect(live()).toBe('Get ready. The count-in has started.');
-    expect(screen.q('.pc-sing').textContent).toMatch(/Cancel/);
+    expect(live()).toBe('Get ready.');
+    expect(screen.q('.pc-listen').textContent).toMatch(/Cancel/);
     force(engine, { state: 'singing', countIn: null, liveMidi: 57, level: 0.5 }, 2);
     expect(screen.has('.ps-count')).toBe(false);
-    expect(live()).toBe('Recording. Sing now.');
-    expect(screen.q('.pc-sing').textContent).toMatch(/Stop/);
+    // Nothing is spoken while the microphone records (a screen reader's voice would end up in the take): the button says Done.
+    expect(live()).toBe('');
+    expect(screen.q('.pc-sing').textContent).toMatch(/Done/);
+    expect(screen.q('.pc-listen').textContent).toMatch(/Cancel/);
     expect((screen.q('.pr-level-fill') as HTMLElement).style.width).toBe('50%');
-    expect((screen.q('.pc-listen') as HTMLButtonElement).disabled).toBe(true);
-    act(() => (screen.q('.pc-sing') as HTMLButtonElement).click());
+    act(() => (screen.q('.pc-listen') as HTMLButtonElement).click());
     expect(engine.calls).toContain('stop');
     force(engine, { state: 'processing', liveMidi: null, level: 0 });
     expect(live()).toBe('Analysing your take.');
     expect(screen.q('.pc-sing').textContent).toMatch(/Analysing/);
+  });
+
+  it('Done ends the take and scores it (engine.finish); an engine without finish falls back to stop', async () => {
+    const { engine } = await open();
+    const finish = vi.fn();
+    Object.assign(engine, { finish });
+    force(engine, { state: 'singing', liveMidi: 57, level: 0.5 }, 2);
+    act(() => (screen.q('.pc-sing') as HTMLButtonElement).click());
+    expect(finish).toHaveBeenCalledOnce();
+    expect(engine.calls).not.toContain('stop');
+    screen.unmount();
+    const bare = await open();
+    force(bare.engine, { state: 'singing', liveMidi: 57, level: 0.5 }, 2);
+    act(() => (screen.q('.pc-sing') as HTMLButtonElement).click());
+    expect(bare.engine.calls).toContain('stop');
+  });
+
+  it('a cancelled take says so above the dock, and the old "recording" words are gone', async () => {
+    const { engine } = await open();
+    force(engine, { state: 'singing', liveMidi: 57, level: 0.5 }, 2);
+    force(engine, { state: 'idle', message: 'Take cancelled. Nothing was scored. Tap Sing to try again.', liveMidi: null, level: 0 });
+    expect(screen.q('.pd [role="status"]').textContent).toContain('Take cancelled. Nothing was scored.');
+    expect(live()).toBe('');
+  });
+
+  it('hearing yourself back is announced as that, not as "playing the phrase"', async () => {
+    const { engine } = await open();
+    await sing();
+    await screen.clickAsync(screen.qa<HTMLButtonElement>('.rs-hear button').find((b) => /You/.test(b.textContent ?? ''))!);
+    force(engine, { state: 'listening' });
+    expect(live()).toBe('Playing your take.');
+    force(engine, { state: 'result' });
+    expect(live()).toBe('');
+    await screen.clickAsync(screen.qa<HTMLButtonElement>('.rs-hear button').find((b) => /Original/.test(b.textContent ?? ''))!);
+    force(engine, { state: 'listening' });
+    expect(live()).toBe('Playing the phrase.');
+  });
+
+  it('shows that the microphone is on after a take, with a button that turns it off and keeps focus on Sing', async () => {
+    const { engine } = await open();
+    const releaseMicrophone = vi.fn(() => engine.force({ micOpen: false }));
+    Object.assign(engine, { releaseMicrophone });
+    expect(screen.text()).not.toMatch(/Microphone on/);
+    await sing();
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    force(engine, { micOpen: true });
+    expect(screen.text()).toMatch(/Microphone on/);
+    await screen.clickAsync(screen.button('Turn off'));
+    expect(releaseMicrophone).toHaveBeenCalledOnce();
+    expect(screen.text()).not.toMatch(/Microphone on/);
+    expect(live()).toBe('Microphone off.');
+    expect(document.activeElement).toBe(screen.q('.pc-sing'));
+  });
+
+  it('no microphone line while a take runs, and none for an engine that cannot turn it off', async () => {
+    const { engine } = await open();
+    force(engine, { micOpen: true });
+    expect(screen.text()).not.toMatch(/Microphone on/); // this engine has no releaseMicrophone
+    Object.assign(engine, { releaseMicrophone: vi.fn() });
+    force(engine, { micOpen: true, state: 'countin', countIn: 3 });
+    expect(screen.text()).not.toMatch(/Microphone on/);
+  });
+
+  it('does not ask about headphones again once the engine has the singer\'s yes', async () => {
+    const { engine } = await open(5, { engine: { route: SPEAKER } });
+    act(() => (screen.q('input[value="sing-along"]') as HTMLInputElement).click());
+    force(engine, { speakerConfirmed: true });
+    await sing();
+    expect(screen.has('.pc-ask')).toBe(false);
+    expect(engine.calls).toContain('sing');
   });
 
   it('a take ends in the result sheet: the score, the first fix, and the result is announced and focused', async () => {
@@ -223,10 +305,9 @@ describe('Practice: listening and singing', () => {
     await open();
     await sing();
     expect(screen.q('.dial-number').textContent).toBe('91');
-    expect(screen.hasButton(/Next phrase/)).toBe(false);
+    expect(screen.hasButton(/Next phrase/)).toBe(true); // a 91 is as good as the mastery mark: no need to try three times to move on
     await sing();
     expect(screen.q('.dial-number').textContent).toBe('99');
-    expect(screen.hasButton(/Next phrase/)).toBe(false);
     await sing();
     expect(screen.q('.dial-number').textContent).toBe('99');
     await screen.clickAsync(screen.button(/Next phrase/));
@@ -298,29 +379,34 @@ describe('Practice: things that go wrong', () => {
   it('an interrupted take says what happened and what to do, and Try again is there', async () => {
     const { engine } = await open(5, { engine: { failSing: { state: 'interrupted', message: 'Interrupted by another app. Nothing was scored. Tap Try again.' } } });
     await sing();
-    expect(screen.q('.notice--warn').textContent).toBe('Interrupted by another app. Nothing was scored. Tap Try again.');
-    // The notice carries the words; the live region only says that the take stopped.
-    expect(live()).toBe('The take was stopped and not scored. The message below says what to do.');
+    // The words are in an alert inside the pinned dock, above the buttons: where they cannot sit under the dock on a short screen.
+    const alert = screen.q('.pd [role="alert"]');
+    expect(alert.textContent).toContain('Interrupted by another app. Nothing was scored. Tap Try again.');
+    expect(screen.q('.pd').firstElementChild).toBe(alert);
+    expect(screen.has('.page > .notice')).toBe(false);
+    // The alert carries the words once; the polite region does not say them (or "something went wrong") a second time.
+    expect(live()).toBe('');
     expect(screen.has('.rs')).toBe(false);
     const sing2 = screen.q<HTMLButtonElement>('.pc-sing');
-    expect(sing2.disabled).toBe(false);
+    expect(sing2.getAttribute('aria-disabled')).toBeNull();
     expect(sing2.textContent).toMatch(/Sing/);
     expect(engine.getSnapshot().state).toBe('interrupted');
-    expect(screen.q<HTMLButtonElement>('.pc-listen').disabled).toBe(false);
+    expect(screen.q('.pc-listen').getAttribute('aria-disabled')).toBeNull();
   });
 
   it('an engine error shows its message and keeps Listen and Sing available', async () => {
     const { engine } = await open();
     force(engine, { state: 'error', message: 'The microphone could not be started. Allow it for this site in Settings, then tap Try again.' });
-    expect(screen.q('.notice--warn').textContent).toMatch(/microphone could not be started/);
-    expect(live()).toBe('Something went wrong. The message below says what to do.');
-    expect(screen.q<HTMLButtonElement>('.pc-sing').disabled).toBe(false);
+    expect(screen.q('.pd [role="alert"]').textContent).toMatch(/microphone could not be started/);
+    expect(live()).toBe('');
+    expect(screen.q('.pc-sing').getAttribute('aria-disabled')).toBeNull();
   });
 
   it('a hint from the engine while idle is shown quietly', async () => {
     const { engine } = await open();
     force(engine, { message: 'No sound? Check the silent switch.' });
-    expect(screen.q('.notice--info').textContent).toBe('No sound? Check the silent switch.');
+    expect(screen.q('.pd [role="status"]').textContent).toContain('No sound? Check the silent switch.');
+    expect(screen.has('.pd [role="alert"]')).toBe(false);
   });
 
   it('a phrase that cannot be opened says why and can be tried again', async () => {

@@ -26,6 +26,8 @@ export interface TrainerState {
   error: string | null;
   /** Why the library is memory-only (the browser's reason), or null. */
   memoryReason: string | null;
+  /** Memory-only because opening the library failed in a way that opening it again can fix (a timeout, a transient browser error). */
+  memoryRetryable: boolean;
   clips: ClipRecord[];
   /** Newest attempts per phrase id, oldest first. */
   recent: Record<string, AttemptLite[]>;
@@ -39,7 +41,7 @@ export interface TrainerState {
 }
 
 export type TrainerAction =
-  | { type: 'loaded'; clips: ClipRecord[]; recent: Record<string, AttemptLite[]>; memoryReason: string | null; warnings: string[]; lastExportAt: string | null; attemptsSinceExport: number }
+  | { type: 'loaded'; clips: ClipRecord[]; recent: Record<string, AttemptLite[]>; memoryReason: string | null; memoryRetryable?: boolean; warnings: string[]; lastExportAt: string | null; attemptsSinceExport: number }
   | { type: 'failed'; message: string }
   | { type: 'recovered' }
   | { type: 'clips/set'; clips: ClipRecord[] }
@@ -57,6 +59,7 @@ export function initialTrainerState(now: number = Date.now()): TrainerState {
     status: 'loading',
     error: null,
     memoryReason: null,
+    memoryRetryable: false,
     clips: [],
     recent: {},
     storage: { ...UNKNOWN_STORAGE },
@@ -89,6 +92,7 @@ export function trainerReducer(state: TrainerState, action: TrainerAction): Trai
         status: action.memoryReason ? 'memory-only' : 'ready',
         error: null,
         memoryReason: action.memoryReason,
+        memoryRetryable: action.memoryReason ? !!action.memoryRetryable : false,
         clips: [...action.clips].sort(newestClipFirst),
         recent: pruneRecent(action.recent, action.clips),
         warnings: action.warnings,

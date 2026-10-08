@@ -138,7 +138,8 @@ describe('the sync model and the time numbers', () => {
     expect(Math.abs((c.notes[3].cents ?? 0) - 40)).toBeLessThan(15);
     expect(c.notes[3].flags).toContain('sharp');
     expect(Math.abs((c.notes[5].onsetMs ?? 0) - 120)).toBeLessThan(45);
-    expect(c.notes[5].flags).toContain('late');
+    // the 'late' flag is a charge: it stays on the row only while a ranked fix of at least 1.5 points names the note
+    expect(c.notes[5].flags.includes('late') || c.score.fixes.every((f) => !f.notes.includes(5))).toBe(true);
     expect(c.score.status).toBe('ok');
   });
 
@@ -257,7 +258,12 @@ describe('references that are mixes, speech, short or out of range', () => {
     expect(fake(97.6)).toBe(95);
     expect(fake(98)).toBe(100);
     expect(fake(82)).toBe(80);
-    expect(fake(83)).toBe(85);
+    expect(fake(73)).toBe(75);
+    expect(fake(88)).toBe(90);
+    // ...nor up across a mark that means something: 83 is not shown (and stored) as the 85 of a good attempt
+    expect(fake(83)).toBe(80);
+    expect(fake(78)).toBe(75);
+    expect(fake(63)).toBe(60);
   });
 
   it('a speech-like phrase is judged on rhythm and melody shape: no pitch figures per note, a caution', () => {

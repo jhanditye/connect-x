@@ -3,7 +3,7 @@
 // screen, in thumb reach. Everything is a 44 px button or a native radio; nothing needs a hover or a long press. The screen
 // decides what the buttons do (the PracticeEngine); these components only show the choices and ask.
 
-import { useId, useState, type JSX } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties, type JSX, type RefObject } from 'react';
 import type { RouteInfo } from '../../audio/duplex';
 import { routeNotes, type RouteNote } from '../../audio/route';
 import { shiftLabel } from '../../trainer/keys';
@@ -108,7 +108,7 @@ export function PracticeControls(props: PracticeControlsProps): JSX.Element {
               </button>
               <span className="num pc-stepper-n" aria-live="polite">
                 {shift === 0 ? '0' : shift > 0 ? `+${shift}` : `−${Math.abs(shift)}`}
-                <span className="visually-hidden"> semitones</span>
+                <span className="visually-hidden"> {Math.abs(shift) === 1 ? 'semitone' : 'semitones'}</span>
               </span>
               <button type="button" className="button button--small" onClick={() => props.onOptions({ guideShift: Math.min(12, shift + 1) })} disabled={off || shift >= 12}>
                 <Icon name="chevron-up" size={18} /> Higher
@@ -194,42 +194,135 @@ export function PracticeControls(props: PracticeControlsProps): JSX.Element {
   );
 }
 
+export interface DockNote {
+  text: string;
+  /** error and interruption messages are announced at once (role="alert"); the rest politely. */
+  tone: 'info' | 'warn' | 'error';
+}
+
 export interface PracticeDockProps {
   options: PracticeOptions;
   state: PracticeState;
   route: RouteInfo | null;
   hasResult: boolean;
+  /** The engine already has the singer's yes to "I have headphones on" for this route (snapshot.speakerConfirmed): do not ask again. */
+  speakerConfirmed?: boolean;
+  /**
+   * What the last action said (a failure, an interruption, a cancelled take). It is shown here, above the buttons, because the dock
+   * is pinned over the bottom of the page: a message further up the page sits under it on a phone in a Safari tab.
+   */
+  note?: DockNote | null;
+  onDismissNote?(): void;
+  /** The Sing button, when the screen needs to move focus to it (for example after the microphone was turned off). */
+  singRef?: RefObject<HTMLButtonElement | null>;
   onOptions(patch: Partial<PracticeOptions>): void;
   onListen(): void;
   /** `speakerConfirmed`: the singer said they have headphones on, though the route does not look like it. */
   onSing(speakerConfirmed?: boolean): void;
+  /** Stops the guide, or cancels a take (nothing is scored). */
   onStop(): void;
+  /** While recording: end the take now and score what was sung. */
+  onFinish(): void;
 }
 
-/** Listen and Sing, large, at the bottom of the screen. Singing along without headphones asks first. */
+/** A button that is "not available right now" but keeps keyboard and VoiceOver focus (a disabled button would drop it to the page). */
+const dimmed: CSSProperties = { opacity: 0.5, cursor: 'not-allowed' };
+/** The look of the dock's message (the same paper-and-border as the headphones question), from tokens so both themes work. */
+function noteStyle(tone: DockNote['tone']): CSSProperties {
+  const edge = tone === 'error' ? 'var(--bad)' : 'var(--warn)';
+  return {
+    marginBottom: 'var(--space-3)',
+    padding: 'var(--space-3)',
+    borderRadius: 'var(--radius-md)',
+    background: `color-mix(in srgb, ${edge} 14%, var(--surface))`,
+    border: `1px solid ${edge}`,
+    fontSize: 'var(--fs-sm)',
+    maxHeight: '35vh',
+    overflowY: 'auto',
+  };
+}
+/** A Tab press and the focus it causes are one event; a focus this much later was not caused by the key. */
+const TAB_FOCUS_MS = 100;
+
+/**
+ * Listen and Sing, large, at the bottom of the screen. Singing along without headphones asks first. While a take runs the left
+ * button cancels it and the right one is Done (it scores what was sung); the buttons keep their place so focus stays where it was.
+ */
 export function PracticeDock(props: PracticeDockProps): JSX.Element {
   const { options, state, route } = props;
   const askId = useId();
   const [asking, setAsking] = useState(false);
   const [speakerOk, setSpeakerOk] = useState(false);
-  const busy = locked(state);
-  const recording = inTake(state);
+  const ownSingRef = useRef<HTMLButtonElement>(null);
+  const singRef = props.singRef ?? ownSingRef;
+  const tabbedAt = useRef<{ y: number; at: number } | null>(null);
+  const closed = state === 'closed';
+  const preparing = state === 'preparing';
+  const processing = state === 'processing';
+  const countIn = state === 'countin';
+  const singing = state === 'singing';
   const listening = state === 'listening';
   const speakerRisk = options.mode === 'sing-along' && route !== null && !route.headphonesLikely && !route.labelsHidden;
+  const confirmed = speakerOk || props.speakerConfirmed === true;
+
+  // Tabbing to Listen or Sing must not drag the page to the bottom (the page's scroll padding is larger than the room the pinned dock
+  // leaves, so the browser scrolls to the end to "make room"): the dock is always on screen, the scroll position is put back.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Tab') tabbedAt.current = { y: window.scrollY, at: performance.now() };
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, []);
+  const keepScroll = (): void => {
+    const t = tabbedAt.current;
+    tabbedAt.current = null;
+    if (!t || performance.now() - t.at > TAB_FOCUS_MS || Math.abs(window.scrollY - t.y) < 1) return;
+    try {
+      window.scrollTo(0, t.y);
+    } catch {
+      // No scrolling here (a test window): nothing to put back.
+    }
+  };
+
+  /** Focus goes to Sing, which is always on screen, whenever the control that was pressed goes away or changes meaning. */
+  const focusSing = (): void => singRef.current?.focus({ preventScroll: true });
 
   const sing = () => {
-    if (speakerRisk && !speakerOk) {
+    if (speakerRisk && !confirmed) {
       setAsking(true);
       return;
     }
-    props.onSing(speakerRisk && speakerOk ? true : undefined);
+    props.onSing(speakerRisk && confirmed ? true : undefined);
+  };
+  const closeAsk = (): void => {
+    focusSing();
+    setAsking(false);
   };
 
-  const singLabel =
-    state === 'singing' ? 'Stop' : state === 'countin' ? 'Cancel' : state === 'processing' ? 'Analysing…' : state === 'preparing' ? 'Getting ready…' : props.hasResult ? 'Try again' : 'Sing';
+  // Escape cancels what is running (a keyboard user is not made to Tab back to the dock first).
+  const running = countIn || singing || listening;
+  const onStop = props.onStop;
+  useEffect(() => {
+    if (!running) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      onStop();
+      if (!listening) focusSing();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [running, listening, onStop]);
+
+  const singInert = preparing || countIn || processing || closed;
+  const singLabel = singing ? 'Done' : countIn ? 'Get ready…' : processing ? 'Analysing…' : preparing ? 'Getting ready…' : props.hasResult ? 'Try again' : 'Sing';
+  const cancelling = countIn || singing;
+  const leftInert = !listening && !cancelling && (preparing || processing || closed);
+  const leftLabel = listening ? 'Stop' : cancelling ? 'Cancel' : 'Listen';
+  const note = props.note ?? null;
 
   return (
-    <div className="pd">
+    <div className="pd" onFocus={keepScroll}>
       {asking && (
         <div
           className="pc-ask"
@@ -237,7 +330,7 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               e.stopPropagation();
-              setAsking(false);
+              closeAsk();
             }
           }}
         >
@@ -250,7 +343,7 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
               className="button button--accent"
               autoFocus
               onClick={() => {
-                setAsking(false);
+                closeAsk();
                 props.onOptions({ mode: 'turn-taking' });
                 props.onSing();
               }}
@@ -261,25 +354,66 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
               type="button"
               className="button"
               onClick={() => {
-                setAsking(false);
+                closeAsk();
                 setSpeakerOk(true);
                 props.onSing(true);
               }}
             >
               I have headphones on
             </button>
-            <button type="button" className="button button--ghost" onClick={() => setAsking(false)}>
+            <button type="button" className="button button--ghost" onClick={closeAsk}>
               Cancel
             </button>
           </div>
         </div>
       )}
+      {note && !asking && (
+        <div className="pc-note" role={note.tone === 'error' ? 'alert' : 'status'} style={noteStyle(note.tone)}>
+          <p className="pc-ask-text">
+            <Icon name={note.tone === 'info' ? 'info' : 'alert'} size={18} /> <span>{note.text}</span>
+          </p>
+          {props.onDismissNote && (
+            <div className="button-row">
+              <button
+                type="button"
+                className="button button--ghost button--small"
+                onClick={() => {
+                  focusSing();
+                  props.onDismissNote?.();
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="pc-dock">
-        <button type="button" className="pc-listen" onClick={listening ? props.onStop : props.onListen} disabled={busy || recording}>
-          <Icon name={listening ? 'stop' : 'play'} size={20} /> {listening ? 'Stop' : 'Listen'}
+        <button
+          type="button"
+          className="pc-listen"
+          aria-disabled={leftInert || undefined}
+          style={leftInert ? dimmed : undefined}
+          onClick={() => {
+            if (leftInert) return;
+            if (listening) props.onStop();
+            else if (cancelling) {
+              props.onStop();
+              focusSing();
+            } else props.onListen();
+          }}
+        >
+          <Icon name={listening ? 'stop' : cancelling ? 'close' : 'play'} size={20} /> {leftLabel}
         </button>
-        <button type="button" className={`pc-sing${recording ? ' pc-sing--live' : ''}`} onClick={recording ? props.onStop : sing} disabled={busy}>
-          {recording ? <Icon name="stop" size={20} /> : <span className="pc-sing-dot" aria-hidden="true" />} {singLabel}
+        <button
+          ref={singRef}
+          type="button"
+          className={`pc-sing${singing ? ' pc-sing--live' : ''}`}
+          aria-disabled={singInert || undefined}
+          style={singInert ? dimmed : undefined}
+          onClick={singing ? props.onFinish : singInert ? undefined : sing}
+        >
+          {singing ? <Icon name="check" size={20} /> : <span className="pc-sing-dot" aria-hidden="true" />} {singLabel}
         </button>
       </div>
     </div>

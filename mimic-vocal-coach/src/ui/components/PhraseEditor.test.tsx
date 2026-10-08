@@ -72,6 +72,8 @@ const button = (text: RegExp): HTMLButtonElement => {
   return b;
 };
 const click = (el: Element) => act(() => (el as HTMLElement).click());
+/** A control that cannot act right now. It is aria-disabled, not disabled, so it keeps the focus when the press that made it so lands on it. */
+const off = (el: HTMLElement): boolean => el.getAttribute('aria-disabled') === 'true';
 const handle = (edge: 'start' | 'end') => $<HTMLElement>(`.pe-handle--${edge}`);
 
 /** Pixels per second the strip is drawn at, read from the first band. */
@@ -160,12 +162,29 @@ describe('PhraseEditor', () => {
     click($$('.pe-item')[2]);
     expect(h.selected()).toBe(2);
     expect(handle('start').getAttribute('aria-label')).toBe('Phrase 3 start');
-    expect(button(/Next phrase/).disabled).toBe(true);
+    expect(off(button(/Next phrase/))).toBe(true);
     click(button(/Previous phrase/));
     expect(h.selected()).toBe(1);
     expect($$('.pe-item')[1].getAttribute('aria-current')).toBe('true');
     click(button(/Previous phrase/));
-    expect(button(/Previous phrase/).disabled).toBe(true);
+    expect(off(button(/Previous phrase/))).toBe(true);
+  });
+
+  it('never disables the control that was just pressed, so the keyboard and VoiceOver focus stays on it (Next at the last phrase, Merge, Split, Zoom)', () => {
+    const h = mount();
+    click($$('.pe-item')[1]);
+    const next = button(/Next phrase/);
+    next.focus();
+    click(next);
+    expect(h.selected()).toBe(2);
+    expect(off(next)).toBe(true);
+    expect(next.disabled).toBe(false);
+    expect(document.activeElement).toBe(next);
+    click(next); // a press on a control that cannot act does nothing
+    expect(h.selected()).toBe(2);
+    expect(button(/Merge with next/).disabled).toBe(false);
+    expect(button(/Split at cursor/).disabled).toBe(false);
+    for (const label of [/Zoom out/, /Zoom in/]) expect(button(label).disabled).toBe(false);
   });
 
   it('selects the phrase under a tap on the strip and puts the cursor there', () => {
@@ -182,12 +201,12 @@ describe('PhraseEditor', () => {
   it('splits the selected phrase at the cursor, and only when both halves stay long enough', () => {
     const h = mount();
     const list = initial();
-    expect(button(/Split at cursor/).disabled).toBe(true);
+    expect(off(button(/Split at cursor/))).toBe(true);
     expect(container.textContent).toMatch(/To split, tap the strip/);
     tapStripAt(list[0].start + 0.3); // too close to the start
-    expect(button(/Split at cursor/).disabled).toBe(true);
+    expect(off(button(/Split at cursor/))).toBe(true);
     tapStripAt(list[0].start + 3);
-    expect(button(/Split at cursor/).disabled).toBe(false);
+    expect(off(button(/Split at cursor/))).toBe(false);
     expect(container.textContent).toMatch(/Split cuts the phrase there/);
     click(button(/Split at cursor/));
     expect(h.latest()).toHaveLength(4);
@@ -205,7 +224,7 @@ describe('PhraseEditor', () => {
     expect(h.latest()[0].end).toBe(initial()[1].end);
     expect($('[role="status"]').textContent).toMatch(/Merged phrases 1 and 2/);
     click($$('.pe-item')[1]);
-    expect(button(/Merge with next/).disabled).toBe(true);
+    expect(off(button(/Merge with next/))).toBe(true);
   });
 
   it('hides and shows a phrase, with the reason in words', () => {
@@ -289,16 +308,16 @@ describe('PhraseEditor', () => {
     click(button(/Zoom out/));
     expect(widthOf()).toBe(before / 2);
     for (let i = 0; i < ZOOM_LEVELS.length; i++) click(button(/Zoom out/));
-    expect(button(/Zoom out/).disabled).toBe(true);
+    expect(off(button(/Zoom out/))).toBe(true);
     for (let i = 0; i < ZOOM_LEVELS.length; i++) click(button(/Zoom in/));
-    expect(button(/Zoom in/).disabled).toBe(true);
+    expect(off(button(/Zoom in/))).toBe(true);
   });
 
   it('never draws the strip wider than the browser can comfortably hold, however long the clip', () => {
     const long = fakePrepared({ durationSec: 300, spans: [{ start: 1, end: 6.5 }, { start: 9, end: 14.5 }] });
     mount({ duration: 300, samples: long.samples, analysis: long.analysis }, segmentPhrases(long.analysis));
-    for (let i = 0; i < ZOOM_LEVELS.length; i++) if (!button(/Zoom in/).disabled) click(button(/Zoom in/));
-    expect(button(/Zoom in/).disabled).toBe(true);
+    for (let i = 0; i < ZOOM_LEVELS.length; i++) if (!off(button(/Zoom in/))) click(button(/Zoom in/));
+    expect(off(button(/Zoom in/))).toBe(true);
     expect(Number($('svg.pe-svg').getAttribute('width'))).toBeLessThanOrEqual(24000);
     expect(Number($('svg.pe-svg').getAttribute('width'))).toBe(300 * 64);
   });
@@ -344,7 +363,7 @@ describe('PhraseEditor', () => {
     click(button(/^Stop/));
     expect(stop).toHaveBeenCalledTimes(1);
     expect($('.pe-cursor').getAttribute('x1')).toBe(String((list[0].start + 2.5) * pps()));
-    expect(button(/Split at cursor/).disabled).toBe(false);
+    expect(off(button(/Split at cursor/))).toBe(false);
     expect(h.latest()).toHaveLength(3);
   });
 

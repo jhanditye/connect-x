@@ -169,6 +169,49 @@ describe('applyLevelVoicing', () => {
     expect(on[252]).toBe(1);
     expect(on[300]).toBe(1);
   });
+
+  test('bridges a longer level dip inside a held note (the tracked pitch stays on it) but not a pause or a change of note', () => {
+    const n = 500;
+    const level = new Float64Array(n).fill(-20);
+    for (let i = 100; i < 130; i++) level[i] = -50; // 0.3 s dip, same pitch before, inside and after
+    for (let i = 250; i < 280; i++) level[i] = -50; // 0.3 s dip, the pitch moves a fifth across it
+    for (let i = 380; i < 440; i++) level[i] = -50; // 0.6 s dip, same pitch: a rest, longer than a held note's sag
+    const f0 = new Float64Array(n).fill(220);
+    for (let i = 265; i < n; i++) f0[i] = 330;
+    const on = applyLevelVoicing(f0, level, 0.01);
+    expect(on[115]).toBe(1);
+    expect(on[265]).toBe(0);
+    expect(on[410]).toBe(0);
+    // no tracked pitch (zeros) means nothing to compare: the dip stays a gap
+    expect(applyLevelVoicing(new Float64Array(n), level, 0.01)[115]).toBe(0);
+  });
+});
+
+describe('extractVocalMelody: per-frame cues and fragment clean-up', () => {
+  test('hands on the dominance, share and reference level behind the confidence, one per frame', () => {
+    const { L, R } = song();
+    const res = extractVocalMelody(L, R, SR);
+    const n = res.track.f0.length;
+    expect(res.cues.dominance.length).toBe(n);
+    expect(res.cues.share.length).toBe(n);
+    for (const t of [10, Math.floor(n / 2), n - 10]) {
+      expect(res.cues.dominance[t]).toBeGreaterThanOrEqual(0);
+      expect(res.cues.dominance[t]).toBeLessThanOrEqual(1);
+      expect(res.cues.share[t]).toBeGreaterThanOrEqual(0);
+      expect(res.cues.share[t]).toBeLessThanOrEqual(1);
+    }
+    expect(Number.isFinite(res.cues.levelRefDb)).toBe(true);
+    expect(res.cues.levelRefDb).toBeLessThan(0);
+    expect(emptyVocalMelody().cues.dominance.length).toBe(0);
+  });
+
+  test('dropFragments: false keeps every voiced frame the clean-up would have removed, and never fewer', () => {
+    const { L, R } = song();
+    const kept = extractVocalMelody(L, R, SR, { dropFragments: false });
+    const cleaned = extractVocalMelody(L, R, SR);
+    expect(cleaned.voicedSec).toBeLessThanOrEqual(kept.voicedSec);
+    for (let t = 0; t < cleaned.track.f0.length; t++) if (cleaned.track.voiced[t]) expect(kept.track.voiced[t]).toBe(1);
+  });
 });
 
 describe('refineF0', () => {

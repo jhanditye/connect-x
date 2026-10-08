@@ -2,16 +2,13 @@
 // recordings, a backup you can save and restore (never audio), the device checks, and a way to delete everything the Trainer
 // holds. Renders nothing without a Trainer. Everything stays on this device.
 
-import { useContext, useId, useRef, useState } from 'react';
-import { formatBytes } from '../../pwa/storage';
+import { useContext, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { parseSection } from '../../state/routing';
-import { useTrainerExtras } from '../../state/TrainerProvider';
 import { TrainerContext, type TrainerController } from '../../state/trainerContext';
 import { Notice } from './Notice';
 import { TrainerDiagnostics } from '../pages/TrainerDiagnostics';
 import { downloadLibraryBackup } from '../pages/trainerKit';
 import { COUNT_IN_CHOICES, SPEEDS, useTrainerPrefs, type StartMode } from '../trainerPrefs';
-import { phraseCount } from './phraseStatus';
 
 const START_MODES: { value: StartMode; label: string }[] = [
   { value: 'auto', label: 'Automatic' },
@@ -19,13 +16,8 @@ const START_MODES: { value: StartMode; label: string }[] = [
   { value: 'turn-taking', label: 'Always listen, then sing' },
 ];
 
-function Pill(props: { tone?: 'good' | 'warn'; children: string }) {
-  return <span className={`status-pill${props.tone ? ` status-pill--${props.tone}` : ''}`}>{props.children}</span>;
-}
-
 function Inner(props: { trainer: TrainerController }) {
   const { trainer } = props;
-  const extras = useTrainerExtras();
   const [prefs, setPrefs] = useTrainerPrefs();
   const ids = { speed: useId(), count: useId(), start: useId(), file: useId() };
   const [backupNote, setBackupNote] = useState<{ ok: boolean; message: string } | null>(null);
@@ -38,19 +30,22 @@ function Inner(props: { trainer: TrainerController }) {
   const clearButton = useRef<HTMLButtonElement>(null);
   const clearedNote = useRef<HTMLParagraphElement>(null);
 
-  const { storage } = trainer;
-  const phrases = trainer.clips.reduce((n, c) => n + c.phrases.filter((p) => !p.hidden).length, 0);
-  const share = storage.usage !== null && storage.quota ? Math.min(1, storage.usage / storage.quota) : null;
   const ready = trainer.status === 'ready' || trainer.status === 'memory-only';
 
+  // One message area per action: starting any backup, restore or delete clears what the last one said, so results never stack up.
   const exportNow = async () => {
+    if (busy || !ready) return;
     setBusy(true);
+    setBackupNote(null);
+    setImportNote(null);
     setBackupNote(await downloadLibraryBackup(trainer));
     setBusy(false);
   };
 
   const importFile = async (file: File) => {
+    if (busy) return;
     setBusy(true);
+    setBackupNote(null);
     setImportNote(null);
     try {
       const r = await trainer.importLibrary(file);
@@ -70,16 +65,26 @@ function Inner(props: { trainer: TrainerController }) {
     }
   };
 
+  const cancelClear = () => {
+    setConfirmClear(false);
+    requestAnimationFrame(() => clearButton.current?.focus());
+  };
+
   const clearAll = async () => {
+    if (busy) return;
     setBusy(true);
+    setBackupNote(null);
+    setImportNote(null);
     try {
       await trainer.clearAll();
       setCleared(true);
       setConfirmClear(false);
       requestAnimationFrame(() => clearedNote.current?.focus());
     } catch (err) {
-      setImportNote({ ok: false, message: err instanceof Error && err.message ? err.message : 'The Trainer data could not be deleted. Reload the app and try again.', warnings: [] });
+      setImportNote({ ok: false, message: err instanceof Error && err.message ? err.message : 'The clips and scores could not be deleted. Reload the app and try again.', warnings: [] });
       setConfirmClear(false);
+      // The confirm buttons are gone: put focus back where the person started.
+      requestAnimationFrame(() => clearButton.current?.focus());
     } finally {
       setBusy(false);
     }
@@ -90,53 +95,10 @@ function Inner(props: { trainer: TrainerController }) {
       <h2 id="trainer-heading" className="section-title">
         Trainer
       </h2>
-      <p className="settings-text">Your clips, phrases and practice scores are kept on this device only. A backup holds phrases and scores, never audio.</p>
-
-      <h3 className="subhead">Storage</h3>
-      <dl className="status-list">
-        <div className="status-row">
-          <dt>Library</dt>
-          <dd>
-            <span className="num">{trainer.clips.length}</span> {trainer.clips.length === 1 ? 'clip' : 'clips'}, {phraseCount(phrases)}
-            {trainer.status === 'memory-only' && (
-              <>
-                {' '}
-                <Pill tone="warn">Lost when you close the app</Pill>
-              </>
-            )}
-          </dd>
-        </div>
-        <div className="status-row">
-          <dt>Space used</dt>
-          <dd>
-            <span className="num">{storage.usage !== null ? formatBytes(storage.usage) : 'unknown'}</span>
-            {storage.quota ? <span className="muted"> of about {formatBytes(storage.quota)}</span> : null}
-            {share !== null && (
-              <div className="st-meter" role="img" aria-label={`${Math.round(share * 100)} percent of the space this site may use`}>
-                <span style={{ width: `${Math.max(1, Math.round(share * 100))}%` }} />
-              </div>
-            )}
-          </dd>
-        </div>
-        <div className="status-row">
-          <dt>Kept safe</dt>
-          <dd>
-            {storage.persisted === true ? <Pill tone="good">Persistent</Pill> : storage.persisted === false ? <Pill tone="warn">Best effort: the browser may clear it if space runs low</Pill> : <Pill>Unknown</Pill>}
-          </dd>
-        </div>
-      </dl>
-      {extras.storageNote && <p className="field-hint">{extras.storageNote}</p>}
-      {storage.persisted === false && (
-        <div className="button-row">
-          <button
-            type="button"
-            className="button button--ghost button--small"
-            onClick={() => void extras.requestPersistence().then(() => extras.refreshStorage())}
-          >
-            Ask the browser to keep my clips
-          </button>
-        </div>
-      )}
+      <p className="settings-text">
+        Your clips, phrases and practice scores are kept on this device only. A backup holds phrases and scores, never audio. How much room they take, and whether
+        the browser promises to keep them, is under Offline and storage below.
+      </p>
 
       <h3 className="subhead">Practice</h3>
       <div className="field">
@@ -198,7 +160,7 @@ function Inner(props: { trainer: TrainerController }) {
 
       <h3 className="subhead">Backup</h3>
       <div className="button-row">
-        <button type="button" className="button" onClick={() => void exportNow()} disabled={busy || !ready}>
+        <button type="button" className="button" onClick={() => void exportNow()} aria-disabled={busy || !ready || undefined} aria-busy={busy || undefined}>
           Export my library
         </button>
         <span className="tr-file">
@@ -207,14 +169,25 @@ function Inner(props: { trainer: TrainerController }) {
             className="visually-hidden"
             type="file"
             accept=".json,application/json"
-            disabled={busy || !ready}
+            disabled={!ready}
+            // Not disabled while a restore runs: a focused control that disables drops keyboard focus to the page.
+            onClick={(e) => {
+              if (busy) e.preventDefault();
+            }}
             onChange={(e) => {
               const f = e.currentTarget.files?.[0];
               e.currentTarget.value = '';
               if (f) void importFile(f);
             }}
           />
-          <label htmlFor={ids.file} className="button button--ghost" aria-disabled={busy || !ready}>
+          <label
+            htmlFor={ids.file}
+            className="button button--ghost"
+            aria-disabled={busy || !ready}
+            onClick={(e) => {
+              if (busy || !ready) e.preventDefault();
+            }}
+          >
             Import a backup
           </label>
         </span>
@@ -258,37 +231,36 @@ function Inner(props: { trainer: TrainerController }) {
         </div>
       )}
 
-      <h3 className="subhead">Delete Trainer data</h3>
+      <h3 className="subhead">Delete clips and scores</h3>
       {!confirmClear ? (
-        <button ref={clearButton} type="button" className="button button--danger" onClick={() => (setConfirmClear(true), setCleared(false))} disabled={busy}>
-          Delete all clips and scores
+        <button ref={clearButton} type="button" className="button button--danger" onClick={() => (setConfirmClear(true), setCleared(false))} aria-disabled={busy || undefined}>
+          Delete clips and scores
         </button>
       ) : (
-        <div className="confirm" role="group" aria-labelledby="trainer-clear-q">
+        <div
+          className="confirm"
+          role="group"
+          aria-labelledby="trainer-clear-q"
+          onKeyDown={(e: KeyboardEvent) => {
+            if (e.key === 'Escape') cancelClear();
+          }}
+        >
           <p id="trainer-clear-q">
-            Delete every clip, phrase, practice score and kept recording from this device? Clips that counted toward a singer&apos;s targets stop counting. Export a backup first if you want to keep your history.
-            This cannot be undone.
+            Delete every clip, phrase, practice score and kept recording from this device? Clips that counted toward a singer&apos;s targets stop counting. Your settings,
+            AI key and saved Studio takes stay. Export a backup first if you want to keep your history. This cannot be undone.
           </p>
           <div className="button-row">
-            <button type="button" className="button button--danger" onClick={() => void clearAll()} disabled={busy}>
-              Yes, delete the Trainer data
+            <button type="button" className="button button--danger" onClick={() => void clearAll()} aria-disabled={busy || undefined}>
+              Yes, delete clips and scores
             </button>
-            <button
-              type="button"
-              className="button button--ghost"
-              autoFocus
-              onClick={() => {
-                setConfirmClear(false);
-                requestAnimationFrame(() => clearButton.current?.focus());
-              }}
-            >
+            <button type="button" className="button button--ghost" autoFocus onClick={cancelClear}>
               Cancel
             </button>
           </div>
         </div>
       )}
       <p ref={clearedNote} className="field-hint" role="status" tabIndex={-1}>
-        {cleared ? 'Trainer data deleted. Add a clip in the Trainer to start again.' : ''}
+        {cleared ? 'Clips and scores deleted. Add a clip in the Trainer to start again.' : ''}
       </p>
     </section>
   );

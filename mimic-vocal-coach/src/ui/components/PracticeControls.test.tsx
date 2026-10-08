@@ -41,7 +41,7 @@ function controls(over: Partial<PracticeControlsProps> = {}) {
   return { onOptions };
 }
 function dock(over: Partial<PracticeDockProps> = {}) {
-  const f = { onOptions: vi.fn(), onListen: vi.fn(), onSing: vi.fn(), onStop: vi.fn() };
+  const f = { onOptions: vi.fn(), onListen: vi.fn(), onSing: vi.fn(), onStop: vi.fn(), onFinish: vi.fn() };
   const p: PracticeDockProps = { options: DEFAULT_PRACTICE_OPTIONS, state: 'idle', route: FAKE_ROUTE, hasResult: false, ...f, ...over };
   act(() => root.render(<PracticeDock {...p} />));
   return f;
@@ -102,6 +102,14 @@ describe('PracticeControls', () => {
     click(btn(/My key -12/));
     expect(btn(/Lower/).disabled).toBe(true);
     expect(btn(/Higher/).disabled).toBe(false);
+  });
+
+  it('says "semitone" for one and "semitones" for more in the stepper\'s spoken value', () => {
+    controls({ options: { ...DEFAULT_PRACTICE_OPTIONS, guideShift: 1 } });
+    click(btn(/My key \+1/));
+    expect(container.querySelector('.pc-stepper-n')?.textContent).toBe('+1 semitone');
+    controls({ options: { ...DEFAULT_PRACTICE_OPTIONS, guideShift: -3 } });
+    expect(container.querySelector('.pc-stepper-n')?.textContent).toBe('−3 semitones');
   });
 
   it('leaves out My key when the singer sang in the original key', () => {
@@ -174,16 +182,68 @@ describe('PracticeDock', () => {
     expect(f.onSing).toHaveBeenCalledOnce();
   });
 
-  it('Sing becomes Try again after a result, Stop while singing, Cancel during the count-in', () => {
+  it('Sing becomes Try again after a result; while singing the right button is Done (it scores) and the left one cancels', () => {
     dock({ hasResult: true });
     expect(btn(/Try again/)).toBeTruthy();
     const singing = dock({ state: 'singing' });
-    click(btn('Stop'));
+    click(btn('Done'));
+    expect(singing.onFinish).toHaveBeenCalledOnce();
+    expect(singing.onStop).not.toHaveBeenCalled(); // Done never throws the take away
+    click(btn('Cancel'));
     expect(singing.onStop).toHaveBeenCalledOnce();
-    expect(btn(/Listen/).disabled).toBe(true);
+    expect(singing.onFinish).toHaveBeenCalledOnce();
+  });
+
+  it('during the count-in the left button cancels and the right one cannot be tapped by mistake (a double tap on Sing does not cancel)', () => {
     const counting = dock({ state: 'countin' });
+    click(btn(/Get ready/));
+    expect(counting.onStop).not.toHaveBeenCalled();
+    expect(counting.onSing).not.toHaveBeenCalled();
+    expect(counting.onFinish).not.toHaveBeenCalled();
     click(btn('Cancel'));
     expect(counting.onStop).toHaveBeenCalledOnce();
+  });
+
+  it('Escape cancels a take (or stops the guide) without Tabbing back to the dock, and does nothing at rest', () => {
+    const esc = () => act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    const idle = dock();
+    esc();
+    expect(idle.onStop).not.toHaveBeenCalled();
+    const singing = dock({ state: 'singing' });
+    esc();
+    expect(singing.onStop).toHaveBeenCalledOnce();
+    const counting = dock({ state: 'countin' });
+    esc();
+    expect(counting.onStop).toHaveBeenCalledOnce();
+    const listening = dock({ state: 'listening' });
+    esc();
+    expect(listening.onStop).toHaveBeenCalledOnce();
+    act(() => root.render(<div />));
+    esc(); // unmounted: no listener left
+    expect(singing.onStop).toHaveBeenCalledOnce();
+  });
+
+  it('cancelling a take moves focus to Sing instead of dropping it', () => {
+    dock({ state: 'singing' });
+    const cancel = btn('Cancel');
+    act(() => cancel.focus());
+    click(cancel);
+    expect(document.activeElement).toBe(btn('Done'));
+  });
+
+  it('the buttons keep their place while the take runs, so focus stays on the control that was pressed', () => {
+    const f = dock();
+    const sing = btn(/^\s*Sing/);
+    act(() => sing.focus());
+    click(sing);
+    const p: PracticeDockProps = { options: DEFAULT_PRACTICE_OPTIONS, state: 'preparing', route: FAKE_ROUTE, hasResult: false, ...f };
+    act(() => root.render(<PracticeDock {...p} />));
+    expect(btn(/Getting ready/)).toBe(sing); // the same element, only aria-disabled
+    expect(document.activeElement).toBe(sing);
+    act(() => root.render(<PracticeDock {...p} state="countin" />));
+    act(() => root.render(<PracticeDock {...p} state="singing" />));
+    expect(btn('Done')).toBe(sing);
+    expect(document.activeElement).toBe(sing);
   });
 
   it('Listen becomes Stop while the guide plays', () => {
@@ -193,12 +253,73 @@ describe('PracticeDock', () => {
     expect(f.onListen).not.toHaveBeenCalled();
   });
 
-  it('cannot start anything while the phrase is getting ready or the take is being analysed', () => {
-    dock({ state: 'preparing' });
-    expect(btn(/Getting ready/).disabled).toBe(true);
-    expect(btn(/Listen/).disabled).toBe(true);
+  it('cannot start anything while the phrase is getting ready or the take is being analysed, yet keeps focus (aria-disabled, not disabled)', () => {
+    const f = dock({ state: 'preparing' });
+    expect(btn(/Getting ready/).getAttribute('aria-disabled')).toBe('true');
+    expect(btn(/Getting ready/).disabled).toBe(false);
+    expect(btn(/Listen/).getAttribute('aria-disabled')).toBe('true');
+    click(btn(/Getting ready/));
+    click(btn(/Listen/));
     dock({ state: 'processing' });
-    expect(btn(/Analysing/).disabled).toBe(true);
+    expect(btn(/Analysing/).getAttribute('aria-disabled')).toBe('true');
+    click(btn(/Analysing/));
+    expect(f.onSing).not.toHaveBeenCalled();
+    expect(f.onListen).not.toHaveBeenCalled();
+    expect(f.onStop).not.toHaveBeenCalled();
+  });
+
+  it('shows what the last action said above the buttons, as an alert for failures and a status otherwise', () => {
+    dock({ state: 'error', note: { text: 'Microphone access was blocked.', tone: 'error' } });
+    const alert = container.querySelector('.pd .pc-note[role="alert"]');
+    expect(alert?.textContent).toContain('Microphone access was blocked.');
+    expect(container.querySelector('.pd')?.firstElementChild).toBe(alert); // above the buttons, inside the pinned dock
+    dock({ note: { text: 'Take cancelled. Nothing was scored.', tone: 'info' } });
+    expect(container.querySelector('.pd [role="status"]')?.textContent).toContain('Take cancelled');
+    expect(container.querySelector('.pd .pc-note[role="alert"]')).toBeNull();
+  });
+
+  it('a note can be dismissed, and focus goes to Sing', () => {
+    const onDismissNote = vi.fn();
+    dock({ note: { text: 'Playback did not start.', tone: 'error' }, onDismissNote });
+    click(btn('Dismiss'));
+    expect(onDismissNote).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(btn(/^\s*Sing/));
+  });
+
+  it('the question is not asked again once the engine has the yes (snapshot.speakerConfirmed)', () => {
+    const f = dock({ route: SPEAKER, speakerConfirmed: true });
+    click(btn(/^\s*Sing/));
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(f.onSing).toHaveBeenCalledWith(true);
+  });
+
+  it('closing the question puts focus on Sing, not on the page', () => {
+    dock({ route: SPEAKER });
+    click(btn(/^\s*Sing/));
+    click(btn('Cancel'));
+    expect(document.activeElement).toBe(btn(/^\s*Sing/));
+    click(btn(/^\s*Sing/));
+    click(btn('I have headphones on'));
+    expect(document.activeElement).toBe(btn(/^\s*Sing/));
+  });
+
+  it('tabbing to the dock does not leave the page scrolled to the bottom', () => {
+    dock();
+    const scrollTo = vi.fn();
+    vi.stubGlobal('scrollTo', scrollTo);
+    let y = 120;
+    Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y });
+    act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true })));
+    y = 783; // what the browser did to "make room" for the focus
+    act(() => btn(/Listen/).focus());
+    expect(scrollTo).toHaveBeenCalledWith(0, 120);
+    // A click or a later focus is not a Tab: nothing is put back.
+    scrollTo.mockClear();
+    y = 300;
+    act(() => btn(/^\s*Sing/).focus());
+    expect(scrollTo).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    Reflect.deleteProperty(window, 'scrollY');
   });
 
   it('asks before singing along without headphones, and offers the safe way first', () => {

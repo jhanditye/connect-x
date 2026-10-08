@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { concat, silence, synthMelody } from '../testing/synth';
 import { analyzeAuto, analyzeInWorker } from './client';
 
@@ -28,5 +28,45 @@ describe('client (main-thread fallback)', () => {
     expect(r.route).toBe('mix-manual');
     expect(r.analysis.mode).toBe('mix');
     expect(r.solo).toBeNull();
+  });
+});
+
+describe('cancelling an analysis', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('rejects at once with an AbortError when the signal has already aborted, without starting any work', async () => {
+    const ctl = new AbortController();
+    ctl.abort();
+    const progress = vi.fn();
+    await expect(analyzeInWorker(voice, SR, { voiceType: 'tenor' }, progress, ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(analyzeAuto(voice, SR, { voiceType: 'tenor' }, progress, 'auto', ctl.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(progress).not.toHaveBeenCalled();
+  });
+
+  it('main-thread fallback: aborting while it runs rejects with an AbortError and drops the result', async () => {
+    const ctl = new AbortController();
+    const pending = analyzeInWorker(voice, SR, { voiceType: 'tenor' }, undefined, ctl.signal);
+    ctl.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('terminates the worker when aborted, and rejects with an AbortError', async () => {
+    const terminate = vi.fn();
+    const posted: unknown[] = [];
+    class FakeWorker {
+      onmessage: ((e: unknown) => void) | null = null;
+      onerror: ((e: unknown) => void) | null = null;
+      postMessage(m: unknown) {
+        posted.push(m);
+      }
+      terminate = terminate;
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    const ctl = new AbortController();
+    const pending = analyzeInWorker(voice, SR, { voiceType: 'tenor' }, undefined, ctl.signal);
+    // Only meaningful when the bundler's inline worker wrapper used the stub; otherwise the main-thread path ran and abort still rejects.
+    ctl.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    if (posted.length > 0) expect(terminate).toHaveBeenCalled();
   });
 });

@@ -9,6 +9,7 @@
 import { FIXES, type Flavour } from '../coach/coach';
 import type { CoachingItem, Fix, NoteCompare, PhraseComparison, SkillKey, StyleKey, ToneFinding } from '../types';
 import { fixEvidence } from './score/score';
+import { toneSize } from './score/tone';
 
 export type FixCategory = 'pitch' | 'timing' | 'duration' | 'tone' | 'coverage' | 'tempo';
 
@@ -101,18 +102,19 @@ export interface ToneWords {
   detailOnly: boolean;
 }
 
-const sizeOf = (strength: number): ToneWords['size'] => (strength < 1.6 ? 'a little' : strength < 2.6 ? 'clearly' : 'much');
+/** The tone score's own size words (score/tone.ts toneSize), so the fix card and this panel never call one difference two different sizes. */
+const sizeOf = (t: ToneFinding): ToneWords['size'] => toneSize(Math.abs(t.diff), t.strength > 0 ? Math.abs(t.diff) / t.strength : 0.1);
 
 /** A tone difference (attempt minus original) in plain words. Normalised indices and vibrato only; never raw dB. */
 export function toneWords(t: ToneFinding): ToneWords {
   const d = t.diff;
   switch (t.key) {
     case 'breathiness':
-      return { label: 'Breathiness', size: sizeOf(t.strength), detailOnly: false, text: d > 0 ? 'Airier than the original' : 'Clearer and firmer than the original, which is airier here' };
+      return { label: 'Breathiness', size: sizeOf(t), detailOnly: false, text: d > 0 ? 'Airier than the original' : 'Clearer and firmer than the original, which is airier here' };
     case 'brightness':
-      return { label: 'Brightness', size: sizeOf(t.strength), detailOnly: false, text: d > 0 ? 'Brighter and more forward than the original' : 'Darker and more covered than the original' };
+      return { label: 'Brightness', size: sizeOf(t), detailOnly: false, text: d > 0 ? 'Brighter and more forward than the original' : 'Darker and more covered than the original' };
     case 'rasp':
-      return { label: 'Rasp', size: sizeOf(t.strength), detailOnly: d < 0, text: d > 0 ? 'Grittier than the original' : "The original has an edge here; don't force it" };
+      return { label: 'Rasp', size: sizeOf(t), detailOnly: d < 0, text: d > 0 ? 'Grittier than the original' : "The original has an edge here; don't force it" };
     case 'vibratoPresence':
       return { label: 'Vibrato', size: null, detailOnly: false, text: d < 0 ? 'The original lets the long notes wobble into vibrato; yours stayed straight' : 'You added vibrato where the original holds a straight tone' };
     case 'vibratoStart':
@@ -128,8 +130,8 @@ export function toneWords(t: ToneFinding): ToneWords {
         detailOnly: d < 0,
         text:
           d > 0
-            ? `Louder than the original on ${t.detail ?? 'some notes'} compared with the rest of your take; it stays softer there`
-            : `Softer than the original on ${t.detail ?? 'some notes'} compared with the rest of your take; that is fine, there is no need to push to match`,
+            ? `You leaned in more than the original does on ${t.detail ?? 'some notes'}, compared with the rest of your take`
+            : `You held back more than the original does on ${t.detail ?? 'some notes'}, compared with the rest of your take; that is fine, there is no need to push to match`,
       };
     case 'onset': {
       const [a, b] = (t.detail ?? '').split('>');
@@ -173,8 +175,11 @@ function titleFor(f: Fix, c: PhraseComparison): string {
       return 'Lift the flat notes';
     case 'pitch.sharp':
       return 'Bring the sharp notes down';
-    case 'timing.tempo':
-      return /drag/i.test(f.title) ? 'Keep up with the track' : "Don't rush";
+    case 'timing.tempo': {
+      // "the track" exists only while singing along; after listening there is nothing to keep up with
+      const along = c.score.diagnostics.mode === 'sing-along';
+      return /drag/i.test(f.title) ? (along ? 'Keep up with the track' : 'Pick up the pace') : along ? "Don't rush" : 'Ease off the pace';
+    }
     case 'timing.entrances':
       return /late/i.test(f.title) ? 'Breathe earlier' : 'Wait for the beat';
     case 'timing.late':

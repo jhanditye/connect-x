@@ -378,7 +378,7 @@ describe('gating: what is not counted', () => {
     const x = await open({ audio: { devices: BUILTIN, leak: 0.2, latencySec: 0.03 } });
     x.engine.setOptions({ mode: 'sing-along' });
     await x.take({ notes: person() }); // refused: no headphones
-    expect(x.snap().state).toBe('interrupted');
+    expect(x.snap().state).toBe('idle');
     x.engine.setOptions({ mode: 'sing-along' }); // the confirm tap
     const r = (await x.take({ notes: person() })).result!;
     expect(r.attempt.mode).toBe('sing-along');
@@ -511,15 +511,48 @@ describe('route and mode', () => {
     x.engine.setOptions({ mode: 'sing-along' });
     await x.drive(x.engine.sing());
     const s = x.snap();
-    expect(s.state).toBe('interrupted');
+    // Not an "interrupted take": nothing started, so the screen is at rest with the message; no microphone was opened for it.
+    expect(s.state).toBe('idle');
     expect(s.message).toBe(COPY.noSpeaker);
     expect(s.options.mode).toBe('turn-taking');
     expect(s.result).toBeNull();
     expect(x.states).not.toContain('countin');
-    expect(x.env.getUserMediaCalls).toHaveLength(1); // the microphone was asked for, so the route names are known
+    expect(x.states).not.toContain('interrupted');
+    expect(x.env.getUserMediaCalls).toHaveLength(0); // the route names were known, so the refusal needed no microphone
+    expect(x.env.contexts).toHaveLength(0);
+    expect(s.micOpen).toBe(false);
     // the next Sing is a normal listen-then-sing take
     const r = (await x.take({ notes: quickPerson(), delaySec: 0.3 })).result!;
     expect(r.attempt.mode).toBe('turn-taking');
+  });
+
+  it('when the browser hides the microphone names until it is allowed, the refusal opens it once, says so, and lets it go again', async () => {
+    const x = await quick({ audio: { devices: [{ deviceId: 'iphone', label: '', kind: 'audioinput', groupId: 'g2' }] } });
+    expect(x.snap().route?.labelsHidden).toBe(true);
+    x.engine.setOptions({ mode: 'sing-along' });
+    await x.drive(x.engine.sing());
+    const s = x.snap();
+    expect(s.state).toBe('idle');
+    expect(s.message).toBe(COPY.noSpeaker);
+    expect(s.options.mode).toBe('turn-taking');
+    expect(x.env.getUserMediaCalls).toHaveLength(1); // only a microphone can say what is plugged in
+    await vi.advanceTimersByTimeAsync(20);
+    expect(x.env.streams.filter((st) => st.live)).toHaveLength(0); // and it is not left on (no orange dot for a take that never started)
+    expect(x.ctx().state).toBe('closed');
+    expect(s.micOpen).toBe(false);
+  });
+
+  it('the singer\'s yes is kept in the snapshot, so the screen does not ask again after choosing sing-along a second time', async () => {
+    const x = await quick({ audio: { devices: BUILTIN } });
+    expect(x.snap().speakerConfirmed).toBe(false);
+    x.engine.setOptions({ mode: 'sing-along' });
+    await x.drive(x.engine.sing()); // refused
+    expect(x.snap().speakerConfirmed).toBe(false);
+    x.engine.setOptions({ mode: 'sing-along' }); // the confirm tap
+    expect(x.snap().speakerConfirmed).toBe(true);
+    x.env.changeDevices(WIRED);
+    await x.run(0.2);
+    expect(x.snap().speakerConfirmed).toBe(false); // it belonged to the old route
   });
 
   it('choosing sing-along again after the warning is the confirm tap', async () => {
@@ -569,7 +602,7 @@ describe('route and mode', () => {
     await x.run(0.2);
     expect(x.snap().route?.headphonesLikely).toBe(false);
     await x.drive(x.engine.sing());
-    expect(x.snap().state).toBe('interrupted');
+    expect(x.snap().state).toBe('result'); // the earlier result stays on screen, with the message
     expect(x.snap().message).toBe(COPY.noSpeaker);
   });
 
@@ -720,6 +753,7 @@ describe('stop()', () => {
     await x.until(() => x.snap().state === 'countin', 5);
     x.engine.stop();
     expect(x.snap().state).toBe('idle');
+    expect(x.snap().message).toBe(COPY.cancelled); // a cancelled take says so: the screen never looks as if nothing happened
     await x.drive(p);
     expect(x.snap().state).toBe('idle');
     expect(x.snap().result).toBeNull();
@@ -727,8 +761,10 @@ describe('stop()', () => {
     const q = x.engine.sing();
     await x.until(() => x.snap().state === 'singing', 10);
     await x.run(1);
+    expect(x.snap().message).toBeNull(); // the next take cleared the message
     x.engine.stop();
     expect(x.snap().state).toBe('idle');
+    expect(x.snap().message).toBe(COPY.cancelled);
     expect(x.snap().countIn).toBeNull();
     expect(x.snap().level).toBe(0);
     await x.drive(q);
@@ -747,11 +783,22 @@ describe('stop()', () => {
 
   it('during the analysis it cancels as well: a late result never shows and is never saved', async () => {
     const gate = deferred<void>();
-    const x = await quick({ deps: { analyzeAttempt: async (s, sr, o) => (await gate.promise, analyzeTake(s, sr, o)) } });
+    let signal: AbortSignal | undefined;
+    const x = await quick({
+      deps: {
+        analyzeAttempt: async (s, sr, o, sig) => {
+          signal = sig;
+          await gate.promise;
+          return analyzeTake(s, sr, o);
+        },
+      },
+    });
     x.plan({ notes: quickPerson() });
     const p = x.engine.sing();
     await x.until(() => x.snap().state === 'processing', 20);
+    expect(signal?.aborted).toBe(false);
     x.engine.stop();
+    expect(signal?.aborted).toBe(true); // a worker that supports it stops the analysis instead of finishing for nobody
     expect(x.snap().state).toBe('idle');
     await x.drive(p);
     gate.resolve();
@@ -771,6 +818,134 @@ describe('stop()', () => {
     expect(x.snap().state).toBe('result');
     expect(x.snap().result).toBe(result);
     await x.drive(p);
+  });
+});
+
+describe('finish() (the Done button)', () => {
+  const guideSec = refAudio(PH_SHORT).length / SR;
+
+  it('ends the take that is being recorded and scores what was sung, instead of throwing it away', async () => {
+    const x = await quick();
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'singing', 10);
+    await x.run(guideSec - 0.1); // the phrase is sung; the half second of tail is not waited for
+    x.engine.finish?.();
+    await x.drive(p);
+    const s = x.snap();
+    expect(x.states).toContain('processing');
+    expect(s.state).toBe('result');
+    expect(s.message).toBeNull();
+    expect(s.result?.comparison.score.status).toBe('ok');
+    expect(s.result?.saved).toBe(true);
+    expect(await x.attempts()).toHaveLength(1);
+  });
+
+  it('a Done tapped almost at once is shown honestly as not scored (nothing heard), and is not counted', async () => {
+    const x = await quick();
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'singing', 10);
+    await x.run(0.3);
+    x.engine.finish?.();
+    await x.drive(p);
+    const r = x.snap().result!;
+    expect(r.comparison.score.status).not.toBe('ok');
+    expect(r.saved).toBe(false);
+    expect(r.notice).toBeTruthy();
+    expect(await x.attempts()).toEqual([]);
+  });
+
+  it('in the count-in there is nothing to score: it cancels, with the message', async () => {
+    const x = await quick();
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'countin', 5);
+    x.engine.finish?.();
+    expect(x.snap().state).toBe('idle');
+    expect(x.snap().message).toBe(COPY.cancelled);
+    await x.drive(p);
+    expect(x.snap().result).toBeNull();
+  });
+
+  it('twice in a row scores once, and Cancel after Done still wins before the analysis is saved', async () => {
+    const x = await quick();
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'singing', 10);
+    await x.run(guideSec - 0.1);
+    x.engine.finish?.();
+    x.engine.finish?.();
+    await x.drive(p);
+    expect(await x.attempts()).toHaveLength(1);
+    // and with a cancel right behind the Done
+    const q = x.engine.sing();
+    await x.until(() => x.snap().state === 'singing', 10);
+    await x.run(guideSec - 0.1);
+    x.engine.finish?.();
+    x.engine.stop();
+    await x.drive(q);
+    expect(await x.attempts()).toHaveLength(1);
+    expect(x.snap().message).toBe(COPY.cancelled);
+  });
+
+  it('does nothing harmful when nothing runs, and stops a guide that is playing', async () => {
+    const x = await quick();
+    x.engine.finish?.();
+    expect(x.snap().state).toBe('idle');
+    expect(x.snap().message).toBeNull();
+    const p = x.engine.listen();
+    await x.until(() => x.snap().state === 'listening', 5);
+    x.engine.finish?.();
+    expect(x.snap().state).toBe('idle');
+    expect(x.snap().message).toBeNull(); // stopping the guide is not a cancelled take
+    await x.drive(p);
+  });
+});
+
+describe('a context that cannot start (a call, Siri, another app)', () => {
+  it('Listen says so after a few seconds instead of showing "playing" in silence, and the next tap tries again', async () => {
+    const x = await quick({ audio: { resumeNeverSettles: true } });
+    await x.drive(x.engine.listen(), 20);
+    const s = x.snap();
+    expect(s.state).toBe('interrupted');
+    expect(s.message).toBe(COPY.audioBusy);
+    expect(s.message).toMatch(/tap Listen again/);
+    expect(x.states).not.toContain('listening');
+  });
+
+  it('hearing the take back says so as well, and the result stays on screen', async () => {
+    const x = await quick();
+    await x.take({ notes: quickPerson() });
+    const result = x.snap().result;
+    x.ctx().setState('interrupted');
+    x.ctx().resume = () => new Promise(() => undefined);
+    await x.drive(x.engine.playAttempt('you'), 20);
+    expect(x.snap().state).toBe('interrupted');
+    expect(x.snap().message).toBe(COPY.audioBusy);
+    expect(x.snap().result).toBe(result);
+  });
+
+  it('a context that starts running within the wait just plays', async () => {
+    const x = await quick();
+    await x.take({ notes: quickPerson() });
+    x.ctx().setState('suspended');
+    x.ctx().resume = () => new Promise(() => undefined);
+    const p = x.engine.playAttempt('you');
+    await x.run(1);
+    x.ctx().setState('running');
+    await x.drive(p, 20);
+    expect(x.snap().state).toBe('result');
+    expect(x.snap().message).toBeNull();
+  });
+
+  it('leaving the screen while it waits leaves no timer or listener behind', async () => {
+    const x = await quick({ audio: { resumeNeverSettles: true } });
+    const p = x.engine.listen();
+    await x.run(2);
+    x.engine.dispose();
+    await x.drive(p, 20);
+    await expectReleased(x);
   });
 });
 
@@ -1036,6 +1211,18 @@ describe('a take on a slowed or transposed guide (the real stretch)', () => {
   });
 });
 
+describe('slow practice on a whole phrase', () => {
+  it('a perfect copy sung at half speed (the 50% chip) is scored, not rejected as a different phrase', async () => {
+    const x = await open();
+    x.engine.setOptions({ rate: 0.5 });
+    const r = (await x.take({ notes: tempo(person(), 2) })).result!;
+    expect(r.attempt.rate).toBe(0.5);
+    expect(r.comparison.score.status).toBe('ok');
+    expect(r.comparison.scores.overall).toBeGreaterThanOrEqual(80);
+    expect(r.notice).toBeNull();
+  }, 60_000);
+});
+
 describe('dispose', () => {
   it('releases the microphone, closes the context, and clears every timer after a take', async () => {
     const x = await quick();
@@ -1154,14 +1341,16 @@ describe('dispose', () => {
 });
 
 describe('releasing the microphone when idle', () => {
-  it('closes the microphone and the context after 90 s without a tap, and the next tap opens them again', async () => {
+  it('closes the microphone and the context after 30 s without a tap, and the next tap opens them again', async () => {
     const x = await quick();
     await x.take({ notes: quickPerson(1) });
     expect(x.env.streams.filter((s) => s.live)).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(89_000);
+    expect(x.snap().micOpen).toBe(true); // the screen shows "microphone on" while it is
+    await vi.advanceTimersByTimeAsync(29_000);
     expect(x.env.streams.filter((s) => s.live)).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(x.env.streams.filter((s) => s.live)).toHaveLength(0);
+    expect(x.snap().micOpen).toBe(false);
     expect(x.ctx().state).toBe('closed');
     expect(x.snap().state).toBe('result'); // what is on screen does not change
     const r = (await x.take({ notes: quickPerson(2) })).result!;
@@ -1176,12 +1365,39 @@ describe('releasing the microphone when idle', () => {
   it('a running take or a tap resets the idle clock', async () => {
     const x = await quick();
     await x.take({ notes: quickPerson(1) });
-    await vi.advanceTimersByTimeAsync(80_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     await x.drive(x.engine.listen());
-    await vi.advanceTimersByTimeAsync(80_000);
+    await vi.advanceTimersByTimeAsync(25_000);
     expect(x.env.streams.filter((s) => s.live)).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(x.env.streams.filter((s) => s.live)).toHaveLength(0);
+  });
+
+  it('releaseMicrophone() (the "Turn off" button) lets it go at once, and the next Sing opens it again', async () => {
+    const x = await quick();
+    await x.take({ notes: quickPerson(1) });
+    expect(x.snap().micOpen).toBe(true);
+    x.engine.releaseMicrophone?.();
+    expect(x.snap().micOpen).toBe(false);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(x.env.streams.filter((s) => s.live)).toHaveLength(0);
+    expect(x.ctx().state).toBe('closed');
+    expect(x.snap().state).toBe('result'); // what is on screen does not change
+    expect(vi.getTimerCount()).toBe(0); // and no idle timer is left to fire
+    const r = (await x.take({ notes: quickPerson(2) })).result!;
+    expect(r.saved).toBe(true);
+    expect(x.env.getUserMediaCalls).toHaveLength(2);
+  });
+
+  it('releaseMicrophone() does nothing while a take runs', async () => {
+    const x = await quick();
+    x.plan({ notes: quickPerson() });
+    const p = x.engine.sing();
+    await x.until(() => x.snap().state === 'singing', 10);
+    x.engine.releaseMicrophone?.();
+    expect(x.env.streams.filter((s) => s.live)).toHaveLength(1);
+    expect(x.snap().micOpen).toBe(true);
+    await x.drive(p);
   });
 });
 

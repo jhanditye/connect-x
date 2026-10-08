@@ -1,10 +1,14 @@
 // Settings: is the app installed, will it work offline, and is its data protected from iOS clearing it?
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useContext, useEffect, useState } from 'react';
 import { listMicrophones, loadMicChoice, saveMicChoice, type MicOption } from '../../audio/micChoice';
 import { installHelp, isIos, isNativeApp, isStandalone } from '../../pwa/platform';
 import { checkForUpdate, usePwa } from '../../pwa/register';
 import { formatBytes, readStorageStatus, requestPersistence, type StorageStatus } from '../../pwa/storage';
+import { useTrainerExtras } from '../../state/TrainerProvider';
+import { TrainerContext } from '../../state/trainerContext';
+import { InstallCard } from './InstallCard';
+import { phraseCount } from './phraseStatus';
 
 function Pill(props: { tone?: 'good' | 'warn'; children: string }) {
   return <span className={`status-pill${props.tone ? ` status-pill--${props.tone}` : ''}`}>{props.children}</span>;
@@ -12,6 +16,9 @@ function Pill(props: { tone?: 'good' | 'warn'; children: string }) {
 
 export function StoragePanel() {
   const pwa = usePwa();
+  // The one place for storage: the Trainer's library shares this site's space, so its size and its "keep my data" request live here too.
+  const trainer = useContext(TrainerContext);
+  const extras = useTrainerExtras();
   const [status, setStatus] = useState<StorageStatus | null>(null);
   const [asked, setAsked] = useState<boolean | null | undefined>(undefined);
   const [checking, setChecking] = useState(false);
@@ -27,9 +34,11 @@ export function StoragePanel() {
   const persist = async () => {
     setAsked(await requestPersistence());
     refresh();
+    void extras.refreshStorage();
   };
 
   const check = async () => {
+    if (checking) return;
     setChecking(true);
     await checkForUpdate();
     setChecking(false);
@@ -55,6 +64,21 @@ export function StoragePanel() {
             {pwa.version && <span className="muted num"> build {pwa.version.slice(0, 7)}</span>}
           </dd>
         </div>
+        {trainer && (
+          <div className="status-row">
+            <dt>Trainer library</dt>
+            <dd>
+              <span className="num">{trainer.clips.length}</span> {trainer.clips.length === 1 ? 'clip' : 'clips'},{' '}
+              {phraseCount(trainer.clips.reduce((n, c) => n + c.phrases.filter((p) => !p.hidden).length, 0))}
+              {trainer.status === 'memory-only' && (
+                <>
+                  {' '}
+                  <Pill tone="warn">Lost when you close the app</Pill>
+                </>
+              )}
+            </dd>
+          </div>
+        )}
         <div className="status-row">
           <dt>Data kept safe</dt>
           <dd>
@@ -75,20 +99,24 @@ export function StoragePanel() {
           </dd>
         </div>
       </dl>
+      {trainer && extras.storageNote && <p className="field-hint">{extras.storageNote}</p>}
       {ios && !installed && installHelp().show && (
-        <p className="field-hint">
-          Safari clears the saved data of a website you have not used for about a week of browsing. A Home Screen web app keeps its own count of days
-          used, so installing Mimic protects what you add to it.
-        </p>
+        <>
+          <p className="field-hint">
+            Safari clears the saved data of a website you have not used for about a week of browsing. A Home Screen web app keeps its own count of days
+            used, so installing Mimic protects what you add to it.
+          </p>
+          <InstallCard persistent />
+        </>
       )}
       <div className="button-row">
         {persisted === false && (
           <button type="button" className="button button--ghost button--small" onClick={() => void persist()}>
-            Ask to keep my data
+            Ask the browser to keep my data
           </button>
         )}
         {pwa.supported && (
-          <button type="button" className="button button--ghost button--small" onClick={() => void check()} disabled={checking}>
+          <button type="button" className="button button--ghost button--small" onClick={() => void check()} aria-disabled={checking || undefined}>
             {checking ? 'Checking…' : 'Check for updates'}
           </button>
         )}
@@ -120,7 +148,10 @@ export function MicrophoneSetting() {
     };
   }, []);
 
-  if (options === null || options.length === 0) return null;
+  if (options === null) return null;
+  // An empty list is normal before the microphone has been allowed once (Safari lists nothing until then): keep the control and say
+  // what to do, because other screens point here ("the microphone you record with is chosen under Your voice").
+  const empty = options.length === 0;
   const unlabelled = options.every((o) => !o.label);
   const anyBluetooth = options.some((o) => o.bluetooth);
   return (
@@ -132,6 +163,7 @@ export function MicrophoneSetting() {
         id="mic-choice"
         className="select"
         value={choice}
+        disabled={empty}
         onChange={(e) => {
           setChoice(e.currentTarget.value);
           saveMicChoice(e.currentTarget.value || null);
@@ -146,10 +178,11 @@ export function MicrophoneSetting() {
         ))}
       </select>
       <p className="field-hint">
-        {unlabelled
-          ? 'Record once and the microphones will be listed by name here. '
-          : ''}
-        {anyBluetooth
+        {empty ? 'No microphones are listed yet. Tap Record in the Studio, or Sing in the Trainer, and allow the microphone once; they are listed here after that. Until then Mimic uses whatever the phone is using. ' : ''}
+        {!empty && unlabelled ? 'Record once and the microphones will be listed by name here. ' : ''}
+        {empty
+          ? ''
+          : anyBluetooth
           ? 'While recording, Bluetooth earbuds switch to a phone-call voice mode (8-24 kHz) that makes your tone measurements less reliable. Choose the iPhone’s own microphone for takes you want to compare.'
           : 'Pick the microphone you want to compare takes with and keep using the same one.'}
       </p>

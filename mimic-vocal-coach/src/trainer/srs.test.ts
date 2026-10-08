@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  LADDER_DAYS, afterAttempt, isMastered, masteryProgress, nextStep, practiceQueue, statusOf, type AttemptLite, type PhraseSrs,
+  LADDER_DAYS, MASTER_FLOOR, MASTER_PITCH_FLOOR, afterAttempt, isMastered, masteryProgress, nextStep, practiceQueue, statusOf, type AttemptLite, type PhraseSrs,
 } from './srs';
 
 const DAY = 86_400_000;
@@ -33,13 +33,21 @@ describe('mastery', () => {
     expect(isMastered([w(95, T0), w(95, T0 + 1), w(95, T0 + 2)])).toBe(false);
   });
 
-  it('no component under 70: pitch, timing, tone and expression each hold a hit back', () => {
+  it('no timing, tone or expression under 70 and no pitch under 80: each holds a hit back', () => {
     for (const weak of ['pitch', 'timing', 'tone', 'expression'] as const) {
-      const bad = (at: number): AttemptLite => att(90, at, { [weak]: 69 });
+      const floor = weak === 'pitch' ? MASTER_PITCH_FLOOR : MASTER_FLOOR;
+      const bad = (at: number): AttemptLite => att(90, at, { [weak]: floor - 1 });
       expect(isMastered([bad(T0), bad(T0 + 1), bad(T0 + 2)]), weak).toBe(false);
-      const edge = (at: number): AttemptLite => att(90, at, { [weak]: 70 });
+      const edge = (at: number): AttemptLite => att(90, at, { [weak]: floor });
       expect(isMastered([edge(T0), edge(T0 + 1), edge(T0 + 2)]), weak).toBe(true);
     }
+    expect(MASTER_PITCH_FLOOR).toBe(80);
+    expect(MASTER_FLOOR).toBe(70);
+  });
+
+  it('pitch scattered by about 30 cents (pitch near 76) no longer masters a phrase, however good tone and timing are', () => {
+    const loose = (at: number): AttemptLite => att(90, at, { pitch: 76, timing: 100, tone: 100, expression: 98 });
+    expect(isMastered([loose(T0), loose(T0 + 1), loose(T0 + 2)])).toBe(false);
   });
 
   it('a component that was not measured (a mix clip has no tone) is not held against the attempt', () => {

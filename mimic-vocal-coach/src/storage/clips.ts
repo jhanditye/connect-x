@@ -14,16 +14,30 @@
 //
 // Rules: every multi-record write is ONE transaction (a failure - quota, abort, a throw while building the writes - leaves
 // the previous state, never half a clip); QuotaExceededError becomes QuotaError; a connection that Safari drops or another
-// tab closes is reopened once per call; opening is verified with a write so a browser that opens but cannot store is
-// reported as unavailable rather than failing later.
+// tab closes is reopened once per call; opening is retried twice for the errors Safari throws at random (UnknownError,
+// AbortError, InvalidStateError) and gives up after a timeout instead of waiting for ever; opening is verified with a write so
+// a browser that opens but cannot store is reported as unavailable rather than failing later.
 
-import { chunkFramesFor, chunkRanges, chunksFor, sliceChunks } from '../audio/pcm';
+import { CHUNK_SEC, chunkFramesFor, chunkRanges, chunksFor, floatToInt16, sliceChunks } from '../audio/pcm';
 import type { AttemptRecord, ClipAudioInfo, ClipRecord } from '../types';
 
+/**
+ * Why the library could not be opened. 'transient': the browser threw one of its random errors (worth retrying at once);
+ * 'timeout': the open request never answered; 'blocked': another tab holds an older version; 'other': a refusal that trying
+ * again will not change (no IndexedDB, a private mode, a newer database version).
+ */
+export type StoreFailure = 'transient' | 'timeout' | 'blocked' | 'other';
+
 export class StoreUnavailableError extends Error {
-  constructor(message: string) {
+  readonly failure: StoreFailure;
+  constructor(message: string, failure: StoreFailure = 'other') {
     super(message);
     this.name = 'StoreUnavailableError';
+    this.failure = failure;
+  }
+  /** Trying again later (a tap on "Try again", the app coming back to the foreground) can succeed. */
+  get retryable(): boolean {
+    return this.failure !== 'other';
   }
 }
 
@@ -80,6 +94,12 @@ export interface ClipStore {
   setMeta(key: string, value: unknown): Promise<void>;
   /** Counts, and the bytes of clip audio plus attempt recordings. */
   usage(): Promise<{ clips: number; attempts: number; audioBytes: number }>;
+  /**
+   * Removes audio chunks whose clip record does not exist (an import that was killed between writing the audio and the record, by
+   * an older version of the app); returns how many clips' worth of chunks were removed. Safe to call on open: the importer writes the
+   * clip record first.
+   */
+  pruneOrphanAudio(): Promise<number>;
   clearAll(): Promise<void>;
   close(): void;
 }
@@ -351,16 +371,43 @@ export interface OpenClipStoreOptions {
   blockedTimeoutMs?: number;
   /** Called with every connection that is opened (tests close it to simulate a dropped connection). */
   onConnection?: (db: IDBDatabase) => void;
+  /** How long an open request may stay silent before it is given up on (default 10 s). The same bound applies to the write probe. */
+  openTimeoutMs?: number;
+  /** Waits before the retries of a transiently failing open (default 250 ms, then 1 s). */
+  retryDelaysMs?: readonly number[];
 }
+
+/** The errors Safari (and sometimes Chrome) throws for a perfectly good database: a second try usually works. */
+const TRANSIENT_OPEN_ERRORS = new Set(['UnknownError', 'AbortError', 'InvalidStateError']);
 
 function openFailure(err: DOMException | Error | null | undefined): StoreUnavailableError {
   const name = err?.name;
   if (name === 'VersionError') return new StoreUnavailableError('This library was saved by a newer version of Mimic. Update the app, then reload.');
-  if (name === 'SecurityError' || name === 'InvalidStateError') return new StoreUnavailableError('This browser is blocking IndexedDB (private browsing or a restricted frame), so clips cannot be stored.');
-  return new StoreUnavailableError(err?.message ? `IndexedDB could not be opened: ${err.message}` : 'IndexedDB could not be opened.');
+  if (name === 'SecurityError') return new StoreUnavailableError('This browser is blocking IndexedDB (private browsing or a restricted frame), so clips cannot be stored.');
+  if (name === 'InvalidStateError') return new StoreUnavailableError('This browser is blocking IndexedDB (private browsing or a restricted frame), so clips cannot be stored.', 'transient');
+  const failure: StoreFailure = name && TRANSIENT_OPEN_ERRORS.has(name) ? 'transient' : 'other';
+  return new StoreUnavailableError(err?.message ? `IndexedDB could not be opened: ${err.message}` : 'IndexedDB could not be opened.', failure);
 }
 
-function openDatabase(opts: Required<Pick<OpenClipStoreOptions, 'name' | 'version' | 'migrations' | 'blockedTimeoutMs'>>, healed = false): Promise<IDBDatabase> {
+/** Shown when the library does not answer in time: the clips are safe, the door is stuck. */
+export const OPEN_TIMEOUT_MESSAGE = 'Your library is taking too long to open. Your saved clips are not deleted. Close and reopen the app, or tap Try again.';
+const TIMEOUT_MESSAGE = OPEN_TIMEOUT_MESSAGE;
+const BLOCKED_MESSAGE = 'Another tab of Mimic is holding the library. Close it and reload.';
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Rejects with a timeout StoreUnavailableError when `work` has not settled after `ms`. */
+function withOpenTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new StoreUnavailableError(TIMEOUT_MESSAGE, 'timeout')), ms);
+    work.then(
+      (v) => (clearTimeout(timer), resolve(v)),
+      (e) => (clearTimeout(timer), reject(e)),
+    );
+  });
+}
+
+function openDatabase(opts: Required<Pick<OpenClipStoreOptions, 'name' | 'version' | 'migrations' | 'blockedTimeoutMs' | 'openTimeoutMs'>>, healed = false): Promise<IDBDatabase> {
   return new Promise<IDBDatabase>((resolve, reject) => {
     let idb: IDBFactory | undefined;
     try {
@@ -377,13 +424,22 @@ function openDatabase(opts: Required<Pick<OpenClipStoreOptions, 'name' | 'versio
     }
     let settled = false;
     let blockedTimer: ReturnType<typeof setTimeout> | undefined;
+    let openTimer: ReturnType<typeof setTimeout> | undefined;
     const fail = (e: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(blockedTimer);
+      clearTimeout(openTimer);
       reject(e);
     };
+    // A request that never fires success, error or blocked (a known WebKit failure) must not leave "Opening your library" up for ever.
+    const arm = (ms: number) => {
+      clearTimeout(openTimer);
+      openTimer = setTimeout(() => fail(new StoreUnavailableError(TIMEOUT_MESSAGE, 'timeout')), ms);
+    };
+    arm(opts.openTimeoutMs);
     request.onupgradeneeded = (e) => {
+      arm(Math.max(opts.openTimeoutMs, 30_000)); // an upgrade of a big library is real work, not silence
       const db = request.result;
       const tx = request.transaction as IDBTransaction;
       try {
@@ -407,7 +463,7 @@ function openDatabase(opts: Required<Pick<OpenClipStoreOptions, 'name' | 'versio
     };
     // Another tab still holds an older version: give it a moment to close (it listens for versionchange), then stop waiting.
     request.onblocked = () => {
-      if (!blockedTimer) blockedTimer = setTimeout(() => fail(new StoreUnavailableError('Another tab of Mimic is holding the library. Close it and reload.')), opts.blockedTimeoutMs);
+      if (!blockedTimer) blockedTimer = setTimeout(() => fail(new StoreUnavailableError(BLOCKED_MESSAGE, 'blocked')), opts.blockedTimeoutMs);
     };
     request.onsuccess = () => {
       const db = request.result;
@@ -419,6 +475,7 @@ function openDatabase(opts: Required<Pick<OpenClipStoreOptions, 'name' | 'versio
       if (missing.length === 0) {
         settled = true;
         clearTimeout(blockedTimer);
+        clearTimeout(openTimer);
         resolve(db);
         return;
       }
@@ -430,9 +487,10 @@ function openDatabase(opts: Required<Pick<OpenClipStoreOptions, 'name' | 'versio
         del.onsuccess = () => {
           settled = true;
           clearTimeout(blockedTimer);
+          clearTimeout(openTimer);
           openDatabase(opts, true).then(resolve, reject);
         };
-        del.onblocked = () => fail(new StoreUnavailableError('Another tab of Mimic is holding the library. Close it and reload.'));
+        del.onblocked = () => fail(new StoreUnavailableError(BLOCKED_MESSAGE, 'blocked'));
         return;
       }
       fail(new StoreUnavailableError('The library database is incomplete. Reload; if this keeps happening, export a backup and clear this site\'s data.'));
@@ -446,10 +504,23 @@ export function openClipStore(options: OpenClipStoreOptions = {}): Promise<ClipS
     version: options.version ?? DB_VERSION,
     migrations: options.migrations ?? MIGRATIONS,
     blockedTimeoutMs: options.blockedTimeoutMs ?? 4000,
+    openTimeoutMs: options.openTimeoutMs ?? 10_000,
+  };
+  const retryDelays = options.retryDelaysMs ?? [250, 1000];
+  /** Opens, trying again after a short wait when the browser threw one of its random errors. */
+  const openWithRetry = async (): Promise<IDBDatabase> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await openDatabase(cfg);
+      } catch (err) {
+        if (!(err instanceof StoreUnavailableError) || err.failure !== 'transient' || attempt >= retryDelays.length) throw err;
+        await sleep(retryDelays[attempt]);
+      }
+    }
   };
   const conn: Reconnecting<IDBDatabase> = createReconnecting<IDBDatabase>(
     async () => {
-      const db = await openDatabase(cfg);
+      const db = await openWithRetry();
       const lose = () => conn.dropIf(db);
       db.onversionchange = () => {
         // A newer version of the app in another tab wants to upgrade: let go, and reopen on the next call.
@@ -721,6 +792,33 @@ export function openClipStore(options: OpenClipStoreOptions = {}): Promise<ClipS
         return { clips, attempts, audioBytes };
       });
     },
+    async pruneOrphanAudio() {
+      return run((db) =>
+        transact(db, ['clips', 'audio'], async (tx) => {
+          const audio = tx.objectStore('audio');
+          const clips = tx.objectStore('clips');
+          const ids: string[] = [];
+          await new Promise<void>((resolve, reject) => {
+            const cur = audio.index('byClip').openKeyCursor(); // keys only: the chunks are not read
+            cur.onerror = () => reject(cur.error);
+            cur.onsuccess = () => {
+              const c = cur.result;
+              if (!c) return resolve();
+              const id = c.key as string;
+              ids.push(id);
+              c.continue(`${id}\u0000`); // the next clip id: skip this clip's other chunks
+            };
+          });
+          let removed = 0;
+          for (const id of ids) {
+            if ((await req(clips.count(id))) > 0) continue;
+            audio.delete(audioRange(id));
+            removed++;
+          }
+          return removed;
+        }),
+      );
+    },
     async clearAll() {
       return run((db) =>
         transact(db, [...STORE_NAMES], (tx) => {
@@ -733,8 +831,9 @@ export function openClipStore(options: OpenClipStoreOptions = {}): Promise<ClipS
     },
   };
 
-  // A browser can open a database and still refuse to store anything (private modes, full disks): find out now.
-  return store
+  // A browser can open a database and still refuse to store anything (private modes, full disks): find out now. The probe is
+  // bounded too: a store that opens but never answers must not hold "Opening your library" up for ever.
+  const probe = store
     .setMeta(PROBE_KEY, Date.now())
     .then(() => store.getMeta<number>(PROBE_KEY))
     .then((v) => {
@@ -742,7 +841,8 @@ export function openClipStore(options: OpenClipStoreOptions = {}): Promise<ClipS
     })
     .then(() =>
       run((db) => transact(db, ['meta'], (tx) => void tx.objectStore('meta').delete(PROBE_KEY))),
-    )
+    );
+  return withOpenTimeout(probe, cfg.openTimeoutMs * 2)
     .then(() => store)
     .catch((err) => {
       conn.close();
@@ -895,6 +995,15 @@ export function createMemoryClipStore(options: MemoryStoreOptions = {}): ClipSto
     async usage() {
       return { clips: clips.size, attempts: attempts.size, audioBytes: bytesInUse() };
     },
+    async pruneOrphanAudio() {
+      let removed = 0;
+      for (const id of [...audio.keys()]) {
+        if (clips.has(id)) continue;
+        audio.delete(id);
+        removed++;
+      }
+      return removed;
+    },
     async clearAll() {
       clips.clear();
       audio.clear();
@@ -911,8 +1020,12 @@ export function createMemoryClipStore(options: MemoryStoreOptions = {}): ClipSto
 
 export interface OpenedStore {
   store: ClipStore;
-  /** Set when IndexedDB could not be used and `store` is the in-memory one: clips are lost when the app closes. */
-  fallback: { reason: string } | null;
+  /**
+   * Set when IndexedDB could not be used and `store` is the in-memory one: clips are lost when the app closes. `retryable` says
+   * that opening again later (a tap on "Try again", the app coming back to the foreground) can work: a timeout, a transient
+   * browser error, another tab holding the database.
+   */
+  fallback: { reason: string; retryable: boolean } | null;
 }
 
 /** Opens IndexedDB, or falls back to a labelled memory-only store. Never rejects. */
@@ -921,6 +1034,46 @@ export async function openClipStoreWithFallback(open: () => Promise<ClipStore> =
     return { store: await open(), fallback: null };
   } catch (err) {
     const reason = err instanceof Error && err.message ? err.message : 'IndexedDB could not be opened.';
-    return { store: createMemoryClipStore(), fallback: { reason } };
+    return { store: createMemoryClipStore(), fallback: { reason, retryable: err instanceof StoreUnavailableError && err.retryable } };
   }
+}
+
+/**
+ * Copies a whole library (clips with their audio, attempts with their recordings, settings) from one store to another: what
+ * a session kept in memory while IndexedDB was unavailable, once IndexedDB opens again. Ids already in `to` are left alone.
+ */
+export async function copyLibrary(from: ClipStore, to: ClipStore): Promise<{ clips: number; attempts: number }> {
+  const known = new Set((await to.listClips()).map((c) => c.id));
+  let clipCount = 0;
+  for (const clip of await from.listClips()) {
+    if (known.has(clip.id)) continue;
+    // Audio first, record last: a copy that stops half way leaves chunks without a record (swept on the next open), never a record without audio.
+    for (const info of [clip.audio.mix, clip.audio.vocal]) {
+      if (!info || clip.audioMissing) continue;
+      const pcm = new Int16Array(info.frames);
+      let w = 0;
+      const windowSec = CHUNK_SEC;
+      for (let t = 0; t * info.sampleRate < info.frames; t += windowSec) {
+        const part = floatToInt16(await from.readAudio(clip.id, info, t, t + windowSec));
+        pcm.set(part, w);
+        w += part.length;
+      }
+      await to.writeAudio(clip.id, info.kind, pcm, info.sampleRate);
+    }
+    await to.putClip(clip);
+    clipCount++;
+  }
+  const knownAttempts = new Set((await to.listAttempts({})).map((a) => a.id));
+  let attemptCount = 0;
+  for (const attempt of await from.listAttempts({})) {
+    if (knownAttempts.has(attempt.id)) continue;
+    const recording = attempt.hasAudio ? await from.readAttemptAudio(attempt.id) : null;
+    await to.addAttempt(attempt, recording ?? undefined);
+    attemptCount++;
+  }
+  for (const key of [META.calibration, META.attemptsSinceExport, META.lastExportAt]) {
+    const value = await from.getMeta<unknown>(key);
+    if (value !== null && (await to.getMeta(key)) === null) await to.setMeta(key, value);
+  }
+  return { clips: clipCount, attempts: attemptCount };
 }

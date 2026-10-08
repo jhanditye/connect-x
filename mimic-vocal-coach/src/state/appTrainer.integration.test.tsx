@@ -170,10 +170,13 @@ describe('delete everything', () => {
     localStorage.setItem('mimic.micDeviceId', JSON.stringify('abc'));
     localStorage.setItem('mimic.trainerPrefs', JSON.stringify({ keepRecordings: true }));
     expect((await store.usage()).audioBytes).toBeGreaterThan(0);
+    // Started inside act, awaited outside it: the app renders its reset before the library finishes clearing, as it does in the browser.
+    let pending!: Promise<{ failed: string[] }>;
     await act(async () => {
-      live.app.clearAllData();
+      pending = live.app.clearAllData();
     });
     await settle();
+    expect((await pending).failed).toEqual([]);
     expect(live.trainer.clips).toEqual([]);
     expect(await store.getClip(clip.id)).toBeFalsy();
     expect(await store.usage()).toEqual({ clips: 0, attempts: 0, audioBytes: 0 });
@@ -188,13 +191,43 @@ describe('delete everything', () => {
     });
     const off2 = live.app.onClear!(() => Promise.reject(new Error('later')));
     const off3 = live.app.onClear!(() => void ran++);
+    let pending!: Promise<{ failed: string[] }>;
     await act(async () => {
-      live.app.clearAllData();
+      pending = live.app.clearAllData();
     });
     await settle();
+    const result = await pending;
     expect(ran).toBe(1);
+    expect(result.failed).toHaveLength(2); // the one that threw and the one that rejected; the third still ran
     off();
     off2();
     off3();
   });
+
+  it('says which places could not be cleared, so nothing claims "cleared" while the voice is still stored', async () => {
+    const clip = await importClip(wav(soloLine({ count: 3 }), 'verse.wav'), { contribute: false });
+    const broken = store.clearAll.bind(store);
+    store.clearAll = () => Promise.reject(new DOMException('The database is locked', 'InvalidStateError'));
+    const off = live.app.onClear!(() => {
+      throw new Error('boom');
+    }, 'the other thing');
+    let pending!: Promise<{ failed: string[] }>;
+    await act(async () => {
+      pending = live.app.clearAllData();
+    });
+    await settle();
+    const failed = (await pending).failed;
+    expect(failed.sort()).toEqual(['the other thing', 'your clips and practice scores']);
+    expect(await store.getClip(clip.id)).toBeTruthy(); // still there, and the person is told
+    // The small stores were wiped regardless (they are independent), and trying again works once the library does.
+    expect(Object.keys(localStorage).filter((k) => /^mimic[.:]/.test(k))).toEqual([]);
+    off();
+    store.clearAll = broken;
+    await act(async () => {
+      pending = live.app.clearAllData();
+    });
+    await settle();
+    expect((await pending).failed).toEqual([]);
+    expect(await store.getClip(clip.id)).toBeFalsy();
+  }, 60000);
 });

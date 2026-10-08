@@ -133,8 +133,8 @@ function withLightWord(text: string, light: LightWord): string {
   return text
     .replace(/falsetto or head voice/g, 'head voice')
     .replace(/falsetto\/head/g, 'head voice')
-    .replace(/(?<!(?:'s|his) )\bFalsetto\b/g, 'Head voice')
-    .replace(/(?<!(?:'s|his) )\bfalsetto\b/g, 'head voice');
+    // no regex lookbehind (iOS before 16.4 cannot parse it): a "'s " / "his " prefix is captured and the match is left alone
+    .replace(/((?:'s|\bhis) )?\b([Ff])alsetto\b/g, (m: string, pre: string | undefined, c: string) => (pre ? m : c === 'F' ? 'Head voice' : 'head voice'));
 }
 
 /**

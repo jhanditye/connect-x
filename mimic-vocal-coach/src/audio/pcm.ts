@@ -182,3 +182,17 @@ export function sourceKey(fp: string): string {
   const at = fp.indexOf('@');
   return at < 0 ? fp : fp.slice(0, at);
 }
+
+/** Decoders disagree by a few milliseconds on the length of MP3/M4A files (Chrome vs Safari, an OS update): this much is the same file. */
+export const SAME_FILE_DURATION_MS = 300;
+
+/**
+ * True when two fingerprints are of the same source file: the same size and content hash, and a decoded length within
+ * SAME_FILE_DURATION_MS (an excerpt offset "@startMs" is ignored). Anything that is not a fingerprint compares as plain text.
+ */
+export function sameSourceFile(a: string, b: string, toleranceMs: number = SAME_FILE_DURATION_MS): boolean {
+  const x = parseFingerprint(a);
+  const y = parseFingerprint(b);
+  if (!x || !y) return a !== '' && b !== '' && sourceKey(a) === sourceKey(b);
+  return x.size === y.size && x.hash === y.hash && Math.abs(x.durationMs - y.durationMs) <= toleranceMs;
+}

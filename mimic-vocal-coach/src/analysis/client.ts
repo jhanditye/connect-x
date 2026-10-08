@@ -3,6 +3,7 @@
 // some sandboxed iframes, strict CSPs that block blob: workers).
 
 import type { AnalysisOptions, VoiceAnalysis } from '../types';
+import { abortError } from './abort';
 import { analyzeTake } from './analyze';
 import { analyzeWithRouting, type AnalysisRouting, type AutoAnalysis } from './auto';
 import AnalysisWorker from './worker?worker&inline';
@@ -41,29 +42,40 @@ function createWorker(): Worker | null {
 /**
  * Runs analyzeTake in a Web Worker (import with `?worker&inline` so single-file builds work). Falls back to the main thread if workers are unavailable.
  * `opts.mode` ('solo' or 'mix') travels with the request: a mix analysis takes a few seconds per song minute on a phone.
+ * `signal` cancels: the worker is terminated at once and the promise rejects with an AbortError (the main-thread fallback cannot be
+ * interrupted half way, but its result is dropped and the promise still rejects at once).
  */
 export function analyzeInWorker(
   samples: Float32Array,
   sampleRate: number,
   opts: AnalysisOptions,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<VoiceAnalysis> {
+  if (signal?.aborted) return Promise.reject(abortError());
   const worker = createWorker();
-  if (!worker) return analyzeOnMainThread(samples, sampleRate, opts, onProgress);
+  if (!worker) return withAbort(analyzeOnMainThread(samples, sampleRate, opts, onProgress), signal);
 
   return new Promise((resolve, reject) => {
     let settled = false;
     let started = false;
     let startTimer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      if (settled) return;
+      finish();
+      reject(abortError());
+    };
     const finish = () => {
       settled = true;
       clearTimeout(startTimer);
+      signal?.removeEventListener('abort', onAbort);
       worker.terminate();
     };
+    signal?.addEventListener('abort', onAbort, { once: true });
     startTimer = setTimeout(() => {
       if (started || settled) return;
       finish();
-      analyzeOnMainThread(samples, sampleRate, opts, onProgress).then(resolve, reject);
+      withAbort(analyzeOnMainThread(samples, sampleRate, opts, onProgress), signal).then(resolve, reject);
     }, WORKER_START_TIMEOUT_MS);
     worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       if (settled) return;
@@ -84,7 +96,7 @@ export function analyzeInWorker(
       finish();
       // A worker that never got going (blocked script, unsupported module worker) is an
       // environment problem, not an analysis failure: do the work here instead.
-      if (!started) analyzeOnMainThread(samples, sampleRate, opts, onProgress).then(resolve, reject);
+      if (!started) withAbort(analyzeOnMainThread(samples, sampleRate, opts, onProgress), signal).then(resolve, reject);
       else reject(new Error(event.message || 'The analysis worker stopped unexpectedly.'));
     };
     // Transfer a copy so the caller keeps its samples (they are still needed for playback,
@@ -95,8 +107,22 @@ export function analyzeInWorker(
       worker.postMessage(request, [copy.buffer]);
     } catch {
       finish();
-      analyzeOnMainThread(samples, sampleRate, opts, onProgress).then(resolve, reject);
+      withAbort(analyzeOnMainThread(samples, sampleRate, opts, onProgress), signal).then(resolve, reject);
     }
+  });
+}
+
+/** The promise, or an AbortError as soon as `signal` aborts (the work itself cannot be stopped; its result is dropped). */
+function withAbort<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError());
+    if (signal.aborted) return onAbort();
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (v) => (signal.removeEventListener('abort', onAbort), resolve(v)),
+      (e) => (signal.removeEventListener('abort', onAbort), reject(e)),
+    );
   });
 }
 
@@ -111,6 +137,7 @@ export function analyzeAuto(
   opts: AnalysisOptions,
   onProgress?: (fraction: number) => void,
   routing?: AnalysisRouting,
+  signal?: AbortSignal,
 ): Promise<AutoAnalysis> {
-  return analyzeWithRouting(analyzeInWorker, samples, sampleRate, opts, routing, onProgress);
+  return analyzeWithRouting(analyzeInWorker, samples, sampleRate, opts, routing, onProgress, signal);
 }

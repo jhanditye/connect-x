@@ -40,14 +40,19 @@ export function scorePitch(ctx: Ctx): SkillResult {
     if (!nm.matched || !Number.isFinite(nm.err)) continue; // stays flagged 'missed'
     const c = nm.err;
     const displaced = nm.octaves !== 0 && Math.abs(c) <= 80;
+    const far = Math.abs(c) >= WRONG_NOTE_CENTS || nm.octaves !== 0;
+    // In a rough guide a note the take answers with a pitch far from it is more likely the band's note than the singer's mistake: it is
+    // treated as a note the take did not sing (neither credited nor charged), not as a wrong note.
+    if ((ctx.rough || ctx.doubtful.has(k)) && far && !displaced) continue; // stays flagged 'missed'
     row.matched = true;
     row.userName = Number.isFinite(nm.userPitch) ? midiName(nm.userPitch) : null;
     row.cents = c;
     row.semitones = Number.isFinite(nm.userPitch) ? round(nm.userPitch - (al.refPitch[k] + al.teff), 1) : null;
     const flags: NoteFlag[] = [];
     if (ctx.ornament[k]) flags.push('ornament');
+    // A run note or very short note is "judged loosely" (see expression.ts): far off, it is flat or sharp, never a wrong note.
     if (displaced) flags.push('octave-displaced');
-    else if (Math.abs(c) >= WRONG_NOTE_CENTS || nm.octaves !== 0) flags.push('wrong-note');
+    else if (far && !ctx.ornament[k]) flags.push('wrong-note');
     else if (c <= -OFF_CENTS) flags.push('flat');
     else if (c >= OFF_CENTS) flags.push('sharp');
     row.flags = flags;
@@ -97,8 +102,19 @@ export function scorePitch(ctx: Ctx): SkillResult {
   const wrong = idx.filter((k) => perNote[k].flags.includes('wrong-note'));
   if (wrong.length) {
     wrong.forEach((k) => consumed.add(k));
-    const semis = (k: number): number => Math.round(al.notes[k].userPitch - (al.refPitch[k] + al.teff));
-    const parts = wrong.slice(0, 3).map((k) => `${nm(k)}: you sang ${perNote[k].userName ?? '?'}${Number.isFinite(semis(k)) && semis(k) !== 0 ? `, ${Math.abs(semis(k))} semitone${Math.abs(semis(k)) === 1 ? '' : 's'} ${semis(k) > 0 ? 'above' : 'below'} it` : ''}`);
+    // The words come from the measured error (the same number that raised the flag), never from a second reading of the take.
+    const semis = (k: number): number => Math.sign(cents[k] as number) * Math.max(1, Math.round(Math.abs(cents[k] as number) / 100));
+    const sungAs = (k: number): string | null => {
+      const u = al.notes[k].userPitch;
+      const d = Number.isFinite(u) ? Math.round(u - (al.refPitch[k] + al.teff)) : NaN;
+      return perNote[k].userName !== null && d === semis(k) ? perNote[k].userName : null;
+    };
+    const parts = wrong.slice(0, 3).map((k) => {
+      const n = Math.abs(semis(k));
+      const how = `${n === 1 ? 'about a semitone' : `about ${n} semitones`} ${semis(k) > 0 ? 'above' : 'below'} it`;
+      const name = sungAs(k);
+      return `${nm(k)}: ${name ? `you sang ${name}, ` : 'you were '}${how}`;
+    });
     insights.push({
       id: 'pitch.wrong-notes', skill: 'pitch', kind: 'fix', title: wrong.length === 1 ? 'A wrong note' : `${wrong.length} wrong notes`,
       text: `Wrong pitch on ${wrong.length === 1 ? 'one note' : `${wrong.length} notes`}. ${parts.join('; ')}.`,

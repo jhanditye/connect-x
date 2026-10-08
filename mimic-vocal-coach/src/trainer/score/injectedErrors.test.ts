@@ -21,6 +21,8 @@ interface Case {
   othersAtLeast: number;
   /** A fix id that must be in the ranked list. */
   fix?: string;
+  /** The error is real but worth under a point and a half: the sub-score moves, and no fix is listed for it (see FIX_SHOWN_POINTS). */
+  small?: true;
   /** Overall must be at least / at most this. */
   overallAtLeast?: number;
   overallAtMost?: number;
@@ -45,7 +47,7 @@ const CASES: Case[] = [
   { group: 'timing', name: 'tempo x0.8 (rushed)', spec: { notes: I.tempo(PH_A, 0.8) }, moves: 'timing', atMost: 80, othersAtLeast: 96, fix: 'timing.tempo' },
   { group: 'timing', name: 'tempo x1.25 (dragged)', spec: { notes: I.tempo(PH_A, 1.25) }, moves: 'timing', atMost: 80, othersAtLeast: 96, fix: 'timing.tempo' },
   { group: 'timing', name: 'onset jitter sd 120 ms', spec: { notes: I.jitterOnsets(PH_A, 120) }, moves: 'timing', atMost: 92, othersAtLeast: 95 },
-  { group: 'timing', name: 'a long note cut 50 % short', spec: { notes: I.cutShort(PH_A, 3, 0.5) }, moves: 'timing', atMost: 97, othersAtLeast: 96, fix: 'timing.short-notes' },
+  { group: 'timing', name: 'a long note cut 50 % short', spec: { notes: I.cutShort(PH_A, 3, 0.5) }, moves: 'timing', atMost: 97, othersAtLeast: 96, small: true },
   { group: 'timing', name: 'a note 200 ms late after a breath', spec: { notes: I.shiftOnset(PH_A, 6, 200) }, moves: 'timing', atMost: 98, othersAtLeast: 96 },
   // ---- tone
   { group: 'tone', name: 'brighter (tilt -12 -> -6 dB/oct)', spec: { tone: { ...DEFAULT_TONE, tiltDbPerOct: -6 } }, moves: 'tone', atMost: 78, othersAtLeast: 96, fix: 'tone.brightness' },
@@ -55,7 +57,7 @@ const CASES: Case[] = [
   // ---- expression
   { group: 'expression', name: 'vibrato removed (straight tone)', spec: { notes: I.noVibrato(PH_A) }, moves: 'expression', atMost: 88, othersAtLeast: 97, fix: 'expr.vibrato' },
   { group: 'expression', name: 'vibrato starts much later', spec: { notes: I.scaleVibrato(PH_A, { delay: 3 }) }, moves: 'expression', atMost: 88, othersAtLeast: 97 },
-  { group: 'expression', name: 'no scoop or fall-off shaping', spec: { notes: I.noScoop(PH_A) }, moves: 'expression', atMost: 95, othersAtLeast: 96, fix: 'expr.scoops' },
+  { group: 'expression', name: 'no scoop or fall-off shaping', spec: { notes: I.noScoop(PH_A) }, moves: 'expression', atMost: 95, othersAtLeast: 96, small: true },
   // ---- completeness
   { group: 'coverage', name: 'first 6 of 11 notes only', spec: { notes: I.sliceNotes(PH_A, 0, 6) }, moves: null, othersAtLeast: 94, overallAtMost: 75, fix: 'coverage' },
 ];
@@ -80,6 +82,7 @@ describe('each injected error lowers the intended sub-score and (almost) only th
       if (c.moves !== null) expect(skill(r, c.moves), c.moves).toBeLessThanOrEqual(c.atMost as number);
       for (const k of SKILLS) if (k !== c.moves) expect(skill(r, k), `${k} should stay`).toBeGreaterThanOrEqual(c.othersAtLeast);
       if (c.fix) expect(r.fixes.map((f) => f.id), 'fix list').toContain(c.fix);
+      if (c.small) expect(r.fixes, 'a fix worth under 1.5 points is not listed').toEqual([]);
       if (c.overallAtLeast !== undefined) expect(r.overall as number).toBeGreaterThanOrEqual(c.overallAtLeast);
       if (c.overallAtMost !== undefined) expect(r.overall as number).toBeLessThanOrEqual(c.overallAtMost);
       // The intended sub-score is the one that moved the most (the coverage case moves only the overall).

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createRecorder, joinChunks, microphoneUnavailableReason, RecorderError, toRecorderError } from './recorder';
+import { createRecorder, deniedMessage, joinChunks, microphoneUnavailableReason, RecorderError, toRecorderError } from './recorder';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -240,5 +240,71 @@ describe('createRecorder on iPhone', () => {
     expect(fake.getUserMedia).toHaveBeenNthCalledWith(1, { audio: { ...raw, deviceId: { exact: 'built-in-mic' } } });
     expect(fake.getUserMedia).toHaveBeenNthCalledWith(2, { audio: raw });
     rec.cancel();
+  });
+});
+
+describe('the microphone-denied message is in the words of the device', () => {
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+  const stub = (nav: Record<string, unknown>, standaloneMedia = false) => {
+    vi.stubGlobal('navigator', { maxTouchPoints: 5, platform: 'iPhone', ...nav });
+    vi.stubGlobal('matchMedia', () => ({ matches: standaloneMedia }));
+  };
+
+  it('Safari on iPhone: aA, Website Settings, or Settings > Safari > Microphone (an iPhone has no "site settings")', () => {
+    stub({ userAgent: IPHONE });
+    const m = deniedMessage();
+    expect(m).toMatch(/aA/);
+    expect(m).toMatch(/Website Settings/);
+    expect(m).toMatch(/Settings, then Safari, then Microphone/);
+    expect(m).not.toMatch(/site settings/);
+  });
+
+  it('a Home Screen app on iPhone: Settings > Safari > Microphone, and the way out if it still does not ask', () => {
+    stub({ userAgent: IPHONE, standalone: true });
+    const m = deniedMessage();
+    expect(m).toMatch(/Settings, then Safari, then Microphone/);
+    expect(m).toMatch(/remove Mimic from your Home Screen/);
+    expect(m).not.toMatch(/aA/);
+  });
+
+  it('the native app: Settings > Mimic > Microphone', () => {
+    stub({ userAgent: IPHONE });
+    vi.stubGlobal('Capacitor', { isNativePlatform: () => true });
+    expect(deniedMessage()).toMatch(/Settings, then Mimic, turn on Microphone/);
+  });
+
+  it('elsewhere the general words are kept, and the error a refused permission raises carries them', () => {
+    stub({ userAgent: 'Mozilla/5.0 (X11; Linux x86_64) Chrome/120', platform: 'Linux x86_64', maxTouchPoints: 0 });
+    expect(deniedMessage()).toMatch(/browser.s site settings/);
+    expect(toRecorderError(Object.assign(new Error('x'), { name: 'NotAllowedError' })).message).toBe(deniedMessage());
+    stub({ userAgent: IPHONE });
+    expect(toRecorderError(Object.assign(new Error('x'), { name: 'NotAllowedError' })).message).toMatch(/Website Settings/);
+  });
+});
+
+describe('the screen wake lock is asked for inside the tap', () => {
+  it('before the microphone permission sheet, which can stay up longer than Safari lets a tap authorise a lock', async () => {
+    const order: string[] = [];
+    const request = vi.fn(async () => (order.push('wakeLock'), { release: vi.fn(async () => undefined), addEventListener: vi.fn() }));
+    const fake = installFakeAudio({ navigatorExtras: { wakeLock: { request } } });
+    fake.getUserMedia.mockImplementationOnce((async () => {
+      order.push('getUserMedia');
+      return { getTracks: () => [fake.track], getAudioTracks: () => [fake.track] };
+    }) as never);
+    const rec = createRecorder();
+    await rec.start();
+    expect(order).toEqual(['wakeLock', 'getUserMedia']);
+    rec.cancel();
+  });
+
+  it('and is let go when the microphone is refused', async () => {
+    const release = vi.fn(async () => undefined);
+    const request = vi.fn(async () => ({ release, addEventListener: vi.fn() }));
+    const fake = installFakeAudio({ navigatorExtras: { wakeLock: { request } } });
+    fake.getUserMedia.mockRejectedValueOnce(Object.assign(new Error('no'), { name: 'NotAllowedError' }));
+    await createRecorder().start().catch(() => undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(release).toHaveBeenCalled();
   });
 });

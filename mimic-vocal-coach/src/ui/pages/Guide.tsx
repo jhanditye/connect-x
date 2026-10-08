@@ -461,7 +461,7 @@ export function GuidePage() {
               storage is shared with the site owner’s other GitHub Pages sites, so use a key with a spending limit.
             </li>
             <li>The fonts are bundled with the app, so loading Mimic makes no requests to other sites.</li>
-            <li>“Clear all data” in Settings removes everything Mimic has stored, including the Trainer’s clips and scores. The Trainer section has its own delete too.</li>
+            <li>“Delete everything, including settings” in Settings removes everything Mimic has stored, including the Trainer’s clips and scores. “Delete clips and scores” in the Trainer section removes only those.</li>
           </ul>
         </section>
       </article>

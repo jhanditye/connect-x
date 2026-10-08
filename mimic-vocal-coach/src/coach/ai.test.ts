@@ -111,6 +111,21 @@ describe('summarizeForAi', () => {
     expect(s.take.issues).toEqual(['accompaniment', 'noisy']);
   });
 
+  it('sends numbers only: the uploaded reference file\'s name (which can name a song or a person) is not in the request', () => {
+    const profile = { ...makeFakeProfile({ id: 'reference', name: 'Shawn Mendes - Stitches (Official Audio)' }), source: 'reference' as const, description: 'Measured from the reference clip you uploaded: a soft tone.' };
+    const input = baseInput({ profile, reference: makeFakeReferenceComparison() });
+    const s = summarizeForAi(input) as Record<string, any>;
+    expect(s.target.name).toBe('the singer\'s reference clip');
+    expect(s.target.source).toMatch(/reference clip/);
+    expect(JSON.stringify(s)).not.toMatch(/Stitches|Official Audio|Mendes/);
+    expect(JSON.stringify(buildAiMessages(input))).not.toMatch(/Stitches|Official Audio/);
+  });
+
+  it('keeps the singer\'s own name for the built-in and measured profiles (a fixed list, chosen by the person)', () => {
+    const measured = { ...makeFakeProfile({ id: 'daniel-caesar', name: 'Daniel Caesar' }), source: 'measured' as const };
+    expect((summarizeForAi(baseInput({ profile: measured })) as Record<string, any>).target.name).toBe('Daniel Caesar');
+  });
+
   it('never includes per-frame data', () => {
     const json = JSON.stringify(summarizeForAi(baseInput({ reference: makeFakeReferenceComparison() })));
     expect(json).not.toMatch(/"frames"|"path"|"f0"|"periodicity"/);

@@ -1,6 +1,7 @@
 // Full analysis of one take: pitch track -> frame features -> registers, phrases, notes, vibrato,
 // runs, onsets -> StyleVector, recording quality and warnings.
 
+import { extractVocalMelody } from '../dsp/melody/vocalMelody';
 import { trackPitch } from '../dsp/pitch';
 import { ANALYSIS_RATE, resample } from '../dsp/resample';
 import { median, percentile } from '../dsp/stats';
@@ -12,7 +13,7 @@ import { analyzeMix } from './mixMode';
 import { passaggioFor } from './passaggio';
 import { findPhrases } from './phrases';
 import { pitchSummary } from './pitchSummary';
-import { clippingRatio, measureAccompaniment, measureQuality, qualityReport } from './quality';
+import { clippingRatio, leadCheckWorthRunning, leadDisagrees, measureAccompaniment, measureLeadAgreement, measureQuality, qualityReport } from './quality';
 import { detectFlips, estimateRegisters, registerShares } from './register';
 import { detectRuns } from './runs';
 import { computeStyle, SUSTAINED_NOTE_SEC } from './style';
@@ -236,7 +237,7 @@ export function analyzeTake(
 
   const shares = registerShares(frames);
   const medianVoicedDb = median(frames.filter((f) => f.voiced).map((f) => f.rmsDb));
-  const report = qualityReport({
+  const reportInput = {
     voicedSec,
     quality,
     medianVoicedDb,
@@ -244,7 +245,22 @@ export function analyzeTake(
     heldNotes: notes.filter((n) => n.end - n.start >= SUSTAINED_NOTE_SEC - 1e-9).length,
     accompaniment: measureAccompaniment(frames, HOP_SEC, whisperFrames, zcr),
     voiceType: opts.voiceType,
-  });
+  };
+  let report = qualityReport(reportInput);
+  // Vocal-forward songs: the pause checks cannot hear the band, so where the clip does not look like a clean solo take the
+  // tracker is compared with the lead-vocal extractor (quality.ts, LEAD_MAX_AGREE). Clean takes never pay for this.
+  if (
+    !report.issues.includes('accompaniment') &&
+    leadCheckWorthRunning({ voicedSec, medianPeriodicity: median(frames.filter((f) => f.voiced).map((f) => f.periodicity)), snrDb: quality.snrDb })
+  ) {
+    try {
+      const lead = extractVocalMelody(x, null, ANALYSIS_RATE);
+      const leadAgreement = measureLeadAgreement(frames, lead.track.f0, lead.track.voiced);
+      if (leadDisagrees(leadAgreement)) report = qualityReport({ ...reportInput, leadAgreement });
+    } catch {
+      // The comparison is an extra opinion: if it cannot run (out of memory on a small phone), the solo analysis stands as it was.
+    }
+  }
   warnings.push(...report.warnings);
   for (const issue of report.issues) if (!issues.includes(issue)) issues.push(issue);
 

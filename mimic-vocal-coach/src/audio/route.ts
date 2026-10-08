@@ -8,7 +8,7 @@
 
 import type { PlayMode } from '../types';
 import type { RouteInfo } from './duplex';
-import { keepScreenAwake } from './wakeLock';
+import { keepScreenAwake, wakeLockKnownBroken } from './wakeLock';
 
 export type RouteKind = RouteInfo['kind'];
 
@@ -171,9 +171,10 @@ export function routeNotes(route: RouteInfo, mode: PlayMode = 'turn-taking'): Ro
   return notes;
 }
 
+/** The browser has a screen wake lock that is known to work here (an installed Home Screen app before iOS 18.4 has the call but it does nothing). */
 export function wakeLockSupported(): boolean {
   try {
-    return typeof navigator !== 'undefined' && !!(navigator as Navigator & { wakeLock?: unknown }).wakeLock;
+    return typeof navigator !== 'undefined' && !!(navigator as Navigator & { wakeLock?: unknown }).wakeLock && !wakeLockKnownBroken();
   } catch {
     return false;
   }

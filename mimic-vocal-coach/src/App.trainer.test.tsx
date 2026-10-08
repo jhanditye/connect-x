@@ -92,7 +92,8 @@ describe('App with the Trainer', () => {
   it('opens on the Trainer library, with five tabs on the phone bar and the skip link pointing there', () => {
     render();
     expect(h1()).toBe('Practise with the voices you love');
-    expect(tabs()).toEqual(['Trainer', 'Studio', 'Results', 'Progress', 'More']);
+    // Results is a real link before the first Studio take (its page explains); screen readers are told there is no take yet.
+    expect(tabs()).toEqual(['Trainer', 'Studio', 'Results (no take yet)', 'Progress', 'More']);
     expect(container.querySelector('.tabbar a[aria-current="page"]')?.textContent).toMatch(/Trainer/);
     expect(container.querySelector('.skip-link')?.getAttribute('href')).toBe('#trainer');
     expect(document.title).toBe('Trainer · Mimic Vocal Coach');
@@ -112,7 +113,7 @@ describe('App with the Trainer', () => {
 
   it('the desktop bar lists every page, and the wordmark goes to the Trainer', () => {
     render();
-    expect(Array.from(container.querySelectorAll('.topnav a.nav-link')).map((a) => a.textContent?.trim())).toEqual(['Trainer', 'Studio', 'Results', 'Practice', 'Progress', 'Guide', 'Settings']);
+    expect(Array.from(container.querySelectorAll('.topnav a.nav-link')).map((a) => a.textContent?.trim())).toEqual(['Trainer', 'Studio', 'Results (no take yet)', 'Practice', 'Progress', 'Guide', 'Settings']);
     expect(container.querySelector('.wordmark')?.getAttribute('href')).toBe('#trainer');
   });
 
@@ -195,15 +196,18 @@ describe('The Trainer in Progress, Settings and the Guide', () => {
     await goTo('#progress');
     await tick();
     expect(container.querySelector('#hist-phrases')?.textContent).toBe('Phrases');
-    expect(container.querySelector('.hist-empty')).not.toBeNull();
+    // With Trainer clips the page is about them: no false "No saved takes yet" above the phrases, Studio takes are a quiet side section.
+    expect(container.querySelector('.hist-empty')).toBeNull();
+    expect(container.textContent).not.toMatch(/No saved takes yet/);
+    expect(container.querySelector('#hist-studio')?.textContent).toBe('Studio takes');
     expect(container.querySelector('.pp-counts')).not.toBeNull();
   });
 
-  it('Settings has the Trainer section, and Clear all data also clears the library', async () => {
+  it('Settings has the Trainer section, and Delete everything also clears the library', async () => {
     const ctl = render();
     await goTo('#settings');
     expect(container.querySelector('#trainer-heading')?.textContent).toBe('Trainer');
-    await clickAsync(buttonNamed(/^Clear all data/));
+    await clickAsync(buttonNamed(/^Delete everything, including settings/));
     expect(container.querySelector('.confirm')?.textContent).toMatch(/every clip, phrase and practice score in the Trainer/);
     await clickAsync(buttonNamed(/Yes, delete everything/));
     expect(ctl.calls).toContain('clearAll');

@@ -2,6 +2,7 @@
 // (exact samples, no browser resampling, works without an AudioContext); everything else goes to
 // the browser's decoder.
 
+import { probeContainerDurationSec, probeWav, wavBytesForSeconds } from './probe';
 import { decodeWav } from './wav';
 
 export interface DecodedTake {
@@ -19,9 +20,11 @@ export interface DecodeOptions {
   /** Keep only the first this-many seconds. WAV files are then only decoded that far. */
   maxSeconds?: number;
   /**
-   * Refuse MP4/MOV/M4A files whose header says they are longer than this (seconds) before reading them: a compressed
-   * file is decoded whole, so a long one needs hundreds of MB of Float32 samples. Videos are always checked
-   * (MAX_VIDEO_SOURCE_SEC when this is not set); audio files only when the caller asks.
+   * Refuse compressed files whose header says they are longer than this (seconds) before reading them: a compressed file is
+   * decoded whole, so a long one needs hundreds of MB of Float32 samples. The length comes from the header: MP4/MOV/M4A (moov),
+   * FLAC (STREAMINFO), MP3 (Xing/VBRI, else the first frame's bitrate) and Ogg (last page). A file whose length cannot be read
+   * and is bigger than UNKNOWN_LENGTH_BYTES is refused as too large. Videos are always checked (MAX_VIDEO_SOURCE_SEC when this
+   * is not set); audio files only when the caller asks. WAV files are never refused for length: only `maxSeconds` of them are read.
    */
   maxSourceSec?: number;
 }
@@ -78,6 +81,11 @@ const MAX_FILE_BYTES = 250 * 1024 * 1024;
  * stereo), so a smaller file size already means a very long recording.
  */
 const MAX_COMPRESSED_BYTES = 60 * 1024 * 1024;
+/**
+ * A compressed file whose length cannot be read from its header (WebM, bare AAC, a variable-bitrate MP3 without a header...) is
+ * only opened up to this size: 15 minutes at 320 kbps is 36 MB, so this is a long song at an ordinary bitrate, not a recording.
+ */
+export const UNKNOWN_LENGTH_BYTES = 30 * 1024 * 1024;
 /** A mono mix this far below the loudest channel means the channels cancel (one is phase-inverted). */
 const CANCEL_DB = 20;
 /** WAV mixes quieter than this (-30 dBFS RMS) are re-checked for cancelling channels. */
@@ -217,7 +225,7 @@ function frameLimit(maxSeconds: number | undefined, sampleRate: number): number 
 }
 
 /** Our own WAV parser: exact samples, and only as much of a long file as `maxSeconds` asks for. */
-function decodeWavFile(buf: ArrayBuffer, file: Blob, maxSeconds: number | undefined): DecodedTake {
+function decodeWavFile(buf: ArrayBuffer, file: Blob, maxSeconds: number | undefined, totalFrames?: number): DecodedTake {
   const wav = decodeWav(buf, { maxSeconds, mono: true });
   let samples = wav.channels[0] ?? new Float32Array(0);
   let cancelled = false;
@@ -226,7 +234,7 @@ function decodeWavFile(buf: ArrayBuffer, file: Blob, maxSeconds: number | undefi
   if ((wav.sourceChannels ?? 1) > 1 && rms(samples) < QUIET_MIX_RMS) {
     ({ samples, cancelled } = downmix(decodeWav(buf, { maxSeconds }).channels));
   }
-  const total = wav.totalFrames ?? samples.length;
+  const total = totalFrames ?? wav.totalFrames ?? samples.length;
   return finish(samples, wav.sampleRate, file, total / wav.sampleRate, cancelled);
 }
 
@@ -334,6 +342,17 @@ export async function probeIsoDurationSec(file: Blob): Promise<number | null> {
   return null;
 }
 
+/** AIFF and CAF hold uncompressed audio: their size already tells their length, so the unknown-length limit does not apply. */
+async function isUncompressedPcmContainer(file: Blob): Promise<boolean> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const tag = fourcc(head, 0);
+    return tag === 'FORM' || tag === 'caff';
+  } catch {
+    return false;
+  }
+}
+
 /** "M4P " is the brand of FairPlay-protected AAC (iTunes and Apple Music downloads). */
 function hasProtectedBrand(buf: ArrayBuffer): boolean {
   if (buf.byteLength < 12) return false;
@@ -353,15 +372,21 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
   if (/\.m4p$/i.test((file as File).name ?? '')) throw protectedFile(file);
   if (video ? file.size > MAX_VIDEO_BYTES : file.size > MAX_FILE_BYTES) throw video ? videoTooLarge(file) : tooLarge(file);
 
+  // A WAV is read only as far as `maxSeconds` needs: its header says where the audio starts and how long it is.
+  const wavHeader = video ? null : await probeWav(file);
+  let readBytes: number | null = null;
+  if (wavHeader && opts.maxSeconds !== undefined && opts.maxSeconds >= 0) readBytes = wavBytesForSeconds(wavHeader, opts.maxSeconds, file.size);
+
   const sourceLimit = opts.maxSourceSec ?? (video ? MAX_VIDEO_SOURCE_SEC : undefined);
-  if (sourceLimit !== undefined) {
-    const isoSec = await probeIsoDurationSec(file);
-    if (isoSec !== null && isoSec > sourceLimit) throw tooLong(file, isoSec, sourceLimit, video);
+  if (!wavHeader) {
+    const lengthSec = sourceLimit !== undefined || !video ? ((await probeIsoDurationSec(file)) ?? (video ? null : await probeContainerDurationSec(file))) : null;
+    if (sourceLimit !== undefined && lengthSec !== null && lengthSec > sourceLimit) throw tooLong(file, lengthSec, sourceLimit, video);
+    if (!video && lengthSec === null && file.size > UNKNOWN_LENGTH_BYTES && !(await isUncompressedPcmContainer(file))) throw tooLarge(file);
   }
 
   let buf: ArrayBuffer;
   try {
-    buf = await file.arrayBuffer();
+    buf = await (readBytes !== null ? file.slice(0, readBytes) : file).arrayBuffer();
   } catch {
     throw new DecodeError(`${fileLabel(file)} could not be read.`, 'unreadable');
   }
@@ -369,7 +394,7 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
 
   if (isRiffWave(buf)) {
     try {
-      return decodeWavFile(buf, file, opts.maxSeconds);
+      return decodeWavFile(buf, file, opts.maxSeconds, readBytes !== null ? wavHeader?.totalFrames : undefined);
     } catch (err) {
       // A readable WAV with no samples says so; compressed WAV variants (ADPCM, mu-law...) are not
       // handled by decodeWav, and the browser may manage them.

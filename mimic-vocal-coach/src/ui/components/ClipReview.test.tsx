@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeProfile } from '../../testing/fixtures';
-import { littleMixSingingReason, MIX_REASON, SPEECH_REASON } from '../../trainer/importCopy';
+import { littleMixSingingReason, littleSingingReason, MIX_REASON, SPEECH_REASON } from '../../trainer/importCopy';
 import { preparedKind, type CommitEdits, type PreparedClip } from '../../trainer/import';
 import { fakePrepared } from '../../trainer/importTestKit';
 import type { ClipKind, VoiceAnalysis } from '../../types';
@@ -99,7 +99,9 @@ const button = (text: RegExp): HTMLButtonElement => {
 const hasButton = (text: RegExp): boolean => $$<HTMLButtonElement>('button').some((el) => text.test(`${el.textContent ?? ''} ${el.getAttribute('aria-label') ?? ''}`));
 const click = (el: Element) => act(() => (el as HTMLElement).click());
 const clickAsync = (el: Element) => act(async () => (el as HTMLElement).click());
-const owned = () => $<HTMLInputElement>('.rev-section:last-of-type input[type="checkbox"]');
+const owned = () => $<HTMLInputElement>('.rev-footer .rev-owned input[type="checkbox"]');
+/** Save and the full-song switch are aria-disabled, not disabled: the control that was just pressed keeps the focus. */
+const blocked = (el: HTMLElement): boolean => el.getAttribute('aria-disabled') === 'true';
 const tickOwned = () => click(owned());
 const saveButton = () => button(/Save clip|Saving/);
 
@@ -123,12 +125,46 @@ describe('ClipReview: a solo clip', () => {
     expect(container.textContent).toContain('Verse take.wav');
     expect(container.textContent).toMatch(/3 phrases to practise/);
     expect($<HTMLInputElement>('input[type="text"]').value).toBe('Verse take');
-    expect(saveButton().disabled).toBe(true);
-    expect(container.textContent).toMatch(/Tick the box that says the file is yours to practise with/);
-    expect(saveButton().getAttribute('aria-describedby')).toBeTruthy();
+    expect(blocked(saveButton())).toBe(true);
+    // The tick is next to the button it unlocks, inside the pinned footer, and names the file it is about.
+    expect($('.rev-footer .rev-owned').textContent).toMatch(/I own this file or have the right to practise with it\.Verse take\.wav/);
     tickOwned();
-    expect(saveButton().disabled).toBe(false);
+    expect(blocked(saveButton())).toBe(false);
     expect($$('.rev-why')).toHaveLength(0);
+  });
+
+  it('does not start with the ownership box ticked, and pressing Save without it takes the person to the box', () => {
+    const m = mount();
+    expect(owned().checked).toBe(false);
+    saveButton().focus();
+    click(saveButton());
+    expect(m.saved).toHaveLength(0);
+    expect(document.activeElement).toBe(owned());
+    expect($('[role="status"]').textContent).toMatch(/Tick the box to say this file is yours/);
+    // The button was never disabled, so a keyboard or VoiceOver user pressing it is not thrown out to the page.
+    expect(saveButton().disabled).toBe(false);
+    tickOwned();
+    click(saveButton());
+    expect(m.saved).toHaveLength(1);
+  });
+
+  it('pressing Save for another reason says why and moves the focus to the reason', () => {
+    const m = mount();
+    tickOwned();
+    const phraseCount = $$('.pe-item').length;
+    expect(phraseCount).toBeGreaterThan(0);
+    // Hide every phrase through the editor, one after the other.
+    for (let i = 0; i < phraseCount; i++) {
+      click($$('.pe-item')[i]);
+      const hideBtn = $$<HTMLButtonElement>('button').find((b) => /^Hide phrase$/.test(b.textContent ?? ''));
+      if (hideBtn) click(hideBtn);
+    }
+    expect($$('.rev-why')).toHaveLength(1);
+    saveButton().focus();
+    click(saveButton());
+    expect(m.saved).toHaveLength(0);
+    expect(document.activeElement).toBe($('.rev-why'));
+    expect($('[role="status"]').textContent).toMatch(/Show at least one phrase/);
   });
 
   it('hands the edits and the clip to onSave', () => {
@@ -194,17 +230,17 @@ describe('ClipReview: a solo clip', () => {
     const onOwnedChange = vi.fn();
     mount({ ownedDefault: true, onOwnedChange });
     expect(owned().checked).toBe(true);
-    expect(saveButton().disabled).toBe(false);
+    expect(blocked(saveButton())).toBe(false);
     click(owned());
     expect(onOwnedChange).toHaveBeenLastCalledWith(false);
-    expect(saveButton().disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
   });
 
   it('shows saving and save errors, and does not save twice', () => {
     const m = mount({ saving: true, saveError: 'Not enough room on this device. Remove clips you no longer practise.' });
     tickOwned();
     expect(saveButton().textContent).toMatch(/Saving/);
-    expect(saveButton().disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
     expect(container.textContent).toMatch(/The clip was not saved/);
     expect(container.textContent).toMatch(/Remove clips you no longer practise/);
     expect(m.saved).toHaveLength(0);
@@ -238,7 +274,7 @@ describe('ClipReview: phrases and the part to keep', () => {
     click(button(/Hide phrase/));
     click($$('.pe-item')[1]);
     click(button(/Hide phrase/));
-    expect(saveButton().disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
     expect(container.textContent).toMatch(/Show at least one phrase to practise/);
   });
 
@@ -269,7 +305,7 @@ describe('ClipReview: phrases and the part to keep', () => {
     for (let i = 0; i < 9; i++) click(button(/Start one second later/));
     expect(container.textContent).toMatch(/1 phrase is outside this part and will be left out/);
     for (let i = 0; i < 12; i++) click(button(/Start one second later/));
-    expect(saveButton().disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
     expect(container.textContent).toMatch(/The part you chose to keep has no phrase in it/);
   });
 
@@ -388,8 +424,8 @@ describe('ClipReview: solo or full song', () => {
     await clickAsync($('input[role="switch"]'));
     expect($('.rev-busy').textContent).toMatch(/Following the lead vocal in the full song/);
     expect($('.rev-busy [role="progressbar"]')).toBeTruthy();
-    expect(saveButton().disabled).toBe(true);
-    expect($<HTMLInputElement>('input[role="switch"]').disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
+    expect(blocked($<HTMLInputElement>('input[role="switch"]'))).toBe(true);
     await act(async () => finish(fakePrepared({ kind: 'mix' })));
     expect($$('.rev-busy')).toHaveLength(0);
   });
@@ -431,11 +467,37 @@ describe('ClipReview: clips that cannot be used', () => {
     expect($('.notice--error').textContent).toMatch(/This clip cannot be used yet/);
     expect($$('.pe')).toHaveLength(0);
     expect($$('.rev-stats')).toHaveLength(0);
-    expect(saveButton().disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
     expect(container.textContent).toMatch(/Read the message above for what to do/);
     // The switch is still there: a voice over a band may read better as a full song.
-    expect($<HTMLInputElement>('input[role="switch"]').disabled).toBe(false);
+    expect(blocked($<HTMLInputElement>('input[role="switch"]'))).toBe(false);
     expect(hasButton(/Hear the detected melody/)).toBe(false);
+  });
+
+  it('is not a dead end: a clip that cannot be used offers to choose a different file', () => {
+    const onChooseOther = vi.fn();
+    mount({ onChooseOther }, fakePrepared({ name: 'talking.wav', blockers: [SPEECH_REASON] }));
+    click(button(/Choose a different file/));
+    expect(onChooseOther).toHaveBeenCalledTimes(1);
+  });
+
+  it('only offers that when there is somewhere to go back to, and never on a clip that can be saved', () => {
+    mount({}, fakePrepared({ blockers: [SPEECH_REASON] }));
+    expect(hasButton(/Choose a different file/)).toBe(false);
+    act(() => root.unmount());
+    root = createRoot(container);
+    mount({ onChooseOther: vi.fn() });
+    expect(hasButton(/Choose a different file/)).toBe(false);
+  });
+
+  it('says a silent clip is silent, and a very short one is too short, instead of blaming backing music', () => {
+    const silent = littleSingingReason(0, { silent: true, durationSec: 10 });
+    expect(silent).toMatch(/This clip is silent/);
+    expect(silent).not.toMatch(/backing music/);
+    const short = littleSingingReason(0.2, { durationSec: 0.4 });
+    expect(short).toMatch(/only 0\.4 s long, too short/);
+    expect(short).not.toMatch(/backing music/);
+    expect(littleSingingReason(2, { durationSec: 10 })).toMatch(/backing music or effects/);
   });
 
   it('tells a full song with no followable lead vocal what to do, and still offers the vocal-only file', () => {
@@ -540,7 +602,7 @@ describe('ClipReview: the vocal-only file for a full song', () => {
     // Removing it goes back to the full-song reading, which had no followable lead vocal.
     click(button(/Remove it/));
     expect($('.notice--error').textContent).toMatch(/could not follow a lead vocal/);
-    expect(saveButton().disabled).toBe(true);
+    expect(blocked(saveButton())).toBe(true);
   });
 
   it('refuses a stem of a different length and says so', async () => {

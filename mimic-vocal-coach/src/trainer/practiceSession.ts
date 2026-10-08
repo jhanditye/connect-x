@@ -89,8 +89,9 @@ export const COPY = {
   leakCaution: 'A little of the track leaks into your microphone, so the headphones may not be sealing. The score is probably fine; if it looks too good to be true, press them in or use Listen then sing.',
   gap: 'The recording had a gap in it (the phone was busy), so this take was not scored. Close other apps that use sound or the microphone, then tap Sing again.',
   empty: 'Nothing was recorded, so this take was not scored. Tap Sing to try again; if it keeps happening, check the microphone in Settings.',
-  noSpeaker:
-    'Sing along needs headphones and none were detected (Mimic can only tell from the microphone list), so it switched to Listen then sing: the phrase plays first and then you sing it. Tap Sing to go on. If you are wearing headphones, or want to try anyway, choose Sing along again; if the speaker leaks into the microphone, the take will be rejected.',
+  noSpeaker: 'Sing along needs headphones and none were detected, so Mimic switched to Listen then sing. Tap Sing to go on, or choose Sing along again to try it anyway.',
+  cancelled: 'Take cancelled. Nothing was scored. Tap Sing to try again.',
+  audioBusy: 'The sound could not start, because a call, Siri or another app is using the audio. Finish that or close the app, then tap Listen again.',
   unclearKey: (last: number, now: number): string =>
     `I could not tell which key you were singing in (${semis(last)} last time, ${semis(now)} this time) and only part of the phrase matched. Try again, or pick a guide key that suits your voice.`,
   notSaved: (why: string): string => `Your score could not be saved (${why}). Export a backup from Settings if this keeps happening, then try again.`,

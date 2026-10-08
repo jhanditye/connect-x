@@ -3,9 +3,9 @@
 
 import { useEffect, useRef, type RefObject } from 'react';
 import { exportFileName } from '../../storage/library';
-import type { TrainerController } from '../../state/trainerContext';
+import type { ExportReport, TrainerController } from '../../state/trainerContext';
 import type { ClipRecord, SingerProfile } from '../../types';
-import { saveFile } from '../components/download';
+import { saveFile, type SaveOutcome } from '../components/download';
 
 /**
  * A ref for a page's heading. When `enabled`, the page scrolls to the top and the heading takes focus as the screen appears, so
@@ -27,15 +27,63 @@ export function useFocusOnMount<T extends HTMLElement>(enabled: boolean): RefObj
   return ref;
 }
 
-/** Saves the library (never audio) as a JSON file. Resolves with a sentence to show, and never rejects. */
-export async function downloadLibraryBackup(trainer: Pick<TrainerController, 'exportLibrary' | 'markExported'>): Promise<{ ok: boolean; message: string }> {
+export interface BackupResult {
+  ok: boolean;
+  message: string;
+}
+
+/** A file built by a tap whose share sheet the browser refused: the next tap shares it at once, with nothing awaited first. */
+let readyBackup: { blob: Blob; name: string; report: ExportReport | null; at: number } | null = null;
+/** How long a built backup stays shareable by a second tap. */
+const READY_MS = 120_000;
+
+/** Forgets a backup file that was built and is waiting for a second tap (a screen that unmounts, and tests). */
+export function clearReadyBackup(): void {
+  readyBackup = null;
+}
+
+/** The sentence about what a backup left out, for the end of a message. */
+function leftOut(report: ExportReport | null): string {
+  return report && report.warnings.length > 0 ? ` ${report.warnings.join(' ')}` : '';
+}
+
+/**
+ * Saves the library (never audio) as a JSON file. Resolves with a sentence to show, and never rejects. The backup counts as made (the
+ * reminder is cleared) only when the file was really handed to somewhere the person chose, and was complete:
+ *  - a closed share sheet, a failed save, or a download an iPhone cannot confirm leaves the reminder on and says so;
+ *  - a file that could not include everything (practice history that could not be read) is saved but called incomplete;
+ *  - if the browser refuses the share sheet because the tap was used up while the file was being built, the file is kept and the next
+ *    tap on the same button shares it at once.
+ */
+export async function downloadLibraryBackup(trainer: Pick<TrainerController, 'exportLibrary' | 'markExported' | 'lastExportReport'>): Promise<BackupResult> {
   try {
-    // The backup only counts as made once the file was really saved: a closed share sheet or a failed save leaves the reminder on.
-    const blob = await trainer.exportLibrary({ markDone: !trainer.markExported });
-    const saved = await saveFile(blob, exportFileName());
-    if (saved === false) return { ok: false, message: 'The backup was not saved because the share sheet was closed. Tap Back up again and choose Save to Files.' };
+    let ready = readyBackup && Date.now() - readyBackup.at < READY_MS ? readyBackup : null;
+    readyBackup = null;
+    if (!ready) {
+      const blob = await trainer.exportLibrary({ markDone: !trainer.markExported });
+      ready = { blob, name: exportFileName(), report: trainer.lastExportReport?.() ?? null, at: Date.now() };
+    }
+    const { blob, name, report } = ready;
+    const got: { outcome?: SaveOutcome } = {};
+    const saved = await saveFile(blob, name, { retryOnBlocked: true, onOutcome: (o) => (got.outcome = o) });
+    // A saveFile that does not report (a stand-in in a test) is read from its yes/no answer.
+    const result: SaveOutcome = got.outcome ?? (saved === false ? 'cancelled' : 'saved');
+    if (result === 'cancelled') return { ok: false, message: 'The backup was not saved because the share sheet was closed. Tap the same button again and choose Save to Files.' };
+    if (result === 'needs-tap') {
+      readyBackup = ready;
+      return { ok: false, message: 'Your backup is ready, but the phone only opens the share sheet right after a tap. Tap the same button again to finish.' };
+    }
+    if (result === 'unverified') {
+      return {
+        ok: false,
+        message: `The backup was handed to the browser as a download, but this app cannot tell whether it was saved. Open the Files app, then Downloads, and look for ${name} before you delete anything. The backup reminder stays on. Tap the same button again to use the share sheet instead.${leftOut(report)}`,
+      };
+    }
+    if (report && !report.complete) {
+      return { ok: false, message: `This backup is incomplete.${leftOut(report)} The backup reminder stays on; try again in a moment.` };
+    }
     await trainer.markExported?.();
-    return { ok: true, message: 'Backup saved. It holds your clips, phrases and scores but no audio; the audio stays on this device.' };
+    return { ok: true, message: `Backup saved. It holds your clips, phrases and scores but no audio; the audio stays on this device.${leftOut(report)}` };
   } catch (err) {
     const why = err instanceof Error && err.message ? ` ${err.message}` : '';
     return { ok: false, message: `The backup could not be saved.${why} Try again, or reload the app first.` };

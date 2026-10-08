@@ -7,8 +7,10 @@ import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysi
 import { createRecorder, MAX_RECORD_SEC, microphoneUnavailableReason, type InterruptionReason, type Recorder, type RecorderInfo } from '../../audio/recorder';
 import { getExercise } from '../../coach/exercises';
 import { isIos } from '../../pwa/platform';
+import { useMarkBusy } from '../../pwa/register';
 import { useApp } from '../../state/context';
 import { REFERENCE_ID } from '../../state/reducer';
+import { parseRoute } from '../../state/routing';
 import { TrainerContext } from '../../state/trainerContext';
 import type { SingerProfile, VoiceType } from '../../types';
 import { AnalysisProgress } from '../components/AnalysisProgress';
@@ -22,6 +24,7 @@ import { Notice } from '../components/Notice';
 import { OpenInTrainer } from '../components/OpenInTrainer';
 import { ReferenceCard, SingerCard } from '../components/SingerCard';
 import { shortName, singerColor } from '../components/singer';
+import { setLeaveGuard } from '../leaveGuard';
 
 type RecPhase = 'idle' | 'starting' | 'recording' | 'stopping';
 
@@ -136,6 +139,8 @@ export function StudioPage() {
   const recordRef = useRef<HTMLButtonElement>(null);
   const stopRef = useRef<HTMLButtonElement>(null);
   const errorRef = useRef<HTMLDivElement>(null);
+  // Where the person tried to go while a recording was running; shown as a question instead of silently throwing the take away.
+  const [leaveTo, setLeaveTo] = useState<string | null>(null);
 
   const passaggio = passaggioFor(state.settings.voiceType);
   const voiceName = VOICE_TYPE_NAMES[state.settings.voiceType];
@@ -154,6 +159,20 @@ export function StudioPage() {
       recRef.current?.cancel();
     };
   }, []);
+  // A recording or analysis here must not be reloaded away by an app update.
+  useMarkBusy(phase !== 'idle');
+  // While a recording runs, an in-app link to another screen asks first (leaving would discard up to five minutes).
+  useEffect(() => {
+    if (phase !== 'recording') {
+      setLeaveTo(null);
+      return;
+    }
+    return setLeaveGuard((href) => {
+      if (parseRoute(href) === 'studio') return false;
+      setLeaveTo(href);
+      return true;
+    });
+  }, [phase]);
   const showResults = (ok: boolean) => {
     if (ok && mountedRef.current) app.go('results');
   };
@@ -258,6 +277,7 @@ export function StudioPage() {
   };
 
   const cancelRecording = () => {
+    if (phase === 'stopping') return;
     recRef.current?.cancel();
     recRef.current = null;
     setAnalyser(null);
@@ -268,6 +288,17 @@ export function StudioPage() {
     focusRecord();
   };
 
+  const keepRecording = () => {
+    setLeaveTo(null);
+    requestAnimationFrame(() => stopRef.current?.focus());
+  };
+  const discardAndLeave = () => {
+    const target = leaveTo;
+    cancelRecording();
+    setLeaveTo(null);
+    if (target) window.location.hash = target;
+  };
+
   const onUpload = async (file: File) => {
     setRejectMsg(null);
     setMicError(null);
@@ -275,6 +306,7 @@ export function StudioPage() {
   };
 
   const onDemo = async () => {
+    if (busy || recording) return;
     setRejectMsg(null);
     showResults(await app.analyzeDemo());
   };
@@ -390,14 +422,43 @@ export function StudioPage() {
                 {micInfo?.lowBandwidth && (
                   <Notice tone="warn" title="Bluetooth microphone in use">
                     <p>{LOW_BANDWIDTH_TEXT}</p>
+                    <p>
+                      <a href="#settings">Choose the microphone in Settings</a> after this take.
+                    </p>
                   </Notice>
                 )}
                 {analyser && <LiveMonitor analyser={analyser} a4Hz={state.settings.a4Hz} centreMidi={(passaggio.lowMidi + passaggio.highMidi) / 2} />}
+                {recording && (
+                  <p className="record-help">Stay on this screen while you sing: leaving it throws the recording away.</p>
+                )}
+                {recording && leaveTo !== null && (
+                  <div
+                    className="confirm"
+                    role="group"
+                    aria-labelledby="leave-rec-q"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') keepRecording();
+                    }}
+                  >
+                    <p id="leave-rec-q">Leave the Studio? Your recording is still running, and leaving now throws it away.</p>
+                    <div className="button-row">
+                      <button type="button" className="button button--accent" onClick={keepRecording} autoFocus>
+                        Keep recording
+                      </button>
+                      <button type="button" className="button" onClick={() => void stopRecording()}>
+                        Stop and analyse
+                      </button>
+                      <button type="button" className="button button--ghost" onClick={discardAndLeave}>
+                        Discard and leave
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="record-actions">
-                  <button ref={stopRef} type="button" className="button button--rec" onClick={() => void stopRecording()} disabled={phase === 'stopping'}>
+                  <button ref={stopRef} type="button" className="button button--rec" onClick={() => void stopRecording()} aria-disabled={phase === 'stopping' || undefined}>
                     <Icon name="stop" size={16} /> Stop and analyse
                   </button>
-                  <button type="button" className="button button--ghost" onClick={cancelRecording} disabled={phase === 'stopping'}>
+                  <button type="button" className="button button--ghost" onClick={cancelRecording} aria-disabled={phase === 'stopping' || undefined}>
                     Discard
                   </button>
                 </div>
@@ -409,7 +470,8 @@ export function StudioPage() {
                   type="button"
                   className="record-button"
                   onClick={() => void startRecording()}
-                  disabled={busy || phase !== 'idle' || !!micUnavailable}
+                  disabled={!!micUnavailable}
+                  aria-disabled={busy || phase !== 'idle' || undefined}
                   aria-describedby="record-help"
                 >
                   <span className="record-button-dot" aria-hidden="true" />
@@ -458,7 +520,7 @@ export function StudioPage() {
           )}
 
           <div className="demo-row">
-            <button type="button" className="button button--ghost" onClick={() => void onDemo()} disabled={busy || recording}>
+            <button type="button" className="button button--ghost" onClick={() => void onDemo()} aria-disabled={busy || recording || undefined}>
               <Icon name="play" size={14} /> Try a demo take
             </button>
             <span className="muted demo-note">A synthesised 15-second phrase, so you can see the results without singing.</span>

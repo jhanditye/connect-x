@@ -433,7 +433,7 @@ describe('stopping and interruptions', () => {
     ['the microphone ends', (e) => e.endMic(), 'mic-ended'],
     ['the microphone is muted (a call)', (e) => e.muteMic(), 'mic-ended'],
     ['the audio session is interrupted', (e) => e.interruptAudio(), 'audio-session'],
-    ['the iOS audio session reports interrupted', (e) => e.fireAudioSessionState('interrupted'), 'audio-session'],
+    // (navigator.audioSession.state / statechange are off in shipping WebKit: interruptions are read from the AudioContext, as above.)
     ['a headphone is unplugged', (e) => e.changeDevices([{ deviceId: 'x', label: 'iPhone Microphone', kind: 'audioinput' }]), 'device-change'],
   ])('%s: the take ends as interrupted with the reason, once', async (_name, trigger, reason) => {
     const { env, s } = setup();

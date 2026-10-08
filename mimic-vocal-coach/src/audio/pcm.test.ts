@@ -10,6 +10,8 @@ import {
   fingerprint,
   floatToInt16,
   int16ToFloat,
+  SAME_FILE_DURATION_MS,
+  sameSourceFile,
   parseFingerprint,
   sourceKey,
   peaks,
@@ -194,5 +196,29 @@ describe('fingerprint', () => {
     expect(sourceKey('100:61200:0123456789abcdef@8500')).toBe('100:61200:0123456789abcdef');
     expect(sourceKey('100:61200:0123456789abcdef')).toBe('100:61200:0123456789abcdef');
     expect(parseFingerprint('100:61200:0123456789abcdef@x')).toBeNull();
+  });
+});
+
+describe('sameSourceFile', () => {
+  const fp = '908504:20600:8ebce548ffc53829';
+  it('is the same file when size and content hash match and the decoded length differs by no more than a few ms', () => {
+    expect(sameSourceFile(fp, fp)).toBe(true);
+    expect(sameSourceFile(fp, '908504:20601:8ebce548ffc53829')).toBe(true);
+    expect(sameSourceFile(fp, `908504:${20600 + SAME_FILE_DURATION_MS}:8ebce548ffc53829`)).toBe(true);
+    expect(sameSourceFile(fp, `908504:${20600 + SAME_FILE_DURATION_MS + 1}:8ebce548ffc53829`)).toBe(false);
+  });
+  it('ignores the excerpt offset a clip adds, on either side', () => {
+    expect(sameSourceFile(`${fp}@3000`, '908504:20601:8ebce548ffc53829')).toBe(true);
+    expect(sameSourceFile('908504:20601:8ebce548ffc53829', `${fp}@3000`)).toBe(true);
+  });
+  it('is a different file when the size or the content differs', () => {
+    expect(sameSourceFile(fp, '908505:20600:8ebce548ffc53829')).toBe(false);
+    expect(sameSourceFile(fp, '908504:20600:0000000000000000')).toBe(false);
+  });
+  it('compares anything that is not a fingerprint as plain text, and never matches an empty one', () => {
+    expect(sameSourceFile('x:1:y', 'x:1:y')).toBe(true);
+    expect(sameSourceFile('x:1:y', 'x:2:y')).toBe(false);
+    expect(sameSourceFile('', '')).toBe(false);
+    expect(sameSourceFile(fp, '')).toBe(false);
   });
 });

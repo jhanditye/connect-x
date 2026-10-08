@@ -2,18 +2,18 @@
 // track), analyse once, classify (solo vocal, full song, speech, too little singing), segment into phrases (prepareClip),
 // then store after the user's review (commitClip). Nothing is stored until commitClip; a clip is either fully stored or absent.
 
+import { abortError, isAbortError } from '../analysis/abort';
 import { MAX_ANALYSIS_SEC } from '../analysis/analyze';
 import { analyzeWithRouting } from '../analysis/auto';
 import { analyzeInWorker } from '../analysis/client';
 import { leadExtractionOf } from '../analysis/mixMode';
 import { mixConfidenceBand, mixReport, type MixConfidenceBand } from '../analysis/quality';
 import { decodeAudioFile, isVideoFile, type DecodedTake, type DecodeOptions } from '../audio/decode';
-import { fingerprint as hashBytes, floatToInt16, MAX_STORE_RATE } from '../audio/pcm';
+import { chunkFramesFor, fingerprint as hashBytes, floatToInt16, MAX_STORE_RATE, sameSourceFile } from '../audio/pcm';
 import { ARTIST_VOICE_TYPE } from '../coach/measured';
 import { referenceUsability } from '../coach/reference';
-import { resample } from '../dsp/resample';
 import type { ClipStore } from '../storage/clips';
-import { measuredFromClip } from '../storage/library';
+import { findRelinkCandidates, measuredFromClip } from '../storage/library';
 import type {
   AnalysisIssue,
   AnalysisOptions,
@@ -35,10 +35,12 @@ import {
   QUIET_WARNING,
   SPEECH_REASON,
   littleMixSingingReason,
+  littleSingingContext,
   littleSingingReason,
   mixAutoFailedWarning,
 } from './importCopy';
 import { TRAINER_ANALYSIS_VERSION } from './phraseAnalysis';
+import { resampleAsync } from './resampleAsync';
 import {
   applyTrim,
   clampTrim,
@@ -121,13 +123,13 @@ export interface CommitEdits {
 
 export interface ImportDeps {
   decode(file: File, opts: DecodeOptions): Promise<DecodedTake>;
-  analyze(samples: Float32Array, sampleRate: number, opts: AnalysisOptions, onProgress?: (fraction: number) => void): Promise<VoiceAnalysis>;
+  analyze(samples: Float32Array, sampleRate: number, opts: AnalysisOptions, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<VoiceAnalysis>;
   now(): number;
 }
 
 const DEFAULT_DEPS: ImportDeps = {
   decode: (file, opts) => decodeAudioFile(file, opts),
-  analyze: (samples, sampleRate, opts, onProgress) => analyzeInWorker(samples, sampleRate, opts, onProgress),
+  analyze: (samples, sampleRate, opts, onProgress, signal) => analyzeInWorker(samples, sampleRate, opts, onProgress, signal),
   now: () => Date.now(),
 };
 
@@ -143,7 +145,7 @@ export interface PrepareOptions {
 export const MAX_IMPORT_SOURCE_SEC = 15 * 60;
 /** The stem and the song must be the same length to line up. */
 export const STEM_TOLERANCE_SEC = 0.2;
-/** A re-added file matches a clip by name when the durations agree this closely. */
+/** A re-added file may be this much shorter than the clip's excerpt needs (the same limit storage/library.ts uses for lengths). */
 const RELINK_TOLERANCE_SEC = 0.3;
 /** A stripped-down clip shorter than this is not worth storing. */
 const MIN_KEPT_SEC = 1;
@@ -151,16 +153,7 @@ const MIN_KEPT_SEC = 1;
 // ---------------------------------------------------------------------------------------------
 // Small helpers
 
-function abortError(): Error {
-  if (typeof DOMException === 'function') return new DOMException('The import was cancelled.', 'AbortError');
-  const err = new Error('The import was cancelled.');
-  err.name = 'AbortError';
-  return err;
-}
-
-export function isAbortError(err: unknown): boolean {
-  return !!err && typeof err === 'object' && (err as { name?: string }).name === 'AbortError';
-}
+export { isAbortError };
 
 function randomHex(bytes: number): string {
   const c = (globalThis as { crypto?: Crypto }).crypto;
@@ -234,7 +227,7 @@ function qualityWarnings(issues: AnalysisIssue[]): string[] {
 export function classifyClip(analysis: VoiceAnalysis): { kind: ClipKind | 'blocked'; reason: string | null } {
   const issues = analysis.issues ?? [];
   if (analysis.mode !== 'mix' && issues.includes('accompaniment')) return { kind: 'mix', reason: MIX_REASON };
-  if (issues.includes('too-little-singing')) return { kind: 'blocked', reason: littleSingingReason(analysis.voicedSec) };
+  if (issues.includes('too-little-singing')) return { kind: 'blocked', reason: littleSingingReason(analysis.voicedSec, littleSingingContext(analysis)) };
   if (issues.includes('speech-like')) return { kind: 'blocked', reason: SPEECH_REASON };
   if (analysis.mode === 'mix') return { kind: 'mix', reason: MIX_REASON };
   return { kind: 'solo', reason: null };
@@ -258,7 +251,7 @@ export function buildView(kind: ClipKind, analysis: VoiceAnalysis): AnalysisView
     if (lead && analysis.mode === 'mix') warnings.splice(1, 0, ...mixReport({ confidence: lead.confidence, voicedSec: analysis.voicedSec }).warnings);
   }
   if (kind === 'solo' && analysis.mode !== 'mix' && issues.includes('accompaniment')) warnings.unshift(BAND_WARNING);
-  if (issues.includes('too-little-singing')) blockers.push(kind === 'mix' && analysis.mode === 'mix' ? littleMixSingingReason(analysis.voicedSec) : littleSingingReason(analysis.voicedSec));
+  if (issues.includes('too-little-singing')) blockers.push(kind === 'mix' && analysis.mode === 'mix' ? littleMixSingingReason(analysis.voicedSec) : littleSingingReason(analysis.voicedSec, littleSingingContext(analysis)));
   else if (issues.includes('speech-like') && kind === 'solo') blockers.push(SPEECH_REASON);
   let phrases: SegPhrase[] = [];
   if (blockers.length === 0) {
@@ -275,8 +268,9 @@ async function analyzeMixReading(
   sampleRate: number,
   opts: AnalysisOptions,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<VoiceAnalysis> {
-  const analysis = await analyze(samples, sampleRate, { ...opts, mode: 'mix' }, onProgress);
+  const analysis = await analyze(samples, sampleRate, { ...opts, mode: 'mix' }, onProgress, signal);
   if (analysis.mode !== 'mix') throw new Error('The full-song reading did not run. Reload the app and try again, or add the vocal-only version of the song.');
   return analysis;
 }
@@ -324,7 +318,7 @@ export async function prepareClip(
   const report = (phase: ImportProgress['phase'], fraction: number) =>
     onProgress?.({ fileIndex: options.index ?? 0, fileCount: options.count ?? 1, name: file.name, phase, fraction: Math.max(0, Math.min(1, fraction)) });
   const check = () => {
-    if (options.signal?.aborted) throw abortError();
+    if (options.signal?.aborted) throw abortError('The import was cancelled.');
   };
 
   check();
@@ -333,7 +327,8 @@ export async function prepareClip(
   report('decoding', 0);
   const decoded = await deps.decode(file, { maxSeconds: MAX_ANALYSIS_SEC, maxSourceSec: MAX_IMPORT_SOURCE_SEC });
   check();
-  report('decoding', 1);
+  const needsResample = decoded.sampleRate > MAX_STORE_RATE;
+  report('decoding', needsResample ? 0.5 : 1);
 
   const notices = [...decoded.notices];
   if (video) notices.unshift('Used the sound of the video.');
@@ -344,9 +339,12 @@ export async function prepareClip(
   }
   let samples = decoded.samples;
   let sampleRate = decoded.sampleRate;
-  if (sampleRate > MAX_STORE_RATE) {
-    samples = resample(samples, sampleRate, MAX_STORE_RATE);
+  if (needsResample) {
+    // A 96 kHz file would freeze the page for seconds in one call: convert it in slices, with progress.
+    samples = await resampleAsync(samples, sampleRate, MAX_STORE_RATE, { signal: options.signal, onProgress: (f) => report('decoding', 0.5 + 0.5 * f) });
     sampleRate = MAX_STORE_RATE;
+    check();
+    report('decoding', 1);
   }
   const durationSec = samples.length / sampleRate;
   const opts: AnalysisOptions = { voiceType: ARTIST_VOICE_TYPE, a4Hz: settings.a4Hz };
@@ -354,7 +352,7 @@ export async function prepareClip(
   // Solo first (it is what finds out whether this is a song). When it raises the band issue the same audio is read again as a
   // full song, through the same analyzer (the worker in the app), with one progress stream.
   report('analysing', 0);
-  const auto = await analyzeWithRouting(deps.analyze, samples, sampleRate, opts, 'auto', (f) => report('analysing', f));
+  const auto = await analyzeWithRouting(deps.analyze, samples, sampleRate, opts, 'auto', (f) => report('analysing', f), options.signal);
   check();
   const solo = auto.solo ?? auto.analysis;
   const verdict = classifyClip(solo);
@@ -419,12 +417,12 @@ export async function reanalyzeClip(
       onProgress?.({ fileIndex: options.index ?? 0, fileCount: options.count ?? 1, name: prepared.file.name, phase: 'analysing', fraction });
     report(0);
     if (kind === 'mix') {
-      view = buildView('mix', await analyzeMixReading(deps.analyze, prepared.samples, prepared.sampleRate, opts, report));
+      view = buildView('mix', await analyzeMixReading(deps.analyze, prepared.samples, prepared.sampleRate, opts, report, options.signal));
     } else {
-      const solo = await deps.analyze(prepared.samples, prepared.sampleRate, opts, report);
+      const solo = await deps.analyze(prepared.samples, prepared.sampleRate, opts, report, options.signal);
       view = buildView('solo', solo);
     }
-    if (options.signal?.aborted) throw abortError();
+    if (options.signal?.aborted) throw abortError('The import was cancelled.');
     views[kind] = view;
   }
   return applyView(prepared, view, views);
@@ -494,9 +492,9 @@ export function trimStartOf(fingerprint: string): number {
   return Number.isFinite(ms) && ms > 0 ? ms / 1000 : 0;
 }
 
-/** True when both fingerprints are of the same source file. */
+/** True when both fingerprints are of the same source file (same size and content; the decoded length may differ by a few ms). */
 export function sameSource(a: string, b: string): boolean {
-  return sourceFingerprint(a) === sourceFingerprint(b);
+  return sameSourceFile(a, b);
 }
 
 function voicedSecIn(analysis: VoiceAnalysis, startSec: number, endSec: number): number {
@@ -588,53 +586,57 @@ export async function commitClip(
   const levels = visiblePhrases(kept).map((p) => phraseDifficulty(analysis, { voicedStart: p.voicedStart + trim.startSec, voicedEnd: p.voicedEnd + trim.startSec }).level);
 
   report(0.05);
-  const written: ('mix' | 'vocal')[] = [];
-  let mixInfo: ClipAudioInfo;
-  let vocalInfo: ClipAudioInfo | null = null;
+  // The record goes in FIRST, marked as lacking its audio, then the audio, then the record again with the flag cleared. A page
+  // that is killed half way (iOS does that to a busy tab) then leaves a clip that says "add the file again", which the app knows
+  // how to finish, instead of megabytes of audio that no record owns and nobody can see or remove.
+  const mixFrames = mixCut.pcm.length;
+  const stemCut = stem ? excerpt(stem.samples, stem.sampleRate, trim) : null;
+  const mixInfo: ClipAudioInfo = { kind: 'mix', sampleRate: current.sampleRate, frames: mixFrames, chunkFrames: chunkFramesFor(current.sampleRate) };
+  const vocalInfo: ClipAudioInfo | null = stem && stemCut ? { kind: 'vocal', sampleRate: stem.sampleRate, frames: stemCut.pcm.length, chunkFrames: chunkFramesFor(stem.sampleRate) } : null;
+  const summary = summaryOf(analysis, opts, edits.kind, trim);
+  const measured = edits.contributeToSinger && edits.kind === 'solo' && edits.singerId !== null && summary.usableAsTarget;
+  const pending: ClipRecord = {
+    schema: 1,
+    id: clipId,
+    title,
+    singerId: edits.singerId,
+    singerLabel: edits.singerId === null ? edits.singerLabel.trim() : '',
+    sourceFileName: current.file.name,
+    sourceBytes: current.file.size,
+    fingerprint: withTrimStart(current.fingerprint, trim.startSec),
+    addedAt: now,
+    updatedAt: now,
+    durationSec: mixInfo.frames / mixInfo.sampleRate,
+    kind: edits.kind,
+    analysisKind: edits.kind === 'mix' && !stem ? 'mix-melody' : 'solo',
+    audio: { mix: mixInfo, vocal: vocalInfo },
+    audioMissing: true,
+    analysis: summary,
+    phrases: records,
+    notes: '',
+    tags: [],
+    difficulty: clipDifficulty(levels),
+    contributesToSinger: measured,
+    ownedConfirmedAt: now,
+  };
   try {
-    mixInfo = await store.writeAudio(clipId, 'mix', mixCut.pcm, current.sampleRate);
-    written.push('mix');
+    await store.putClip(pending);
+    const wroteMix = await store.writeAudio(clipId, 'mix', mixCut.pcm, current.sampleRate);
     report(0.6);
-    if (stem) {
-      const stemCut = excerpt(stem.samples, stem.sampleRate, trim);
-      vocalInfo = await store.writeAudio(clipId, 'vocal', stemCut.pcm, stem.sampleRate);
-      written.push('vocal');
+    let wroteVocal: ClipAudioInfo | null = null;
+    if (stemCut) {
+      wroteVocal = await store.writeAudio(clipId, 'vocal', stemCut.pcm, (stem as PreparedClip).sampleRate);
       report(0.8);
     }
-    const summary = summaryOf(analysis, opts, edits.kind, trim);
-    const measured = edits.contributeToSinger && edits.kind === 'solo' && edits.singerId !== null && summary.usableAsTarget;
-    const clip: ClipRecord = {
-      schema: 1,
-      id: clipId,
-      title,
-      singerId: edits.singerId,
-      singerLabel: edits.singerId === null ? edits.singerLabel.trim() : '',
-      sourceFileName: current.file.name,
-      sourceBytes: current.file.size,
-      fingerprint: withTrimStart(current.fingerprint, trim.startSec),
-      addedAt: now,
-      updatedAt: now,
-      durationSec: mixInfo.frames / mixInfo.sampleRate,
-      kind: edits.kind,
-      analysisKind: edits.kind === 'mix' && !stem ? 'mix-melody' : 'solo',
-      audio: { mix: mixInfo, vocal: vocalInfo },
-      audioMissing: false,
-      analysis: summary,
-      phrases: records,
-      notes: '',
-      tags: [],
-      difficulty: clipDifficulty(levels),
-      contributesToSinger: measured,
-      ownedConfirmedAt: now,
-    };
+    const clip: ClipRecord = { ...pending, audio: { mix: wroteMix, vocal: wroteVocal }, durationSec: wroteMix.frames / wroteMix.sampleRate, audioMissing: false };
     await store.putClip(clip);
     report(1);
     // The same numbers a later "add to targets" tap builds from the stored clip (the kept excerpt's singing time is the weight),
     // so counting a clip at import and counting it afterwards give the same targets.
     return { clip, measured: measured ? measuredFromClip(clip) : null };
   } catch (err) {
-    // Nothing half-stored: take back whatever audio was written for a clip that does not exist.
-    await Promise.all(written.map((k) => store.deleteAudio(clipId, k).catch(() => undefined)));
+    // Nothing half-stored: take back the record and whatever audio was written for it.
+    await store.deleteClip(clipId).catch(() => undefined);
     throw err;
   }
 }
@@ -642,15 +644,9 @@ export async function commitClip(
 // ---------------------------------------------------------------------------------------------
 // relinkAudio
 
-const stemOfName = (name: string): string => stripExtension(name).toLowerCase().trim();
-
-/** Clips whose audio is missing that this file could be the source of (same fingerprint, or same name and length). */
+/** Clips whose audio is missing that this file could be the source of (same fingerprint, or same name and source length). */
 export function findRelinkMatches(clips: ClipRecord[], prepared: PreparedClip): ClipRecord[] {
-  return clips.filter((c) => {
-    if (!c.audioMissing) return false;
-    if (sameSource(c.fingerprint, prepared.fingerprint)) return true;
-    return stemOfName(c.sourceFileName) === stemOfName(prepared.file.name) && Math.abs(c.durationSec - prepared.durationSec) <= RELINK_TOLERANCE_SEC;
-  });
+  return findRelinkCandidates(clips, { fingerprint: prepared.fingerprint, fileName: prepared.file.name, durationSec: prepared.durationSec });
 }
 
 /**
@@ -660,8 +656,7 @@ export function findRelinkMatches(clips: ClipRecord[], prepared: PreparedClip): 
  */
 export async function relinkAudio(clip: ClipRecord, prepared: PreparedClip, store: ClipStore, vocalStem?: PreparedClip): Promise<ClipRecord> {
   if (!clip.audioMissing) throw new Error(`"${clip.title}" already has its audio on this device.`);
-  const nameAndLength = stemOfName(clip.sourceFileName) === stemOfName(prepared.file.name) && Math.abs(clip.durationSec - prepared.durationSec) <= RELINK_TOLERANCE_SEC;
-  if (!sameSource(clip.fingerprint, prepared.fingerprint) && !nameAndLength) {
+  if (findRelinkMatches([clip], prepared).length === 0) {
     throw new Error(`This does not look like the file for "${clip.title}" (${clip.sourceFileName}). Pick the file you originally added, or add this one as a new clip.`);
   }
   const startSec = trimStartOf(clip.fingerprint);

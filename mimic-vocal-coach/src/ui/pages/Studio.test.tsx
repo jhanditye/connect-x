@@ -7,6 +7,7 @@ import { AppContext, type AppController } from '../../state/context';
 import { createInitialState, type AppState, type ReferenceClip } from '../../state/reducer';
 import { makeFakeAnalysis, makeFakeProfile } from '../../testing/fixtures';
 import type { AppSettings } from '../../types';
+import { shouldBlockLeave } from '../leaveGuard';
 import { StudioPage } from './Studio';
 
 // Other engineers' modules are replaced so this test pins down only the Studio's own behaviour.
@@ -222,7 +223,8 @@ describe('StudioPage', () => {
     const live = container.querySelector('.capture [role="status"][aria-live="polite"]');
     expect(live?.textContent).toBe('Analysing Demo take');
     expect(live?.contains(bar)).toBe(false);
-    expect(button(/Try a demo take/).disabled).toBe(true);
+    // aria-disabled, not disabled: a pressed button that disables drops keyboard focus to the page.
+    expect(button(/Try a demo take/).getAttribute('aria-disabled')).toBe('true');
   });
 
   it('keeps the progress live region mounted while idle so the first announcement is not lost', () => {
@@ -412,5 +414,78 @@ describe('StudioPage', () => {
     expect(container.textContent).toContain('AirPods · 16 kHz');
     act(() => button(/Discard/).click());
     vi.mocked(microphoneUnavailableReason).mockReset();
+  });
+
+  describe('leaving mid-recording', () => {
+    const startRecording = async (cancel = vi.fn()) => {
+      vi.mocked(microphoneUnavailableReason).mockReturnValue(null);
+      vi.mocked(createRecorder).mockReturnValueOnce({
+        start: () => Promise.resolve(),
+        stop: () => Promise.resolve({ samples: new Float32Array(48000), sampleRate: 48000 }),
+        cancel,
+        analyser: null,
+      });
+      const app = controller();
+      render(app);
+      await act(async () => button(/^Record$/).click());
+      return { app, cancel };
+    };
+    afterEach(() => {
+      vi.mocked(microphoneUnavailableReason).mockReset();
+      window.location.hash = '';
+    });
+
+    it('says on the recording card that leaving throws the take away', async () => {
+      await startRecording();
+      expect(container.querySelector('.record-block')?.textContent).toMatch(/Stay on this screen while you sing: leaving it throws the recording away/);
+    });
+
+    it('holds an in-app link to another screen back and asks, instead of silently discarding the take', async () => {
+      const { cancel } = await startRecording();
+      expect(shouldBlockLeave('#studio')).toBe(false);
+      expect(container.querySelector('#leave-rec-q')).toBeNull();
+      let blocked = false;
+      act(() => {
+        blocked = shouldBlockLeave('#progress');
+      });
+      expect(blocked).toBe(true);
+      expect(container.querySelector('#leave-rec-q')?.textContent).toMatch(/Your recording is still running, and leaving now throws it away/);
+      expect(document.activeElement?.textContent).toBe('Keep recording');
+      expect(cancel).not.toHaveBeenCalled();
+    });
+
+    it('Keep recording (or Escape) closes the question and returns focus to Stop', async () => {
+      const { cancel } = await startRecording();
+      act(() => void shouldBlockLeave('#progress'));
+      act(() => button(/Keep recording/).click());
+      await nextFrame();
+      expect(container.querySelector('#leave-rec-q')).toBeNull();
+      expect(document.activeElement?.textContent).toMatch(/Stop and analyse/);
+      act(() => void shouldBlockLeave('#progress'));
+      act(() => void container.querySelector('.confirm')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+      await nextFrame();
+      expect(container.querySelector('#leave-rec-q')).toBeNull();
+      expect(cancel).not.toHaveBeenCalled();
+    });
+
+    it('Stop and analyse from the question analyses the take', async () => {
+      const { app } = await startRecording();
+      act(() => void shouldBlockLeave('#progress'));
+      await act(async () => button(/^Stop and analyse$/).click());
+      expect(app.analyzeSamples).toHaveBeenCalledOnce();
+    });
+
+    it('Discard and leave drops the take and goes where the person was going', async () => {
+      const { cancel } = await startRecording();
+      act(() => void shouldBlockLeave('#progress'));
+      act(() => button(/Discard and leave/).click());
+      expect(cancel).toHaveBeenCalled();
+      expect(window.location.hash).toBe('#progress');
+    });
+
+    it('lets links through when nothing is being recorded', () => {
+      render(controller());
+      expect(shouldBlockLeave('#progress')).toBe(false);
+    });
   });
 });

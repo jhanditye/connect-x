@@ -155,25 +155,54 @@ describe('analyzePhraseCached', () => {
     expect(await p2).toBe(result);
   });
 
-  it('rejects with an AbortError when cancelled, and still caches the finished analysis for the next caller', async () => {
-    let release!: (a: VoiceAnalysis) => void;
-    analyze.mockImplementation(() => new Promise<VoiceAnalysis>((r) => (release = r)));
+  it('rejects with an AbortError when cancelled and stops the worker when nobody else is waiting', async () => {
+    let signalSeen: AbortSignal | undefined;
+    analyze.mockImplementation((_s, _r, _o, _p, signal) => {
+      signalSeen = signal;
+      return new Promise<VoiceAnalysis>((_resolve, reject) => signal?.addEventListener('abort', () => reject(Object.assign(new Error('stopped'), { name: 'AbortError' }))));
+    });
     const c = clip();
     const ctl = new AbortController();
     const waiting = analyzePhraseCached(c, phraseOf(c), audioOf(), OPTS, ctl.signal);
+    expect(signalSeen?.aborted).toBe(false);
     ctl.abort();
     await expect(waiting).rejects.toMatchObject({ name: 'AbortError' });
-    const result = fresh();
-    release(result);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(await analyzePhraseCached(c, phraseOf(c), audioOf(), OPTS)).toBe(result);
-    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(signalSeen?.aborted).toBe(true);
+
+    // Nothing is cached or kept in flight for it: the next caller analyses afresh.
+    analyze.mockImplementation(async () => fresh());
+    const result = await analyzePhraseCached(c, phraseOf(c), audioOf(), OPTS);
+    expect(result.durationSec).toBeGreaterThan(0);
+    expect(analyze).toHaveBeenCalledTimes(2);
 
     const early = new AbortController();
     early.abort();
     await expect(analyzePhraseCached(c, phraseOf(c, 2), audioOf(), OPTS, early.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(analyze).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the shared analysis running while another caller still waits for it', async () => {
+    let release!: (a: VoiceAnalysis) => void;
+    let signalSeen: AbortSignal | undefined;
+    analyze.mockImplementation((_s, _r, _o, _p, signal) => {
+      signalSeen = signal;
+      return new Promise<VoiceAnalysis>((r) => (release = r));
+    });
+    const c = clip();
+    const a = new AbortController();
+    const b = new AbortController();
+    const first = analyzePhraseCached(c, phraseOf(c), audioOf(), OPTS, a.signal);
+    const second = analyzePhraseCached(c, phraseOf(c), audioOf(), OPTS, b.signal);
+    const third = analyzePhraseCached(c, phraseOf(c), audioOf(), OPTS); // no signal: never cancelled
     expect(analyze).toHaveBeenCalledTimes(1);
+    a.abort();
+    b.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    expect(signalSeen?.aborted).toBe(false);
+    const result = fresh();
+    release(result);
+    expect(await third).toBe(result);
   });
 
   it('propagates a failed analysis without caching it', async () => {

@@ -35,6 +35,11 @@ export interface MeasureResult {
   rejected: { name: string; reason: string }[];
 }
 
+/** What "Clear all data" could not delete: the names of the places (in plain words) whose deletion failed. Empty: everything is gone. */
+export interface ClearAllResult {
+  failed: string[];
+}
+
 export interface AppController {
   state: AppState;
   dispatch: Dispatch<Action>;
@@ -62,12 +67,17 @@ export interface AppController {
   saveSession(label?: string): SessionRecord | null;
   deleteSession(id: string): void;
   clearSessions(): void;
-  clearAllData(): void;
   /**
-   * Registers a hook that runs at the end of clearAllData (the Trainer's library clears its store this way). Returns the function that
-   * unregisters it. Optional so hand-built controllers in tests stay valid; a hook that throws or rejects never stops "delete everything".
+   * Deletes the saved progress, settings, API key and targets at once, then waits for the places that clear themselves (the Trainer's
+   * library) and says which of them could not be cleared. Callers show "cleared" only when `failed` is empty.
    */
-  onClear?(fn: () => void | Promise<void>): () => void;
+  clearAllData(): Promise<ClearAllResult>;
+  /**
+   * Registers a hook that runs at the end of clearAllData (the Trainer's library clears its store this way). `name` is what the person
+   * is told could not be deleted when the hook fails ("your clips and practice scores"). Returns the function that unregisters it.
+   * Optional so hand-built controllers in tests stay valid; a hook that throws or rejects never stops "delete everything".
+   */
+  onClear?(fn: () => void | Promise<void>, name?: string): () => void;
   /** Measures clips of a builtin singer from the user's own music; their targets replace the estimates. */
   measureClips(singerId: string, files: File[], onProgress?: (p: MeasureProgress) => void): Promise<MeasureResult>;
   /**

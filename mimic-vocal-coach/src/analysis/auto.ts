@@ -10,11 +10,12 @@
 // The analyzer is passed in (analyzeInWorker in the app, a fake in tests), so this module has no worker or DOM imports.
 
 import type { AnalysisOptions, VoiceAnalysis } from '../types';
+import { abortError, isAbortError } from './abort';
 import { suggestsFullSong } from './quality';
 
 export type AnalysisRouting = 'auto' | 'solo' | 'mix';
 
-export type AnalyzeFn = (samples: Float32Array, sampleRate: number, opts: AnalysisOptions, onProgress?: (fraction: number) => void) => Promise<VoiceAnalysis>;
+export type AnalyzeFn = (samples: Float32Array, sampleRate: number, opts: AnalysisOptions, onProgress?: (fraction: number) => void, signal?: AbortSignal) => Promise<VoiceAnalysis>;
 
 export interface AutoAnalysis {
   /** The analysis to use. */
@@ -59,7 +60,8 @@ function messageOf(err: unknown): string {
  * Analyses `samples` with `analyze` according to `routing` (default: 'mix' when `opts.mode === 'mix'`, else 'auto').
  * `onProgress` receives one increasing stream from 0 to 1 over both passes. A failing solo pass rejects; a failing
  * automatic mix pass falls back to the solo result (`mixError` says why) so the user is never left with nothing; a failing
- * manual mix pass rejects.
+ * manual mix pass rejects. `signal` cancels: the running pass is stopped (when `analyze` supports it), the mix pass after a solo
+ * pass is never started, and the promise rejects with an AbortError (a cancelled mix pass is not "a failed mix pass").
  */
 export async function analyzeWithRouting(
   analyze: AnalyzeFn,
@@ -68,30 +70,40 @@ export async function analyzeWithRouting(
   opts: AnalysisOptions,
   routing: AnalysisRouting = opts.mode === 'mix' ? 'mix' : 'auto',
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<AutoAnalysis> {
   const report = monotone(onProgress);
+  const check = () => {
+    if (signal?.aborted) throw abortError();
+  };
+  check();
   const soloOpts: AnalysisOptions = { ...opts, mode: 'solo' };
   const mixOpts: AnalysisOptions = { ...opts, mode: 'mix' };
   if (routing === 'mix') {
-    const analysis = await analyze(samples, sampleRate, mixOpts, slice(report, 0, 1));
+    const analysis = await analyze(samples, sampleRate, mixOpts, slice(report, 0, 1), signal);
+    check();
     report(1);
     return { analysis, route: 'mix-manual', solo: null, mixError: null };
   }
   if (routing === 'solo') {
-    const analysis = await analyze(samples, sampleRate, soloOpts, slice(report, 0, 1));
+    const analysis = await analyze(samples, sampleRate, soloOpts, slice(report, 0, 1), signal);
+    check();
     report(1);
     return { analysis, route: 'solo', solo: analysis, mixError: null };
   }
-  const solo = await analyze(samples, sampleRate, soloOpts, slice(report, 0, SOLO_PROGRESS_SHARE));
+  const solo = await analyze(samples, sampleRate, soloOpts, slice(report, 0, SOLO_PROGRESS_SHARE), signal);
+  check(); // a cancel between the passes must not start the (longer) mix pass
   if (!suggestsFullSong(solo)) {
     report(1);
     return { analysis: solo, route: 'solo', solo, mixError: null };
   }
   try {
-    const mix = await analyze(samples, sampleRate, mixOpts, slice(report, SOLO_PROGRESS_SHARE, 1));
+    const mix = await analyze(samples, sampleRate, mixOpts, slice(report, SOLO_PROGRESS_SHARE, 1), signal);
+    check();
     report(1);
     return { analysis: mix, route: 'mix-auto', solo, mixError: null };
   } catch (err) {
+    if (isAbortError(err) || signal?.aborted) throw isAbortError(err) ? err : abortError();
     report(1);
     return { analysis: solo, route: 'solo', solo, mixError: messageOf(err) };
   }

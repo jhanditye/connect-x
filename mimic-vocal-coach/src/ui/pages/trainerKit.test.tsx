@@ -4,13 +4,16 @@ import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeProfile } from '../../testing/fixtures';
 import { makeFakeClip } from '../../testing/trainerFixtures';
-import { downloadLibraryBackup, groupClips, singerName, singerOf, useFocusOnMount } from './trainerKit';
+import { clearReadyBackup, downloadLibraryBackup, groupClips, singerName, singerOf, useFocusOnMount } from './trainerKit';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const saveFile = vi.fn(async (..._a: unknown[]): Promise<boolean | undefined> => undefined);
 vi.mock('../components/download', async (orig) => ({ ...(await orig<typeof import('../components/download')>()), saveFile: (...a: unknown[]) => saveFile(...a) }));
-beforeEach(() => saveFile.mockClear());
+beforeEach(() => {
+  saveFile.mockClear();
+  clearReadyBackup();
+});
 afterEach(() => vi.restoreAllMocks());
 
 const singers = [
@@ -101,7 +104,7 @@ describe('downloadLibraryBackup', () => {
     const r = await downloadLibraryBackup({ exportLibrary: async () => blob });
     expect(r.ok).toBe(true);
     expect(r.message).toMatch(/no audio/);
-    expect(saveFile).toHaveBeenCalledWith(blob, expect.stringMatching(/^mimic-library-\d{4}-\d{2}-\d{2}\.json$/));
+    expect(saveFile).toHaveBeenCalledWith(blob, expect.stringMatching(/^mimic-library-\d{4}-\d{2}-\d{2}\.json$/), expect.objectContaining({ retryOnBlocked: true }));
   });
 
   it('counts the backup as made only after the file was saved', async () => {
@@ -124,6 +127,72 @@ describe('downloadLibraryBackup', () => {
     const failed = await downloadLibraryBackup({ exportLibrary, markExported });
     expect(failed.ok).toBe(false);
     expect(markExported).not.toHaveBeenCalled();
+  });
+
+  /** Makes the stand-in saveFile report a full outcome the way the real one does. */
+  const saysOutcome = (outcome: 'shared' | 'saved' | 'unverified' | 'needs-tap' | 'cancelled') =>
+    saveFile.mockImplementationOnce(async (...a: unknown[]) => {
+      (a[2] as { onOutcome?: (o: string) => void }).onOutcome?.(outcome);
+      return outcome !== 'cancelled' && outcome !== 'needs-tap';
+    });
+
+  it('does not say "saved" for a download an iPhone cannot confirm, and keeps the reminder on', async () => {
+    const markExported = vi.fn(async () => undefined);
+    saysOutcome('unverified');
+    const r = await downloadLibraryBackup({ exportLibrary: async () => new Blob(['{}']), markExported });
+    expect(r.ok).toBe(false);
+    expect(r.message).not.toMatch(/Backup saved/);
+    expect(r.message).toMatch(/cannot tell whether it was saved.*Files.*Downloads.*mimic-library-\d{4}-\d{2}-\d{2}\.json.*before you delete anything/);
+    expect(markExported).not.toHaveBeenCalled();
+  });
+
+  it('when the browser refuses the share sheet because the tap was used up, the next tap shares the file already built, with nothing awaited first', async () => {
+    const markExported = vi.fn(async () => undefined);
+    const built = new Blob(['{"clips":[]}']);
+    const exportLibrary = vi.fn(async (_o?: { markDone?: boolean }) => built);
+    saysOutcome('needs-tap');
+    const first = await downloadLibraryBackup({ exportLibrary, markExported });
+    expect(first.ok).toBe(false);
+    expect(first.message).toMatch(/Tap the same button again to finish/);
+    expect(markExported).not.toHaveBeenCalled();
+
+    // The second tap: saveFile is called in the same tick as the call, before any promise could settle.
+    let calledSynchronously = false;
+    saveFile.mockImplementationOnce(async (...a: unknown[]) => {
+      calledSynchronously = true;
+      (a[2] as { onOutcome?: (o: string) => void }).onOutcome?.('shared');
+      return true;
+    });
+    const second = downloadLibraryBackup({ exportLibrary, markExported });
+    expect(calledSynchronously).toBe(true);
+    expect((await second).ok).toBe(true);
+    expect(exportLibrary).toHaveBeenCalledTimes(1);
+    expect(saveFile.mock.calls[1][0]).toBe(built);
+    expect(markExported).toHaveBeenCalledTimes(1);
+
+    // And it is used once: the tap after that builds a new file.
+    await downloadLibraryBackup({ exportLibrary, markExported });
+    expect(exportLibrary).toHaveBeenCalledTimes(2);
+  });
+
+  it('saves an incomplete file but calls it incomplete, says what is missing, and does not count it as a backup', async () => {
+    const markExported = vi.fn(async () => undefined);
+    const lastExportReport = () => ({ complete: false, warnings: ['Your practice history (scores and attempts) could not be read, so it is not in this file.'], clips: 3, attempts: 0 });
+    saysOutcome('shared');
+    const r = await downloadLibraryBackup({ exportLibrary: async () => new Blob(['{}']), markExported, lastExportReport });
+    expect(r.ok).toBe(false);
+    expect(r.message).toMatch(/incomplete.*practice history.*could not be read.*reminder stays on/);
+    expect(markExported).not.toHaveBeenCalled();
+  });
+
+  it('lists what a complete backup left out (clips this version cannot open)', async () => {
+    const markExported = vi.fn(async () => undefined);
+    const lastExportReport = () => ({ complete: true, warnings: ['1 saved clip could not be read by this version of Mimic and is not in this backup.'], clips: 2, attempts: 10 });
+    saysOutcome('shared');
+    const r = await downloadLibraryBackup({ exportLibrary: async () => new Blob(['{}']), markExported, lastExportReport });
+    expect(r.ok).toBe(true);
+    expect(r.message).toMatch(/Backup saved.*1 saved clip could not be read/);
+    expect(markExported).toHaveBeenCalledTimes(1);
   });
 
   it('with a controller that cannot defer, the export itself marks the backup', async () => {

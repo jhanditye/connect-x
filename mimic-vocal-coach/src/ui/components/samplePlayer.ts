@@ -4,6 +4,9 @@
 
 import { setAudioSessionType } from '../../audio/audioSession';
 
+/** How long a tap waits for the audio context to run before the preview gives up and says it could not play. */
+export const RESUME_WAIT_MS = 1500;
+
 export interface SamplePlayOptions {
   /** The clip time of sample 0, so `position()` is in clip time (default 0). */
   fromSec?: number;
@@ -65,10 +68,22 @@ export function createSamplePlayer(): SamplePlayer {
         // The ring/silent switch mutes plain Web Audio on iPhone; 'playback' ignores it.
         setAudioSessionType('playback');
         ctx ??= new Ctor();
-        // resume() must be started inside the tap that called play(), before the first await.
-        const resumed = ctx.state === 'suspended' ? ctx.resume() : Promise.resolve();
-        await resumed;
+        // resume() must be started inside the tap that called play(), before the first await. Not only 'suspended': Safari
+        // reports 'interrupted' after a call, Siri or the app going to the background, and a resume() can stay pending then.
+        const c = ctx;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        if (String(c.state) !== 'running') {
+          await Promise.race([
+            c.resume().catch(() => undefined),
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, RESUME_WAIT_MS);
+            }),
+          ]);
+          clearTimeout(timer);
+        }
         if (my !== token || !ctx) return false;
+        // Still not running: say so (the caller shows its "could not play" message) instead of showing "playing" in silence.
+        if (String(ctx.state) !== 'running') return false;
         const buffer = ctx.createBuffer(1, samples.length, sampleRate);
         if (typeof buffer.copyToChannel === 'function') buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
         else buffer.getChannelData(0).set(samples);

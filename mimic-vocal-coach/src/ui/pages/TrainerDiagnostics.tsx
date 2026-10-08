@@ -65,7 +65,7 @@ function ResultRow({ r, onAgain, disabled }: { r: DiagnosticResult; onAgain?: ()
         </details>
       )}
       {onAgain && (
-        <button type="button" className="button button--ghost button--small" onClick={onAgain} disabled={disabled}>
+        <button type="button" className="button button--ghost button--small" onClick={disabled ? undefined : onAgain} aria-disabled={disabled || undefined}>
           Run again
         </button>
       )}
@@ -103,7 +103,9 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
   }, []);
 
   // Each runner is started straight from the tap: iOS only starts audio and asks for the microphone inside one.
+  // The buttons stay enabled while a check runs (aria-disabled), so the one just pressed keeps keyboard focus; these guards make them inert.
   const runQuick = () => {
+    if (busy !== null) return;
     const ctl = new AbortController();
     abortRef.current = ctl;
     setBusy('quick');
@@ -118,6 +120,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
   };
 
   const runOne = (id: DiagnosticId) => {
+    if (busy !== null) return;
     const ctl = new AbortController();
     abortRef.current = ctl;
     setBusy(id);
@@ -206,7 +209,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
         </h3>
         <p className="field-hint">No microphone and no sound. About ten seconds.</p>
         <div className="button-row">
-          <button type="button" className="button button--accent" onClick={runQuick} disabled={running}>
+          <button type="button" className="button button--accent" onClick={runQuick} aria-disabled={running || undefined}>
             {busy === 'quick' ? 'Checking…' : shown.some((r) => (QUICK_DIAGNOSTICS as readonly string[]).includes(r.id)) ? 'Run the quick checks again' : 'Run the quick checks'}
           </button>
           {busy === 'quick' && (
@@ -237,7 +240,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
           <h4 className="td-card-title">{DIAGNOSTIC_LABELS['mic-level']}</h4>
           <p className="field-hint">Sing or say “la la la” for about eight seconds, then stay quiet for the last two. It shows whether the level is right and the room is quiet enough.</p>
           <div className="button-row">
-            <button type="button" className="button button--accent" onClick={() => runOne('mic-level')} disabled={running}>
+            <button type="button" className="button button--accent" onClick={() => runOne('mic-level')} aria-disabled={running || undefined}>
               {busy === 'mic-level' ? 'Listening…' : mic ? 'Run it again' : 'Start the 10 second check'}
             </button>
             {busy === 'mic-level' && (
@@ -271,7 +274,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
             iPhone microphone first, or use the speaker.
           </p>
           <div className="button-row">
-            <button type="button" className="button button--accent" onClick={() => runOne('click-probe')} disabled={running}>
+            <button type="button" className="button button--accent" onClick={() => runOne('click-probe')} aria-disabled={running || undefined}>
               {busy === 'click-probe' ? 'Playing clicks…' : click ? 'Run it again' : 'Start the click test'}
             </button>
             {busy === 'click-probe' && (

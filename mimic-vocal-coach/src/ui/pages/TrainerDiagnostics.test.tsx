@@ -97,7 +97,7 @@ describe('quick checks', () => {
     act(() => root.render(<TrainerDiagnostics runner={runner} />));
     click(byText('Run the quick checks'));
     expect(runner.runQuickDiagnostics).toHaveBeenCalledTimes(1); // called inside the click, not after an await
-    expect(byText('Checking…').disabled).toBe(true);
+    expect(byText('Checking…').getAttribute('aria-disabled')).toBe('true');
     expect(byText('Stop')).toBeTruthy();
     expect(container.querySelector('[role="status"]')?.textContent).toMatch(/Running the quick checks/);
 
@@ -114,7 +114,7 @@ describe('quick checks', () => {
 
     act(() => runner.finishQuick());
     await flush();
-    expect(byText('Run the quick checks again').disabled).toBe(false);
+    expect(byText('Run the quick checks again').getAttribute('aria-disabled')).toBeNull();
     expect(container.textContent).not.toContain('Stop');
   });
 
@@ -134,7 +134,7 @@ describe('quick checks', () => {
     click(byText('Run the quick checks'));
     await flush();
     await flush();
-    expect(byText('Run the quick checks').disabled).toBe(false);
+    expect(byText('Run the quick checks').getAttribute('aria-disabled')).toBeNull();
   });
 });
 
@@ -146,8 +146,8 @@ describe('microphone and click tests', () => {
     expect(runner.runCalls).toHaveLength(1);
     expect(runner.runCalls[0].id).toBe('mic-level');
     // The other tests are off while one runs.
-    expect(byText('Start the click test').disabled).toBe(true);
-    expect(byText('Run the quick checks').disabled).toBe(true);
+    expect(byText('Start the click test').getAttribute('aria-disabled')).toBe('true');
+    expect(byText('Run the quick checks').getAttribute('aria-disabled')).toBe('true');
     act(() => runner.runCalls[0].onProgress?.({ fraction: 0.4, level: 0.55, message: 'Good level' }));
     const meter = container.querySelector('[role="meter"]') as HTMLElement;
     expect(meter.getAttribute('aria-valuenow')).toBe('55');
@@ -158,8 +158,8 @@ describe('microphone and click tests', () => {
     await flush();
     expect(container.querySelector('[role="meter"]')).toBeNull();
     expect(container.textContent).toContain('Singing level -20 dBFS.');
-    expect(byText('Run it again').disabled).toBe(false);
-    expect(byText('Start the click test').disabled).toBe(false);
+    expect(byText('Run it again').getAttribute('aria-disabled')).toBeNull();
+    expect(byText('Start the click test').getAttribute('aria-disabled')).toBeNull();
   });
 
   it('the click test and Stop', async () => {

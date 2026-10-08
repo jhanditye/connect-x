@@ -93,7 +93,7 @@ function EmptyResults(props: { onStudio: () => void; onDemo: () => void; busy: b
         <button type="button" className="button button--accent" onClick={props.onStudio}>
           Go to the Studio
         </button>
-        <button type="button" className="button button--ghost" onClick={props.onDemo} disabled={props.busy}>
+        <button type="button" className="button button--ghost" onClick={() => !props.busy && props.onDemo()} aria-disabled={props.busy || undefined}>
           Try a demo take
         </button>
       </div>

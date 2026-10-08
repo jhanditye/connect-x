@@ -239,8 +239,11 @@ describe('what to fix first', () => {
   });
   it('the findings are plain English and mention the key change and the wrong note', () => {
     const r = run({ key: -4, notes: I.wrongNote(PH_A, 7, -3) });
-    expect(r.notes[0]).toMatch(/4 semitones lower.*not marked down/);
+    expect(r.notes.join(' ')).toMatch(/4 semitones lower.*not marked down/);
     expect(r.notes.join(' ')).toMatch(/note 8/);
+    // the opening sentence is a verdict, not the first fix's own words and not the key line
+    expect(r.notes[0]).toMatch(/\d+ of \d+ notes were more than 25 cents/);
+    expect(r.notes.slice(1)).not.toContain(r.notes[0]);
   });
 });
 

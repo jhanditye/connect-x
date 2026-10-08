@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { analyzeTake } from '../analysis/analyze';
 import { analyzeMix } from '../analysis/mixMode';
 import { DecodeError } from '../audio/decode';
-import { floatToInt16 } from '../audio/pcm';
+import { floatToInt16, parseFingerprint } from '../audio/pcm';
 import { trackPitch } from '../dsp/pitch';
 import { median } from '../dsp/stats';
 import { createMemoryClipStore, QuotaError, type ClipStore } from '../storage/clips';
@@ -116,8 +116,14 @@ describe('classifyClip', () => {
   it('blocks a clip with no singing, with the seconds heard when there are a few', () => {
     const noise = classifyClip(analyzeTake(roomNoise(6), KIT_RATE, { voiceType: 'tenor' }));
     expect(noise.kind).toBe('blocked');
-    expect(noise.reason).toMatch(/No clear singing could be heard/);
-    expect(noise.reason).toMatch(/This is a full song/);
+    // Hiss at a very low level is told it is silent or too quiet, not that "backing music may be covering the voice".
+    expect(noise.reason).toMatch(/silent, or too quiet to hear any singing/);
+    expect(noise.reason).not.toMatch(/backing music/);
+    const none = classifyClip(analysisFromSpans([], 6, { issues: ['too-little-singing'] }));
+    expect(none.reason).toMatch(/No clear singing could be heard/);
+    expect(none.reason).toMatch(/This is a full song/);
+    const tiny = classifyClip(analysisFromSpans([{ start: 0.1, end: 0.3 }], 0.4, { issues: ['too-little-singing'] }));
+    expect(tiny.reason).toMatch(/only 0\.4 s long, too short to practise from/);
     const few = classifyClip(analysisFromSpans([{ start: 1, end: 3.5 }], 6, { issues: ['too-little-singing'] }));
     expect(few.reason).toMatch(/Only 2\.\d s of clear singing could be heard/);
   });
@@ -185,6 +191,39 @@ describe('prepareClip: a solo melody', () => {
     expect(prepared.samples.length).toBeCloseTo(96000, -2);
     expect(prepared.durationSec).toBeCloseTo(2, 2);
     expect(analyze.mock.calls[0][1]).toBe(48000);
+  });
+
+  it('converts a long hi-res file in slices with progress, and a cancel during that stops before any analysis', async () => {
+    const decode: ImportDeps['decode'] = async () => ({ samples: sine(300, 4, 96000, 0.3), sampleRate: 96000, durationSec: 4, sourceDurationSec: 4, notices: [] });
+    const analyze = vi.fn(async (_s: Float32Array, sr: number) => ({ ...analysisFromSpans([{ start: 0.2, end: 3.8 }], 4), sampleRate: sr }));
+    const decoding: number[] = [];
+    const prepared = await prepareClip(wavFile(sine(300, 0.1, 8000), 8000), SETTINGS, (p) => p.phase === 'decoding' && decoding.push(p.fraction), { deps: { decode, analyze } });
+    expect(prepared.sampleRate).toBe(48000);
+    expect(prepared.samples.length).toBeCloseTo(192000, -2);
+    expect(decoding[0]).toBe(0);
+    expect(decoding).toContain(0.5); // decoded, now converting
+    expect(decoding[decoding.length - 1]).toBe(1);
+    expect([...decoding].sort((a, b) => a - b)).toEqual(decoding);
+
+    const ctl = new AbortController();
+    const cancelled = prepareClip(wavFile(sine(300, 0.1, 8000), 8000), SETTINGS, (p) => p.phase === 'decoding' && p.fraction > 0.5 && ctl.abort(), { signal: ctl.signal, deps: { decode, analyze } });
+    await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    expect(analyze).toHaveBeenCalledTimes(1); // only the first, completed, import
+  });
+
+  it('hands the cancel signal to the analyzer, and does not start the full-song pass after a cancel', async () => {
+    const ctl = new AbortController();
+    const seen: (AbortSignal | undefined)[] = [];
+    const analyze = vi.fn(async (_s: Float32Array, _r: number, opts: AnalysisOptions, _p?: (f: number) => void, signal?: AbortSignal) => {
+      seen.push(signal);
+      ctl.abort(); // closed while the solo pass was finishing
+      return { ...analysisFromSpans([{ start: 0.2, end: 1.8 }], 2), issues: ['accompaniment' as const], mode: opts.mode };
+    });
+    const file = wavFile(sine(300, 0.1, 8000), 8000);
+    const decode: ImportDeps['decode'] = async () => ({ samples: sine(300, 2, 22050, 0.3), sampleRate: 22050, durationSec: 2, sourceDurationSec: 2, notices: [] });
+    await expect(prepareClip(file, SETTINGS, undefined, { signal: ctl.signal, deps: { decode, analyze } })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(seen).toEqual([ctl.signal]);
+    expect(analyze).toHaveBeenCalledTimes(1);
   });
 
   it('tells the user when only the first five minutes of a long file are used', async () => {
@@ -330,7 +369,7 @@ describe('prepareClip: clips that cannot be used', () => {
     expect(short.blockers[0]).toMatch(/clear singing could be heard/);
     expect(short.phrases).toEqual([]);
     const none = await prepareClip(wavFile(roomNoise(5), KIT_RATE, 'hiss.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
-    expect(none.blockers[0]).toMatch(/No clear singing/);
+    expect(none.blockers[0]).toMatch(/silent, or too quiet to hear any singing/);
   }, 30000);
 
   it('warns, but does not block, about a noisy recording', async () => {
@@ -698,13 +737,43 @@ describe('commitClip', () => {
       expect(await base.listClips()).toEqual([]);
     }, 30000);
 
-    it('takes back the written audio when the clip record cannot be saved', async () => {
+    it('takes back the record and the written audio when the final record cannot be saved', async () => {
       const base = createMemoryClipStore();
-      const deleted: string[] = [];
-      const store: ClipStore = { ...wrapped(base, { put: true }), deleteAudio: async (id, kind) => (deleted.push(kind), base.deleteAudio(id, kind)) };
+      const calls: string[] = [];
+      let puts = 0;
+      const store: ClipStore = {
+        ...base,
+        putClip: async (c) => {
+          calls.push(`put:${c.audioMissing ? 'pending' : 'final'}`);
+          if (++puts === 2) throw new Error('The library could not save the clip.');
+          return base.putClip(c);
+        },
+        writeAudio: async (id, kind, pcm, sr) => (calls.push(`audio:${kind}`), base.writeAudio(id, kind, pcm, sr)),
+        deleteClip: async (id) => (calls.push('deleteClip'), base.deleteClip(id)),
+      };
       await expect(commitClip(prepared, edits(prepared), store)).rejects.toThrow(/could not save the clip/);
-      expect(deleted).toEqual(['mix']);
+      // The record that owns the audio goes first, so a killed page leaves a clip that can be finished, never ownerless chunks.
+      expect(calls).toEqual(['put:pending', 'audio:mix', 'put:final', 'deleteClip']);
       expect(await base.listClips()).toEqual([]);
+      expect((await base.usage()).audioBytes).toBe(0);
+    }, 30000);
+
+    it('leaves a clip that asks for its file again, not orphan audio, when the page dies between the record and the audio', async () => {
+      const base = createMemoryClipStore();
+      const dead: ClipStore = {
+        ...base,
+        writeAudio: async () => {
+          throw new Error('page killed');
+        },
+        deleteClip: async () => {
+          throw new Error('page killed');
+        },
+      };
+      await expect(commitClip(prepared, edits(prepared), dead)).rejects.toThrow(/page killed/);
+      const [left] = await base.listClips();
+      expect(left.audioMissing).toBe(true);
+      expect(left.phrases.length).toBeGreaterThan(0);
+      expect((await base.usage()).audioBytes).toBe(0);
     }, 30000);
 
     it('takes back the song audio when the stem does not fit', async () => {
@@ -712,11 +781,12 @@ describe('commitClip', () => {
       const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withMixSupport });
       const base = createMemoryClipStore();
       const deleted: string[] = [];
-      const store: ClipStore = { ...wrapped(base, { vocal: true }), deleteAudio: async (id, kind) => (deleted.push(kind), base.deleteAudio(id, kind)) };
+      const store: ClipStore = { ...wrapped(base, { vocal: true }), deleteClip: async (id) => (deleted.push(id), base.deleteClip(id)) };
       const paired = withVocalStem(mix, stem);
       await expect(commitClip(paired, edits(paired, { kind: 'mix' }), store)).rejects.toBeInstanceOf(QuotaError);
-      expect(deleted).toEqual(['mix']);
+      expect(deleted).toHaveLength(1);
       expect(await base.listClips()).toEqual([]);
+      expect((await base.usage()).audioBytes).toBe(0);
     }, 60000);
   });
 });
@@ -772,8 +842,8 @@ describe('relinkAudio', () => {
     await expect(relinkAudio(clip, other, store)).rejects.toThrow(/does not look like the file for "My clip" \(Song.wav\)/);
     await expect(relinkAudio(original, prepared, store)).rejects.toThrow(/already has its audio/);
 
-    // Same name and nearly the same length passes the match, but a truncated take does not have the excerpt.
-    const shortAgain = { ...prepared, durationSec: clip.durationSec, samples: prepared.samples.slice(0, Math.round(2 * KIT_RATE)), fingerprint: 'x:1:y' };
+    // Same name and the same source length passes the match, but a truncated take does not have the excerpt.
+    const shortAgain = { ...prepared, samples: prepared.samples.slice(0, Math.round(2 * KIT_RATE)), fingerprint: 'x:1:y' };
     await expect(relinkAudio(clip, shortAgain, store)).rejects.toThrow(/shorter than "My clip" should be/);
     expect(await store.listClips()).toEqual([]);
   }, 30000);
@@ -787,6 +857,28 @@ describe('relinkAudio', () => {
     expect(findRelinkMatches([{ ...whole, durationSec: whole.durationSec + 1 }], copy)).toEqual([]);
     expect(findRelinkMatches([{ ...whole, audioMissing: false }], copy)).toEqual([]);
   });
+
+  it('re-attaches a TRIMMED clip when the new decode is a millisecond longer, or the file was re-exported under the same name', async () => {
+    const { clip, store } = lost();
+    const fp = parseFingerprint(clip.fingerprint);
+    expect(fp).not.toBeNull();
+    // The stored excerpt is shorter than the whole file: the length to compare is the SOURCE length in the fingerprint.
+    expect(clip.durationSec).toBeLessThan(prepared.durationSec - 1);
+    const longer = { ...prepared, durationSec: prepared.durationSec + 0.001, fingerprint: `${fp?.size}:${(fp?.durationMs ?? 0) + 1}:${fp?.hash}` };
+    expect(sameSource(clip.fingerprint, longer.fingerprint)).toBe(true);
+    expect(findRelinkMatches([clip], longer)).toEqual([clip]);
+    const relinked = await relinkAudio(clip, longer, store);
+    expect(relinked.audioMissing).toBe(false);
+    expect(relinked.phrases).toEqual(clip.phrases);
+
+    // A different hash (the file was re-exported) still matches by name and source length, not by the excerpt length.
+    const reexport = { ...prepared, fingerprint: `${(fp?.size ?? 0) + 10}:${(fp?.durationMs ?? 0) + 5}:ffffffffffffffff` };
+    expect(findRelinkMatches([clip], reexport)).toEqual([clip]);
+    expect(findRelinkMatches([clip], { ...reexport, durationSec: prepared.durationSec + 0.4 })).toEqual([]);
+    expect(findRelinkMatches([clip], { ...reexport, file: { ...prepared.file, name: 'Other.wav' } })).toEqual([]);
+    // The same hash but a different length is not the same file.
+    expect(sameSource(clip.fingerprint, `${fp?.size}:${(fp?.durationMs ?? 0) + 400}:${fp?.hash}`)).toBe(false);
+  }, 30000);
 
   it('needs the stem again for a clip that had one, and otherwise falls back to the full mix', async () => {
     const stem = await prepareClip(wavFile(soloLine({ count: 4 }), KIT_RATE, 'vocals.wav'), SETTINGS, undefined, { deps: withoutMixSupport });

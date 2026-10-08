@@ -5,6 +5,7 @@ import { CLIP_STORE_CASES, runClipStoreContract, type ContractEnv } from './clip
 import {
   AudioMissingError,
   createMemoryClipStore,
+  copyLibrary,
   createReconnecting,
   DB_NAME,
   DB_VERSION,
@@ -326,6 +327,98 @@ describe('openClipStore failures', () => {
     expect(db.close).toHaveBeenCalled();
   });
 
+  it('tries again, twice, when the browser throws one of its random errors, and uses the answer of the second try', async () => {
+    const db = fakeDb(['clips', 'audio']); // a second answer that is not a usable library: proves a second answer was read
+    let calls = 0;
+    const factory = stubIndexedDB((req) => {
+      calls++;
+      if (calls === 1) {
+        req.error = { name: 'UnknownError', message: 'Connection to Indexed Database server lost. Refresh the page to try again' };
+        req.onerror?.();
+      } else {
+        req.result = db;
+        req.onsuccess?.();
+      }
+    });
+    const err = await openClipStore({ retryDelaysMs: [1, 1] }).catch((e: unknown) => e);
+    expect(factory.open).toHaveBeenCalledTimes(2);
+    expect((err as Error).message).toMatch(/incomplete/);
+  });
+
+  it('gives up after the retries and says the failure is worth trying again later', async () => {
+    for (const name of ['UnknownError', 'AbortError', 'InvalidStateError']) {
+      const factory = stubIndexedDB((req) => {
+        req.error = { name, message: 'nope' };
+        req.onerror?.();
+      });
+      const err = await openClipStore({ retryDelaysMs: [1, 1] }).catch((e: unknown) => e);
+      expect(factory.open).toHaveBeenCalledTimes(3);
+      expect(err).toBeInstanceOf(StoreUnavailableError);
+      expect((err as StoreUnavailableError).failure).toBe('transient');
+      expect((err as StoreUnavailableError).retryable).toBe(true);
+    }
+  });
+
+  it('does not retry a refusal that trying again cannot change', async () => {
+    for (const name of ['VersionError', 'SecurityError']) {
+      const factory = stubIndexedDB((req) => {
+        req.error = { name, message: 'no' };
+        req.onerror?.();
+      });
+      const err = await openClipStore({ retryDelaysMs: [1, 1] }).catch((e: unknown) => e);
+      expect(factory.open).toHaveBeenCalledTimes(1);
+      expect((err as StoreUnavailableError).retryable).toBe(false);
+    }
+  });
+
+  it('gives up on an open request that never answers, instead of leaving the library "opening" for ever', async () => {
+    vi.useFakeTimers();
+    const db = fakeDb();
+    let late: FakeRequest | null = null;
+    const factory = stubIndexedDB((req) => {
+      late = req; // never fires anything
+    });
+    const pending = openClipStore({ openTimeoutMs: 2000 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(factory.open).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(200);
+    const err = await pending;
+    expect(err).toBeInstanceOf(StoreUnavailableError);
+    expect((err as StoreUnavailableError).failure).toBe('timeout');
+    expect((err as Error).message).toMatch(/taking too long to open/);
+    expect((err as Error).message).toMatch(/not deleted/);
+    expect(factory.open).toHaveBeenCalledTimes(1); // a hang is not retried behind the person's back
+    // The connection that finally arrives is closed, not leaked.
+    (late as FakeRequest | null)!.result = db;
+    (late as FakeRequest | null)!.onsuccess?.();
+    expect(db.close).toHaveBeenCalled();
+  });
+
+  it('bounds the write probe too: a database that opens but never answers a write is reported', async () => {
+    vi.useFakeTimers();
+    const db = {
+      ...fakeDb(['clips', 'audio', 'attempts', 'attemptAudio', 'meta']),
+      transaction: () => ({ objectStore: () => ({ put: () => ({}), delete: () => ({}) }), abort: vi.fn() }),
+    };
+    stubIndexedDB((req) => {
+      req.result = db;
+      req.onsuccess?.();
+    });
+    const pending = openClipStore({ openTimeoutMs: 1000 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(2500);
+    const err = await pending;
+    expect(err).toBeInstanceOf(StoreUnavailableError);
+    expect((err as StoreUnavailableError).failure).toBe('timeout');
+  });
+
+  it('marks another tab holding the database as worth trying again', async () => {
+    vi.useFakeTimers();
+    stubIndexedDB((req) => req.onblocked?.());
+    const pending = openClipStore({ blockedTimeoutMs: 100 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(200);
+    expect((await pending as StoreUnavailableError).failure).toBe('blocked');
+  });
+
   it('creates the five stores and the indexes the store relies on', () => {
     const created: string[] = [];
     const indexes: string[] = [];
@@ -353,10 +446,17 @@ describe('openClipStoreWithFallback', () => {
 
   it('falls back to a working memory store and says why when opening throws', async () => {
     const r = await openClipStoreWithFallback(() => Promise.reject(new StoreUnavailableError('This browser does not offer IndexedDB.')));
-    expect(r.fallback).toEqual({ reason: 'This browser does not offer IndexedDB.' });
+    expect(r.fallback).toEqual({ reason: 'This browser does not offer IndexedDB.', retryable: false });
     expect(r.store.kind).toBe('memory');
     await r.store.putClip({ id: 'c1', addedAt: '2026-10-08T00:00:00Z' } as unknown as ClipRecord);
     expect(await r.store.getClip('c1')).not.toBeNull();
+  });
+
+  it('says when opening again later can work (a timeout, a transient error) and when it cannot', async () => {
+    const slow = await openClipStoreWithFallback(() => Promise.reject(new StoreUnavailableError('Your library is taking too long to open.', 'timeout')));
+    expect(slow.fallback).toEqual({ reason: 'Your library is taking too long to open.', retryable: true });
+    const gone = await openClipStoreWithFallback(() => Promise.reject(new Error('plain')));
+    expect(gone.fallback?.retryable).toBe(false);
   });
 
   it('falls back when open throws something that is not an Error', async () => {
@@ -534,5 +634,79 @@ describe('a fully typed record', () => {
     const a = { id: 'a1', clipId: 'c1', phraseId: 'p1', at: 5, hasAudio: false, scores: { overall: 80 } } as unknown as AttemptRecord;
     await s.addAttempt(a);
     expect((await s.listAttempts({ clipId: 'c1' }))[0]).toEqual(a);
+  });
+});
+
+describe('copyLibrary (moving a session\'s clips into the library that opened late)', () => {
+  const clipWith = (id: string, frames: number, rate = SR, over: Partial<ClipRecord> = {}): ClipRecord =>
+    ({ id, title: id, addedAt: '2026-10-08T00:00:00Z', updatedAt: '2026-10-08T00:00:00Z', audioMissing: false, phrases: [], audio: { mix: { kind: 'mix', sampleRate: rate, frames, chunkFrames: 10 * rate }, vocal: null }, ...over }) as unknown as ClipRecord;
+  const tone = (frames: number): Int16Array => Int16Array.from({ length: frames }, (_, i) => Math.round(9000 * Math.sin(i / 20)));
+
+  it('copies clips with all their audio exactly, attempts with their recordings, and the settings that matter', async () => {
+    const from = createMemoryClipStore();
+    const to = createMemoryClipStore();
+    const frames = 25 * SR + 123; // three chunks, the last one short
+    const pcm = tone(frames);
+    await from.putClip(clipWith('a', frames));
+    await from.writeAudio('a', 'mix', pcm, SR);
+    await from.addAttempt({ id: 'at1', clipId: 'a', phraseId: 'p1', at: 1000 } as unknown as AttemptRecord, { pcm: tone(500), sampleRate: SR });
+    await from.addAttempt({ id: 'at2', clipId: 'a', phraseId: 'p1', at: 2000 } as unknown as AttemptRecord);
+    await from.setMeta('calibration', { wired: 80 });
+    await from.setMeta('attemptsSinceExport', 3);
+    await to.putClip(clipWith('already', SR));
+
+    const r = await copyLibrary(from, to);
+    expect(r).toEqual({ clips: 1, attempts: 2 });
+    expect((await to.listClips()).map((c) => c.id).sort()).toEqual(['a', 'already']);
+    const info = (await to.getClip('a'))!.audio.mix;
+    const back = await to.readAudio('a', info, 0, frames / SR);
+    expect(back.length).toBe(frames);
+    const want = floatToInt16(back);
+    expect(Array.from(want.subarray(0, 2000))).toEqual(Array.from(pcm.subarray(0, 2000)));
+    expect(Array.from(want.subarray(frames - 2000))).toEqual(Array.from(pcm.subarray(frames - 2000)));
+    expect(Array.from(want.subarray(10 * SR - 5, 10 * SR + 5))).toEqual(Array.from(pcm.subarray(10 * SR - 5, 10 * SR + 5)));
+    expect((await to.readAttemptAudio('at1'))?.pcm.length).toBe(500);
+    expect(await to.readAttemptAudio('at2')).toBeNull();
+    expect(await to.getMeta('calibration')).toEqual({ wired: 80 });
+    expect(await to.getMeta('attemptsSinceExport')).toBe(3);
+  });
+
+  it('leaves what the library already has alone, and copies nothing twice', async () => {
+    const from = createMemoryClipStore();
+    const to = createMemoryClipStore();
+    await from.putClip(clipWith('a', SR));
+    await from.writeAudio('a', 'mix', tone(SR), SR);
+    await to.putClip(clipWith('a', SR, SR, { title: 'the library\'s own copy' }));
+    await to.setMeta('calibration', { wired: 10 });
+    await from.setMeta('calibration', { wired: 99 });
+    expect(await copyLibrary(from, to)).toEqual({ clips: 0, attempts: 0 });
+    expect((await to.getClip('a'))?.title).toBe('the library\'s own copy');
+    expect(await to.getMeta('calibration')).toEqual({ wired: 10 });
+    expect(await copyLibrary(from, to)).toEqual({ clips: 0, attempts: 0 });
+  });
+
+  it('writes the audio before the record, so a copy that stops half way leaves no record without audio', async () => {
+    const from = createMemoryClipStore();
+    await from.putClip(clipWith('a', SR));
+    await from.writeAudio('a', 'mix', tone(SR), SR);
+    const order: string[] = [];
+    const to: ClipStore = {
+      ...createMemoryClipStore(),
+      writeAudio: async () => {
+        order.push('audio');
+        throw new QuotaError('no room');
+      },
+      putClip: async () => void order.push('record'),
+    };
+    await expect(copyLibrary(from, to)).rejects.toBeInstanceOf(QuotaError);
+    expect(order).toEqual(['audio']);
+  });
+
+  it('copies a clip that is waiting for its audio file as a record only', async () => {
+    const from = createMemoryClipStore();
+    const to = createMemoryClipStore();
+    await from.putClip(clipWith('lost', SR, SR, { audioMissing: true }));
+    expect(await copyLibrary(from, to)).toEqual({ clips: 1, attempts: 0 });
+    expect((await to.usage()).audioBytes).toBe(0);
   });
 });

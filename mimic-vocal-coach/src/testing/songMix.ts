@@ -8,11 +8,19 @@
 // stationary chords are the easy case for the extractor, so accuracy here says "the algorithm works",
 // not "real mixes will score the same" (see the evaluation notes in the PR / README).
 
-import { makeRng, synthMelody, type MelodyNote } from './synth';
+import { makeRng, synthMelody, synthVoice, type MelodyNote } from './synth';
 
 /** Length of the base block, seconds. Longer mixes tile it. */
 export const BASE_BLOCK_SEC = 16;
 const HOP_SEC = 0.01;
+
+/**
+ * Band types. 'builtin' (default): chords, bass plucks, arpeggio, drums. 'walking-bass': a moving bass line only (the case
+ * that keeps the extractor's confidence high while it follows the bass). 'harmony': two backing voices a major third above
+ * and a fifth below the lead, singing the lead's rhythm (the extractor must pick the lead out of three voices). 'band-harmony':
+ * the built-in band plus those backing voices.
+ */
+export type SongBandType = 'builtin' | 'walking-bass' | 'harmony' | 'band-harmony';
 
 export interface SongStemsOptions {
   sampleRate?: number;
@@ -21,6 +29,8 @@ export interface SongStemsOptions {
   /** Vibrato extent of the voice, cents (semi-extent). Default 20. */
   vibratoCents?: number;
   seed?: number;
+  /** Which band to put under the voice (default 'builtin'). */
+  band?: SongBandType;
 }
 
 export interface SongStems {
@@ -229,17 +239,72 @@ function buildVocal(sr: number, opts: Required<SongStemsOptions>): { vocal: Floa
 const stemCache = new Map<string, SongStems>();
 const bandCache = new Map<string, { L: Float32Array; R: Float32Array }>();
 
+/** Moving bass line, one centred note every half second (A minor-ish, E2-G3), no chords or drums. */
+function buildWalkingBass(sr: number): { L: Float32Array; R: Float32Array } {
+  const n = Math.round(BASE_BLOCK_SEC * sr);
+  const out = new Float32Array(n);
+  const seq = [45, 48, 52, 50, 47, 45, 43, 40, 43, 47, 50, 52, 55, 52, 50, 47];
+  const step = Math.round(0.5 * sr);
+  for (let b = 0; b * 0.5 < BASE_BLOCK_SEC; b++) {
+    const s = synthVoice({ sampleRate: sr, f0: hz(seq[b % seq.length]), durationSec: 0.5, vowel: 'none', tiltDbPerOct: -9, amplitude: 0.4, seed: 5 + b, attackSec: 0.01, releaseSec: 0.08 });
+    out.set(s.subarray(0, Math.min(s.length, n - b * step)), b * step);
+  }
+  return { L: out, R: out };
+}
+
+/** Backing voices at `shifts` semitones from the lead (transposed with it), on the lead's own notes. */
+function buildHarmony(sr: number, opts: Required<SongStemsOptions>, shifts: number[]): { L: Float32Array; R: Float32Array } {
+  const n = Math.round(BASE_BLOCK_SEC * sr);
+  const out = new Float32Array(n);
+  shifts.forEach((sh, k) => {
+    for (const line of LINES) {
+      const notes = line.notes.map((nt) => ({ midi: nt.midi + opts.transpose + sh, durSec: nt.durSec }));
+      const s = synthMelody(notes, {
+        sampleRate: sr,
+        seed: 20 + k,
+        amplitude: 0.35,
+        vibrato: { rateHz: 5.1 + 0.3 * k, extentCents: 18, delaySec: 0.25 },
+        jitter: 0.002,
+        vowel: 'o',
+      });
+      const at = Math.round(line.start * sr);
+      out.set(s.subarray(0, Math.min(s.length, n - at)), at);
+    }
+  });
+  return { L: out, R: out };
+}
+
+function bandFor(sr: number, opts: Required<SongStemsOptions>): { L: Float32Array; R: Float32Array } {
+  if (opts.band === 'walking-bass') return buildWalkingBass(sr);
+  if (opts.band === 'harmony') return buildHarmony(sr, opts, [4, -5]);
+  const base = buildBand(sr, opts.seed);
+  if (opts.band !== 'band-harmony') return base;
+  // Harmony voices at half the power of the band, on top of it.
+  const h = buildHarmony(sr, opts, [4, -5]).L;
+  const bandMid = Float32Array.from(base.L, (v, i) => 0.5 * (v + base.R[i]));
+  let pb = 0;
+  let ph = 0;
+  for (let i = 0; i < h.length; i++) {
+    pb += bandMid[i] * bandMid[i];
+    ph += h[i] * h[i];
+  }
+  const g = 0.5 * Math.sqrt(pb / (ph || 1));
+  return { L: Float32Array.from(base.L, (v, i) => v + g * h[i]), R: Float32Array.from(base.R, (v, i) => v + g * h[i]) };
+}
+
 /** The base block of each stem. Cached per option set (the voice synthesiser takes about a second); the band is shared by all transpositions. */
 export function makeSongStems(opts: SongStemsOptions = {}): SongStems {
-  const full: Required<SongStemsOptions> = { sampleRate: 22050, transpose: 0, vibratoCents: 20, seed: 3, ...opts };
+  const full: Required<SongStemsOptions> = { sampleRate: 22050, transpose: 0, vibratoCents: 20, seed: 3, band: 'builtin', ...opts };
   const key = JSON.stringify(full);
   const hit = stemCache.get(key);
   if (hit) return hit;
   const { vocal, truthHz, rest } = buildVocal(full.sampleRate, full);
-  const bandKey = `${full.sampleRate}:${full.seed}`;
+  // The harmony bands follow the lead's transposition; the others do not depend on it.
+  const followsLead = full.band === 'harmony' || full.band === 'band-harmony';
+  const bandKey = `${full.sampleRate}:${full.seed}:${full.band}${followsLead ? `:${full.transpose}` : ''}`;
   let band = bandCache.get(bandKey);
   if (!band) {
-    band = buildBand(full.sampleRate, full.seed);
+    band = bandFor(full.sampleRate, full);
     bandCache.set(bandKey, band);
   }
   const stems: SongStems = { sampleRate: full.sampleRate, vocal, bandL: band.L, bandR: band.R, truthHz, rest };

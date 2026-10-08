@@ -1,6 +1,7 @@
 // The review of one prepared clip, before anything is stored: what Mimic found (solo vocal or full song), a way to check the
 // detected melody by ear, the phrases (PhraseEditor), what part to keep, a title, who sings it, whether it counts toward that
-// singer's targets (solo clips only) and the ownership tick. Save is pinned at the bottom, in thumb reach. The component owns
+// singer's targets (solo clips only). The ownership tick and Save are pinned together at the bottom, in thumb reach: the one
+// thing that must be done to save is next to the button that saves, whatever part of the review is on screen. The component owns
 // the working copy of the edits and hands CommitEdits to onSave; storing is the caller's job (TrainerController.commitClip).
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -29,7 +30,7 @@ import { MEDIA_ACCEPT } from '../../audio/decode';
 import type { ClipKind, SingerProfile } from '../../types';
 import { formatBytes } from '../../pwa/storage';
 import { Icon } from './Icon';
-import { formatClock, formatDuration } from './format';
+import { formatDuration } from './format';
 import { Notice } from './Notice';
 import { PhraseEditor, formatEdgeTime } from './PhraseEditor';
 import { createSamplePlayer, type SamplePlayer } from './samplePlayer';
@@ -48,13 +49,15 @@ export interface ClipReviewProps {
   position?: { index: number; count: number };
   /** The device's storage numbers, for the "will use about N MB" line. */
   storage?: { usage: number | null; quota: number | null };
-  /** The ownership tick starts ticked when the user has confirmed it before. */
+  /** Starts the ownership tick ticked. The import sheet never does: the tick is a confirmation about THIS file. */
   ownedDefault?: boolean;
   onOwnedChange?(owned: boolean): void;
   /** Called with the edits and the clip as it is now (the reading may have been switched since it arrived). */
   onSave(edits: CommitEdits, prepared: PreparedClip): void | Promise<void>;
   /** Leave this file out (shown when there is a queue). */
   onSkip?(): void;
+  /** Go back to choosing files. Shown on a clip that cannot be used, so the review is never a dead end. */
+  onChooseOther?(): void;
   saving?: boolean;
   saveError?: string | null;
   /** Something to say above the details, for example that the file is already in the library. */
@@ -98,6 +101,9 @@ export function ClipReview(props: ClipReviewProps) {
   const playerRef = useRef<SamplePlayer | null>(null);
   const runRef = useRef(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const ownedRef = useRef<HTMLInputElement>(null);
+  const whyRef = useRef<HTMLParagraphElement>(null);
+  const stemHeadingRef = useRef<HTMLHeadingElement>(null);
 
   // A new clip to review: start at its heading so a screen reader hears where it is.
   useEffect(() => {
@@ -199,6 +205,8 @@ export function ClipReview(props: ClipReviewProps) {
     stopAudio();
     resetFor(withoutVocalStem(prep));
     setProblem(null);
+    // The button that was pressed goes away with the vocal-only file: put the focus on the section that replaces it.
+    requestAnimationFrame(() => stemHeadingRef.current?.focus({ preventScroll: true }));
   };
 
   // ----- listening
@@ -244,17 +252,19 @@ export function ClipReview(props: ClipReviewProps) {
 
   // ----- saving
 
-  const reasonNotToSave = ((): string | null => {
-    if (busy) return 'Wait for Mimic to finish reading the clip.';
-    if (blockers.length > 0) return 'This clip cannot be saved yet. Read the message above for what to do.';
-    if (visible.length === 0) return 'Show at least one phrase to practise.';
-    if (keptVisible === 0) return 'The part you chose to keep has no phrase in it. Widen it.';
-    if (!owned) return 'Tick the box that says the file is yours to practise with.';
+  /** Why Save would do nothing yet. `owned` is the one reason the person fixes with the box right above the button. */
+  const blocked = ((): { text: string; kind: 'owned' | 'other' } | null => {
+    if (busy) return { text: 'Wait for Mimic to finish reading the clip.', kind: 'other' };
+    if (blockers.length > 0) return { text: 'This clip cannot be saved yet. Read the message above for what to do.', kind: 'other' };
+    if (visible.length === 0) return { text: 'Show at least one phrase to practise.', kind: 'other' };
+    if (keptVisible === 0) return { text: 'The part you chose to keep has no phrase in it. Widen it.', kind: 'other' };
+    if (!owned) return { text: 'Tick the box above to say this file is yours to practise with.', kind: 'owned' };
     return null;
   })();
+  const reasonNotToSave = blocked && blocked.kind === 'other' ? blocked.text : null;
 
   const save = () => {
-    if (reasonNotToSave !== null || props.saving) return;
+    if (blocked !== null || props.saving) return;
     stopAudio();
     const edits: CommitEdits = {
       title: title.trim() || defaultTitle(prep.file.name),
@@ -268,6 +278,20 @@ export function ClipReview(props: ClipReviewProps) {
       ownedConfirmed: true,
     };
     void props.onSave(edits, prep);
+  };
+
+  // Save stays pressable (aria-disabled, not disabled): a press that cannot save says why and takes the person to the thing to fix,
+  // and the button keeps the focus while the clip is saving instead of dropping it to the page.
+  const onSavePress = () => {
+    if (props.saving) return;
+    if (blocked === null) return save();
+    if (blocked.kind === 'owned') {
+      ownedRef.current?.focus();
+      setStatus('Tick the box to say this file is yours to practise with, then save.');
+    } else {
+      whyRef.current?.focus();
+      setStatus(blocked.text);
+    }
   };
 
   const setTrim = (next: Trim) => setTrimChoice(clampTrim(next, prep.durationSec));
@@ -316,6 +340,13 @@ export function ClipReview(props: ClipReviewProps) {
           {b}
         </Notice>
       ))}
+      {blockers.length > 0 && props.onChooseOther && (
+        <div className="button-row">
+          <button type="button" className="button button--accent" onClick={() => (stopAudio(), props.onChooseOther?.())}>
+            Choose a different file
+          </button>
+        </div>
+      )}
       {(prep.stem ? prep.stem.warnings : prep.warnings).map((w) => (
         <Notice key={w} tone="warn">
           {w}
@@ -349,7 +380,7 @@ export function ClipReview(props: ClipReviewProps) {
           What is in this clip
         </h4>
         <label className="rev-switch">
-          <input type="checkbox" role="switch" checked={kind === 'mix'} disabled={!!busy} onChange={(e) => void chooseKind(e.target.checked ? 'mix' : 'solo')} />
+          <input type="checkbox" role="switch" checked={kind === 'mix'} aria-disabled={busy ? true : undefined} onChange={(e) => void chooseKind(e.target.checked ? 'mix' : 'solo')} />
           <span className="rev-switch-track" aria-hidden="true" />
           <span className="rev-switch-text">
             <span className="rev-switch-title">This is a full song</span>
@@ -389,7 +420,7 @@ export function ClipReview(props: ClipReviewProps) {
 
       {hasStemRoute && (
         <section className="rev-section" aria-labelledby={`${ids}-stem`}>
-          <h4 className="subhead" id={`${ids}-stem`}>
+          <h4 className="subhead" id={`${ids}-stem`} ref={stemHeadingRef} tabIndex={-1}>
             Have the vocal on its own?
           </h4>
           {stemName ? (
@@ -409,7 +440,7 @@ export function ClipReview(props: ClipReviewProps) {
                   type="file"
                   className="visually-hidden"
                   accept={MEDIA_ACCEPT}
-                  disabled={!!busy}
+                  aria-disabled={busy ? true : undefined}
                   onChange={(e) => {
                     const f = e.currentTarget.files?.[0];
                     e.currentTarget.value = '';
@@ -423,10 +454,10 @@ export function ClipReview(props: ClipReviewProps) {
       )}
 
       {blockers.length === 0 && phrases.length > 0 && (
-        <section className="rev-section" aria-labelledby={`${ids}-melody`}>
-          <h4 className="subhead" id={`${ids}-melody`}>
-            Check the melody
-          </h4>
+        // A solo clip has nothing to follow but the voice: the check is there when wanted, folded away so the phrases and details are
+        // not pushed off the screen. A full song opens it, because following the right line is the thing to confirm.
+        <details className="rev-section imp-more" open={kind === 'mix' || melody === 'no'}>
+          <summary id={`${ids}-melody`}>Check the melody{kind === 'solo' ? ' (optional)' : ''}</summary>
           <p className="field-hint">Mimic compares you with this line. Listen to it next to the original: it should follow the singing, not the band.</p>
           <div className="button-row">
             {playing === 'melody' ? (
@@ -472,7 +503,7 @@ export function ClipReview(props: ClipReviewProps) {
               or pick another clip.
             </p>
           )}
-        </section>
+        </details>
       )}
 
       {blockers.length === 0 && (
@@ -507,7 +538,7 @@ export function ClipReview(props: ClipReviewProps) {
             <span className="num">
               {formatEdgeTime(trim.startSec)} to {formatEdgeTime(trim.endSec)}
             </span>{' '}
-            of <span className="num">{formatClock(prep.durationSec)}</span>, about <span className="num">{formatBytes(bytes)}</span> on this device.
+            of <span className="num">{formatEdgeTime(prep.durationSec)}</span>, about <span className="num">{formatBytes(bytes)}</span> on this device.
           </p>
           <div className="rev-trim">
             <TrimStepper label="Start" value={trim.startSec} onEarlier={() => trimStepper('startSec', -TRIM_STEP_SEC)} onLater={() => trimStepper('startSec', TRIM_STEP_SEC)} />
@@ -566,6 +597,8 @@ export function ClipReview(props: ClipReviewProps) {
           )}
         </fieldset>
 
+        <p className="field-hint">{PRIVACY_NOTE}</p>
+
         {canContribute && singerProfile && (
           <div className="rev-targets">
             <label className={`rev-check${!eligibility.eligible ? ' rev-check--off' : ''}`}>
@@ -583,9 +616,10 @@ export function ClipReview(props: ClipReviewProps) {
         )}
       </section>
 
-      <section className="rev-section">
-        <label className="rev-check">
+      <footer className="rev-footer">
+        <label className="rev-check rev-owned">
           <input
+            ref={ownedRef}
             type="checkbox"
             checked={owned}
             onChange={(e) => {
@@ -595,24 +629,27 @@ export function ClipReview(props: ClipReviewProps) {
           />
           <span>
             <span className="rev-check-title">{OWNERSHIP_LABEL}</span>
-            <span className="rev-check-hint">{PRIVACY_NOTE}</span>
+            <span className="rev-check-hint rev-owned-file">{prep.file.name}</span>
           </span>
         </label>
-      </section>
-
-      <footer className="rev-footer">
         {reasonNotToSave && !props.saving && (
-          <p className="rev-why" id={`${ids}-why`}>
+          <p className="rev-why" id={`${ids}-why`} ref={whyRef} tabIndex={-1}>
             {reasonNotToSave}
           </p>
         )}
         <div className="rev-actions">
           {props.onSkip && (
-            <button type="button" className="button button--ghost" onClick={() => (stopAudio(), props.onSkip?.())} disabled={props.saving}>
+            <button type="button" className="button button--ghost" onClick={() => (props.saving ? undefined : (stopAudio(), props.onSkip?.()))} aria-disabled={props.saving ? true : undefined}>
               Skip this file
             </button>
           )}
-          <button type="button" className="button button--accent rev-save" onClick={save} disabled={reasonNotToSave !== null || !!props.saving} aria-describedby={reasonNotToSave ? `${ids}-why` : undefined}>
+          <button
+            type="button"
+            className="button button--accent rev-save"
+            onClick={onSavePress}
+            aria-disabled={blocked !== null || !!props.saving ? true : undefined}
+            aria-describedby={reasonNotToSave ? `${ids}-why` : undefined}
+          >
             <Icon name="save" size={18} />
             <span>{props.saving ? 'Saving…' : 'Save clip'}</span>
           </button>

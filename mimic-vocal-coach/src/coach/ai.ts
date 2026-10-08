@@ -140,7 +140,9 @@ function summarizeProfile(p: SingerProfile): object {
   const targets: Record<string, object> = {};
   for (const [k, band] of Object.entries(p.targets)) if (band) targets[k] = roundedBand(band);
   return {
-    name: p.name,
+    // A reference profile is named after the uploaded file, which is the person's own (it can name the song, the artist, even a person):
+    // only the numbers are sent, so it goes by a generic name. Built-in and measured profiles carry the singer's name from a fixed list.
+    name: p.source === 'reference' ? 'the singer\'s reference clip' : p.name,
     source:
       p.source === 'reference'
         ? 'measured from the singer\'s reference clip'

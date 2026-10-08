@@ -15,7 +15,7 @@ import { removeAllAppKeys } from '../storage/local';
 import { clearMeasurements, loadMeasurements, saveMeasurements } from '../storage/measurements';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage/settings';
 import type { AnalysisOptions, AppSettings, MeasuredClip, ReferenceComparison, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
-import { AppContext, type AppController, type MeasureProgress, type MeasureResult, type SamplesInput } from './context';
+import { AppContext, type AppController, type ClearAllResult, type MeasureProgress, type MeasureResult, type SamplesInput } from './context';
 import {
   availableProfiles,
   activeProfile,
@@ -91,9 +91,9 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
   // (the Trainer removes a clip from one singer and adds it to another in one go; each change must start from the last one).
   const measuredRef = useRef<Record<string, MeasuredClip[]>>(state.measurements);
   measuredRef.current = state.measurements;
-  const clearHooks = useRef(new Set<() => void | Promise<void>>());
-  const onClear = useCallback((fn: () => void | Promise<void>) => {
-    clearHooks.current.add(fn);
+  const clearHooks = useRef(new Map<() => void | Promise<void>, string>());
+  const onClear = useCallback((fn: () => void | Promise<void>, name = 'some saved data') => {
+    clearHooks.current.set(fn, name);
     return () => {
       clearHooks.current.delete(fn);
     };
@@ -401,7 +401,7 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
           (measuredRef.current[singerId] ?? []).filter((c) => c.id !== clipId),
         ),
       clearMeasuredClips: (singerId: string) => setMeasuredClips(singerId, []),
-      clearAllData: () => {
+      clearAllData: (): Promise<ClearAllResult> => {
         runRef.current++;
         clearSessions();
         clearMeasurements();
@@ -410,14 +410,17 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         measuredRef.current = {};
         removeAllAppKeys(); // also the microphone choice, trainer preferences and other small flags, not only the three main stores
         dispatch({ type: 'reset', settings: { ...DEFAULT_SETTINGS }, sessions: [] });
-        // The Trainer's library (and anything else that keeps data) clears itself. One that fails must not stop the rest.
-        for (const fn of [...clearHooks.current]) {
+        // The Trainer's library (and anything else that keeps data) clears itself. One that fails must not stop the rest, and the
+        // caller is told which ones failed: "cleared" is only true when every one of them is.
+        const pending = [...clearHooks.current].map(async ([fn, name]) => {
           try {
-            void Promise.resolve(fn()).catch(() => undefined);
+            await fn();
+            return null;
           } catch {
-            // A hook that throws must not stop "delete everything".
+            return name;
           }
-        }
+        });
+        return Promise.all(pending).then((names) => ({ failed: names.filter((n): n is string => n !== null) }));
       },
       onClear,
       openPractice: (ids?: string[]) => {

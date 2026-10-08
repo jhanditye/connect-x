@@ -97,6 +97,66 @@ describe('makeSongStems / mixSong (proxy mixes for the full-song tests)', () => 
   });
 });
 
+describe('band types', () => {
+  const builtin = makeSongStems();
+
+  it('the default band is the built-in one, whatever else is asked', () => {
+    expect(makeSongStems({ band: 'builtin' })).toBe(builtin);
+    expect(makeSongStems({ transpose: 7, band: 'builtin' }).bandL).toBe(builtin.bandL);
+  });
+
+  it('every band type keeps the vocal and the ground truth of its transposition and sets the level exactly', () => {
+    for (const band of ['walking-bass', 'harmony', 'band-harmony'] as const) {
+      const st = makeSongStems({ band });
+      expect(st.vocal).toEqual(builtin.vocal);
+      expect(st.truthHz).toEqual(builtin.truthHz);
+      expect(st.bandL.length).toBe(builtin.bandL.length);
+      for (const db of [3, -6]) {
+        const m = mixSong(st, db);
+        const bandOnly = Float32Array.from(m.mono, (v, i) => v - m.vocal[i]);
+        expect(sungRmsDb(m.vocal, m.truthHz) - sungRmsDb(bandOnly, m.truthHz), `${band} ${db} dB`).toBeCloseTo(db, 1);
+      }
+    }
+  });
+
+  it('walking-bass is a centred moving bass line only: dual mono, nothing above 1.5 kHz, a new pitch every half second', () => {
+    const st = makeSongStems({ band: 'walking-bass' });
+    expect(st.bandR).toBe(st.bandL);
+    let high = 0;
+    let all = 0;
+    const win = 1024;
+    // crude spectral check: a zero-crossing rate low enough for a bass note (a 150 Hz tone crosses 300 times a second)
+    for (let a = 0; a + win < st.bandL.length; a += win) {
+      let cross = 0;
+      for (let i = a + 1; i < a + win; i++) if (st.bandL[i - 1] < 0 !== st.bandL[i] < 0) cross++;
+      all++;
+      if (cross > win * (1500 / (SR / 2)) * 0.5) high++;
+    }
+    expect(high / all).toBeLessThan(0.02);
+    const first = trackPitch(st.bandL.subarray(0, Math.round(1.5 * SR)), SR).f0;
+    const hz = Array.from(first).filter((f) => f > 0);
+    expect(Math.max(...hz) / Math.min(...hz)).toBeGreaterThan(1.3); // it moves
+  });
+
+  it('harmony follows the lead: the same rhythm, other pitches, a band that moves with the transposition', () => {
+    const a = makeSongStems({ band: 'harmony' });
+    const b = makeSongStems({ band: 'harmony', transpose: 5 });
+    expect(a.bandL).not.toEqual(b.bandL);
+    // silent exactly where the lead is silent (the lead-in before the first line)
+    let lead = 0;
+    for (let i = 0; i < Math.round(0.3 * SR); i++) lead += a.bandL[i] * a.bandL[i];
+    expect(lead).toBe(0);
+    // and not the lead itself
+    expect(a.bandL).not.toEqual(a.vocal);
+  });
+
+  it('band-harmony is the built-in band with the backing voices on top', () => {
+    const bh = makeSongStems({ band: 'band-harmony' });
+    expect(bh.bandL).not.toEqual(builtin.bandL);
+    expect(bh.bandL.length).toBe(builtin.bandL.length);
+  });
+});
+
 describe('rawPitchAccuracy', () => {
   const truth = Float64Array.from([NaN, 220, 220, 440, NaN, 330]);
 

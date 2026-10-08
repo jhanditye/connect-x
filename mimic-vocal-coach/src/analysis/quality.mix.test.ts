@@ -5,6 +5,7 @@ import {
   MIX_CONFIDENCE_WARN,
   mixConfidenceBand,
   mixReport,
+  mixTrustBand,
   suggestsFullSong,
   WARN_MIN_VOICED_SEC,
 } from './quality';
@@ -67,5 +68,36 @@ describe('suggestsFullSong', () => {
   it('is false for an analysis that is already a mix analysis, and tolerates a missing issues list', () => {
     expect(suggestsFullSong({ mode: 'mix', issues: ['accompaniment'] })).toBe(false);
     expect(suggestsFullSong({} as { issues: [] })).toBe(false);
+  });
+});
+
+describe('mixTrustBand and the purity warning', () => {
+  it('is the confidence band when there is no purity, or the line is mostly the voice', () => {
+    expect(mixTrustBand({ confidence: 0.92 })).toBe('high');
+    expect(mixTrustBand({ confidence: 0.84, purity: 0.9 })).toBe('ok');
+    expect(mixTrustBand({ confidence: 0.92, purity: NaN })).toBe('high');
+  });
+
+  it('never calls a rough guide better than low, even when the confidence is high (a bass line scores like a voice)', () => {
+    expect(mixTrustBand({ confidence: 0.92, purity: 0.65 })).toBe('low');
+    expect(mixTrustBand({ confidence: 0.84, purity: 0.6 })).toBe('low');
+    expect(mixTrustBand({ confidence: 0.92, purity: 0.45 })).toBe('poor');
+    expect(mixTrustBand({ confidence: 0.6, purity: 0.65 })).toBe('poor');
+  });
+
+  it('warns when the confidence is fine but the line is partly the band, with the share and a way out', () => {
+    const r = mixReport({ confidence: 0.9, voicedSec: 40, purity: 0.58 });
+    expect(r.issues).toEqual([]);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toMatch(/58%/);
+    expect(r.warnings[0]).toMatch(/rough guide/);
+    expect(r.warnings[0]).toMatch(/vocal-only file/);
+    expect(mixReport({ confidence: 0.9, voicedSec: 40, purity: 0.85 }).warnings).toEqual([]);
+    expect(mixReport({ confidence: 0.9, voicedSec: 40 }).warnings).toEqual([]);
+  });
+
+  it('does not stack a second warning on one the confidence already gave', () => {
+    expect(mixReport({ confidence: 0.75, voicedSec: 40, purity: 0.5 }).warnings).toHaveLength(1);
+    expect(mixReport({ confidence: 0.5, voicedSec: 40, purity: 0.5 }).warnings).toHaveLength(1);
   });
 });

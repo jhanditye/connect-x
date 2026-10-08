@@ -3,6 +3,7 @@
 
 import { median, percentile } from '../dsp/stats';
 import type { AnalysisIssue, AudioQuality, FrameFeatures, VoiceAnalysis, VoiceType } from '../types';
+import { ROUGH_GUIDE_PURITY } from './leadTrust';
 import { VOICE_TYPE_NAMES } from './passaggio';
 import { PHRASE_MERGE_GAP_SEC } from './phrases';
 
@@ -157,6 +158,70 @@ function pitchedPauses(c: AccompanimentCues, maxDropDb: number): boolean {
   );
 }
 
+/**
+ * A second opinion on the melody: vocal-forward songs (the voice a few dB above a steady band) look like a clean recording to
+ * the pause checks above, because there is no real pause, and the plain tracker follows the bass or a guitar half of the time.
+ * The lead-vocal extractor (dsp/melody) suppresses sounds that sit still in every bin and so mostly follows the singer; on a
+ * solo recording the two agree. So, over the frames where both report a pitch, the share of frames within 1 semitone of
+ * each other (`agree`) and the same with octave errors forgiven (`agreeOctave`, 150 cents: either tracker alone can land an octave
+ * off a clean voice, a raspy one or one in a reverberant room, which says nothing about a band) tell the two cases apart. Measured on proxy mixes (songMix.ts: chord, bass
+ * and drum band; moving bass line; backing voices), 12 real or synthetic solo and speech clips with 14 noisy variants:
+ * solo and speech never went below agree 0.82 / agreeOctave 0.88 except when one tracker is an octave off (agreeOctave >= 0.95);
+ * mixes with the voice 3 dB over the band 0.43-0.60 / 0.58-0.86, at 0 dB 0.30-0.41 / 0.55-0.80, 6 dB over the band 0.56-0.77 / 0.70-0.89.
+ * Both must be low, and the check only runs where the cheap cues already look suspicious (see leadCheckWorthRunning).
+ */
+export const LEAD_MAX_AGREE = 0.75;
+export const LEAD_MAX_AGREE_OCTAVE = 0.88;
+/** Fewest frames (0.5 s) where both trackers report a pitch before their agreement means anything. */
+export const LEAD_MIN_BOTH_FRAMES = 50;
+/** Pitch classes count as agreeing within this many cents (wider than the 100 for the exact pitch: a subharmonic or reverberant voice puts the octave-off tracker 100-150 cents out). */
+export const LEAD_OCTAVE_TOLERANCE_CENTS = 150;
+/** Clean solo takes have a median YIN periodicity of 0.97-1 and an SNR of 25 dB or more; only clips beyond these are checked. */
+const LEAD_CLEAN_PERIODICITY = 0.95;
+const LEAD_CLEAN_SNR_DB = 25;
+
+export interface LeadAgreement {
+  /** Frames where the plain tracker and the extractor both report a pitch. */
+  bothFrames: number;
+  /** Share of those within 100 cents of each other. */
+  agree: number;
+  /** Share within LEAD_OCTAVE_TOLERANCE_CENTS of the same pitch class (octave errors forgiven). */
+  agreeOctave: number;
+}
+
+/** Frame-by-frame agreement between the analysis frames (YIN) and the extractor's track (same 10 ms grid). */
+export function measureLeadAgreement(frames: FrameFeatures[], leadF0: ArrayLike<number>, leadVoiced: ArrayLike<number>): LeadAgreement {
+  const n = Math.min(frames.length, leadF0.length, leadVoiced.length);
+  let both = 0;
+  let agree = 0;
+  let agreeOctave = 0;
+  for (let i = 0; i < n; i++) {
+    const f = frames[i];
+    if (!f.voiced || !leadVoiced[i] || !(leadF0[i] > 0) || !(f.f0 > 0)) continue;
+    both++;
+    const cents = Math.abs(1200 * Math.log2(leadF0[i] / f.f0));
+    if (cents < 100) agree++;
+    const folded = cents % 1200;
+    if (Math.min(folded, 1200 - folded) < LEAD_OCTAVE_TOLERANCE_CENTS) agreeOctave++;
+  }
+  return { bothFrames: both, agree: both > 0 ? agree / both : 1, agreeOctave: both > 0 ? agreeOctave / both : 1 };
+}
+
+/** True when the two trackers follow different melodies: a song with the voice only a little above the band. */
+export function leadDisagrees(c: LeadAgreement): boolean {
+  return c.bothFrames >= LEAD_MIN_BOTH_FRAMES && c.agree < LEAD_MAX_AGREE && c.agreeOctave < LEAD_MAX_AGREE_OCTAVE;
+}
+
+/**
+ * Whether the (slower) extractor check is worth running: not for a clip that already looks like a clean solo take (the
+ * caller skips it for a clip the pause checks already flagged). `medianPeriodicity` is the median YIN periodicity of the voiced frames, `snrDb` NaN when no silence was found.
+ */
+export function leadCheckWorthRunning(input: { voicedSec: number; medianPeriodicity: number; snrDb: number }): boolean {
+  if (input.voicedSec < WARN_MIN_VOICED_SEC) return false;
+  const clean = input.medianPeriodicity >= LEAD_CLEAN_PERIODICITY && Number.isFinite(input.snrDb) && input.snrDb >= LEAD_CLEAN_SNR_DB;
+  return !clean;
+}
+
 function fmt(x: number, digits = 0): string {
   const s = x.toFixed(digits);
   return /^-0(\.0+)?$/.test(s) ? s.slice(1) : s;
@@ -171,6 +236,8 @@ export interface QualityInput {
   /** Number of held notes (at least SUSTAINED_NOTE_SEC long). */
   heldNotes?: number;
   accompaniment?: AccompanimentCues;
+  /** Agreement of the plain tracker with the lead-vocal extractor, when it was measured (see LEAD_MAX_AGREE). */
+  leadAgreement?: LeadAgreement;
   voiceType?: VoiceType;
 }
 
@@ -181,7 +248,7 @@ export function qualityReport(input: QualityInput): { warnings: string[]; issues
   const flag = (issue: AnalysisIssue) => {
     if (!issues.includes(issue)) issues.push(issue);
   };
-  const { voicedSec, quality, medianVoicedDb, levelP95Db, heldNotes, accompaniment, voiceType } = input;
+  const { voicedSec, quality, medianVoicedDb, levelP95Db, heldNotes, accompaniment, leadAgreement, voiceType } = input;
 
   if (voicedSec < WARN_MIN_VOICED_SEC) {
     flag('too-little-singing');
@@ -219,6 +286,14 @@ export function qualityReport(input: QualityInput): { warnings: string[]; issues
         `Much of the pitch we tracked sits below C3, which is unusual for a ${VOICE_TYPE_NAMES[voiceType].toLowerCase()}. If there is music behind the voice, the analysis may be following the bass: use an isolated vocal. If the voice really is that low, choose a lower voice type in Settings.`,
       );
     }
+  }
+  // Vocal-forward song: no real pauses to hear the band in, but a second way of following the melody disagrees with the first.
+  if (!backed && leadAgreement && voicedSec >= WARN_MIN_VOICED_SEC && leadDisagrees(leadAgreement)) {
+    backed = true;
+    flag('accompaniment');
+    w.push(
+      `This sounds like a song with instruments behind the voice: two ways of following the melody disagreed on ${fmt((1 - leadAgreement.agree) * 100)}% of it, which usually means one of them was following the bass or a guitar instead of the singer. The measurements are not reliable as they are. Use the full-song reading, an isolated vocal or an a cappella section, or record yourself with the backing track in headphones rather than on a speaker.`,
+    );
   }
 
   if (heldNotes !== undefined && voicedSec >= WARN_MIN_VOICED_SEC && heldNotes === 0) {
@@ -275,18 +350,36 @@ export function mixConfidenceBand(confidence: number): MixConfidenceBand {
 
 /**
  * Whether a solo analysis suggests the audio is a full song, so the caller may offer (or just run) the same audio again
- * in mix mode. The solo analysis flags 'accompaniment' on about 78% of mixes with no false alarm on 14 solo or speech
- * clips; vocal-forward and EDM mixes are the usual misses, which is why there is also a manual full-song choice.
+ * in mix mode. The pause checks alone flagged 'accompaniment' on about 78% of mixes and missed the vocal-forward ones (proxy
+ * mixes over a chord, bass and drum band: 0 of 5 at +3 dB, 1 of 5 at 0 dB; over a moving bass line 0 of 5 down to -6 dB). With
+ * the second opinion from the lead-vocal extractor (LEAD_MAX_AGREE) the same grid is flagged 14 of 15 at +3 dB and 15 of 15 at 0
+ * dB and below (8 of 15 at +6 dB, 3 of 15 at +9 dB, none at +12 dB, where the solo reading is fine), with no false alarm of its
+ * own on 207 solo, speech, breathy, raspy, noisy and reverberant clips (the pause checks already raise two on speech with 15 dB
+ * of mains hum). Mixes with a melodic instrument in unison with the voice (a violin line, the real clip 'varnam') are still
+ * missed, which is why there is also a manual full-song choice.
  */
 export function suggestsFullSong(analysis: Pick<VoiceAnalysis, 'mode' | 'issues'>): boolean {
   return analysis.mode !== 'mix' && (analysis.issues ?? []).includes('accompaniment');
 }
 
-/** Warnings and issue codes for a mix-mode analysis from the extractor's clip confidence and the singing it found. */
-export function mixReport(input: { confidence: number; voicedSec: number }): { warnings: string[]; issues: AnalysisIssue[] } {
+/**
+ * How far to trust a mix-mode extraction, from its clip confidence and (when present) the note-trust purity. The confidence
+ * ranks clips but stays high when the extractor follows a moving bass line; purity (leadTrust.ts) is what catches a line that is
+ * partly the band, so a rough guide (purity under ROUGH_GUIDE_PURITY) is never better than 'low', and under 0.5 it is 'poor'.
+ */
+export function mixTrustBand(le: { confidence: number; purity?: number }): MixConfidenceBand {
+  const band = mixConfidenceBand(le.confidence);
+  if (le.purity === undefined || !Number.isFinite(le.purity)) return band;
+  if (le.purity < 0.5) return 'poor';
+  if (le.purity < ROUGH_GUIDE_PURITY && (band === 'high' || band === 'ok')) return 'low';
+  return band;
+}
+
+/** Warnings and issue codes for a mix-mode analysis from the extractor's clip confidence, the singing it found and how much of it is the voice. */
+export function mixReport(input: { confidence: number; voicedSec: number; purity?: number }): { warnings: string[]; issues: AnalysisIssue[] } {
   const warnings: string[] = [];
   const issues: AnalysisIssue[] = [];
-  const { confidence, voicedSec } = input;
+  const { confidence, voicedSec, purity } = input;
   if (!(voicedSec >= WARN_MIN_VOICED_SEC)) {
     issues.push('too-little-singing');
     warnings.push(
@@ -304,6 +397,11 @@ export function mixReport(input: { confidence: number; voicedSec: number }): { w
   } else if (band === 'low') {
     warnings.push(
       'The lead vocal was hard to follow in places, so check the contour against the song before trusting it. A section where the voice is more forward, or a vocal-only file, works better.',
+    );
+  } else if (purity !== undefined && purity < ROUGH_GUIDE_PURITY) {
+    // The confidence looks fine (a steady bass line scores as well as a voice) but the line has too many band-like notes in it.
+    warnings.push(
+      `Only about ${fmt(Math.max(0, purity) * 100)}% of the melody that was followed looks like the lead voice; the rest is probably the band (bass, guitar or keys). Treat the contour as a rough guide: notes you do not sing may be the band's, not yours to hit. A vocal-only file works far better.`,
     );
   }
   return { warnings, issues };

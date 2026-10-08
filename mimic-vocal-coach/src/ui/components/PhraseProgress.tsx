@@ -10,8 +10,8 @@ import { ProgressChart } from '../charts/ProgressChart';
 import { Icon } from './Icon';
 import { phraseCount, summariseClip } from './phraseStatus';
 import { clipColor } from './ClipCard';
+import { ErrorBoundary } from './ErrorBoundary';
 
-const DAY_MS = 86_400_000;
 export const STREAK_DAYS = 14;
 
 /** The local calendar day of a time, as "2026-10-08". */
@@ -27,25 +27,49 @@ export interface PracticeDays {
   days: { key: string; practised: boolean }[];
 }
 
+/** The key of the local calendar day `k` days before `now`. Counted in calendar days, not 24 hours: a day with a clock change is 23 or 25 hours long. */
+function dayKeyAgo(now: number, k: number): string {
+  const d = new Date(now);
+  d.setHours(12, 0, 0, 0); // noon is never skipped or repeated by a clock change
+  d.setDate(d.getDate() - k);
+  return dayKey(d.getTime());
+}
+
 export function practiceDays(attempts: readonly Pick<AttemptRecord, 'at'>[], now: number): PracticeDays {
   const done = new Set(attempts.filter((a) => Number.isFinite(a.at)).map((a) => dayKey(a.at)));
   const days = Array.from({ length: STREAK_DAYS }, (_, i) => {
-    const key = dayKey(now - (STREAK_DAYS - 1 - i) * DAY_MS);
+    const key = dayKeyAgo(now, STREAK_DAYS - 1 - i);
     return { key, practised: done.has(key) };
   });
   let streak = 0;
   // Today still counts as open until midnight: a streak that ended yesterday is alive.
   let i = days[days.length - 1].practised ? days.length - 1 : days.length - 2;
   for (; i >= 0 && days[i].practised; i--) streak++;
-  if (days.every((d) => d.practised)) {
-    // Beyond the window: keep counting back day by day.
+  if (i < 0) {
+    // The run reached the oldest day shown (whether or not today is done yet): keep counting back beyond the window, day by day.
     let k = STREAK_DAYS;
-    while (done.has(dayKey(now - k * DAY_MS))) {
+    while (done.has(dayKeyAgo(now, k))) {
       streak++;
       k++;
     }
   }
   return { streak, days };
+}
+
+/** A stored attempt that can be drawn: a real time and a numeric overall score. Rows from a damaged or newer store are left out. */
+export function isDrawableAttempt(a: unknown): a is AttemptRecord {
+  const r = a as Partial<AttemptRecord> | null;
+  return (
+    !!r &&
+    typeof r === 'object' &&
+    typeof r.at === 'number' &&
+    Number.isFinite(r.at) &&
+    Number.isFinite(new Date(r.at).getTime()) &&
+    typeof r.phraseId === 'string' &&
+    !!r.scores &&
+    typeof r.scores.overall === 'number' &&
+    Number.isFinite(r.scores.overall)
+  );
 }
 
 /**
@@ -86,7 +110,7 @@ function Inner(props: { trainer: TrainerController; now: number }) {
     }
     let live = true;
     listAttempts({ limit: 2000 }).then(
-      (list) => live && setAttempts(list),
+      (list) => live && setAttempts(Array.isArray(list) ? list.filter(isDrawableAttempt) : []),
       () => live && setAttempts([]),
     );
     return () => {
@@ -233,7 +257,9 @@ function Inner(props: { trainer: TrainerController; now: number }) {
                   </select>
                 </div>
               </div>
-              <ProgressChart sessions={sessions} profileId={`phrase:${activePhrase.id}`} metric="overall" height={180} />
+              <ErrorBoundary level="row" resetKey={activePhrase.id} rowLabel="The chart for this phrase could not be drawn. Its tries are still saved.">
+                <ProgressChart sessions={sessions} profileId={`phrase:${activePhrase.id}`} metric="overall" height={180} />
+              </ErrorBoundary>
               <p className="caveat">Each point is one try. A score is closeness to the original, not a rating of your singing; slow tries are included and are labelled with their speed.</p>
               <a className="button button--ghost button--small" href={`#trainer/c/${encodeURIComponent(activeClip.id)}/p/${activePhrase.index + 1}`}>
                 <Icon name="play" size={14} /> Practise this phrase

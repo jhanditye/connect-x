@@ -290,7 +290,7 @@ export function PhraseEditor(props: PhraseEditorProps) {
 
   const canSplit = selected !== null && cursor !== null && cursor - selected.start >= MIN_PHRASE_SEC && selected.end - cursor >= MIN_PHRASE_SEC;
   const split = () => {
-    if (sel === null || cursor === null || !canSplit) return;
+    if (sel === null || cursor === null || !canSplit) return; // aria-disabled, not disabled: the pressed button keeps the focus
     const next = splitPhraseAt(phrasesRef.current, sel, cursor, MIN_PHRASE_SEC, analysis ?? null);
     commit(next, `Split phrase ${sel + 1} at ${formatEdgeTime(cursor)}. There are now ${next.length} phrases.`);
   };
@@ -338,10 +338,10 @@ export function PhraseEditor(props: PhraseEditorProps) {
       <div className="pe-strip-head">
         <h4 className="pe-title">Phrases</h4>
         <div className="pe-zoom" role="group" aria-label="Zoom the strip">
-          <button type="button" className="icon-button icon-button--touch" aria-label="Zoom out" disabled={zoomAt === 0} onClick={() => setZoomIdx(Math.max(0, zoomAt - 1))}>
+          <button type="button" className="icon-button icon-button--touch" aria-label="Zoom out" aria-disabled={zoomAt === 0 ? true : undefined} onClick={() => zoomAt > 0 && setZoomIdx(Math.max(0, zoomAt - 1))}>
             <span aria-hidden="true">&minus;</span>
           </button>
-          <button type="button" className="icon-button icon-button--touch" aria-label="Zoom in" disabled={zoomAt >= zoomMax} onClick={() => setZoomIdx(Math.min(zoomMax, zoomAt + 1))}>
+          <button type="button" className="icon-button icon-button--touch" aria-label="Zoom in" aria-disabled={zoomAt >= zoomMax ? true : undefined} onClick={() => zoomAt < zoomMax && setZoomIdx(Math.min(zoomMax, zoomAt + 1))}>
             <Icon name="add" size={18} />
           </button>
         </div>
@@ -435,7 +435,7 @@ export function PhraseEditor(props: PhraseEditorProps) {
         ) : (
           <>
             <div className="pe-row pe-row--nav">
-              <button type="button" className="button button--ghost pe-step" aria-label="Previous phrase" disabled={sel === 0} onClick={() => select(sel - 1)}>
+              <button type="button" className="button button--ghost pe-step" aria-label="Previous phrase" aria-disabled={sel === 0 ? true : undefined} onClick={() => sel > 0 && select(sel - 1)}>
                 <Icon name="back" size={20} />
               </button>
               {props.onPlayPhrase &&
@@ -450,7 +450,7 @@ export function PhraseEditor(props: PhraseEditorProps) {
                     <span>Play phrase {sel + 1}</span>
                   </button>
                 ))}
-              <button type="button" className="button button--ghost pe-step" aria-label="Next phrase" disabled={sel >= phrases.length - 1} onClick={() => select(sel + 1)}>
+              <button type="button" className="button button--ghost pe-step" aria-label="Next phrase" aria-disabled={sel >= phrases.length - 1 ? true : undefined} onClick={() => sel < phrases.length - 1 && select(sel + 1)}>
                 <Icon name="forward" size={20} />
               </button>
             </div>
@@ -461,11 +461,11 @@ export function PhraseEditor(props: PhraseEditorProps) {
             </div>
 
             <div className="pe-row">
-              <button type="button" className="button" onClick={split} disabled={!canSplit}>
+              <button type="button" className="button" onClick={split} aria-disabled={!canSplit ? true : undefined}>
                 <Icon name="split" size={18} />
                 <span>Split at cursor</span>
               </button>
-              <button type="button" className="button" onClick={merge} disabled={!canMerge}>
+              <button type="button" className="button" onClick={merge} aria-disabled={!canMerge ? true : undefined}>
                 <Icon name="merge" size={18} />
                 <span>Merge with next</span>
               </button>

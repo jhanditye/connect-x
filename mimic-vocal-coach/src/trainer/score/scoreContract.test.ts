@@ -99,7 +99,9 @@ describe('flags are charges', () => {
     expect(fixEvidence(r, 'nonexistent')).toBeNull();
     const half = scoreAttempt(ref, attemptAnalysis({ notes: I.sliceNotes(PH_A, 0, 6), lead: 1.4 }));
     expect(half.fixes[0].id).toBe('coverage');
-    expect(fixEvidence(half, 'coverage')).toBeNull();
+    // the evidence ("what we heard") and the advice ("how to fix") are different sentences
+    expect(fixEvidence(half, 'coverage')).toMatch(/Only \d+% of the original was sung/);
+    expect(half.fixes[0].advice).not.toMatch(/Only \d+%/);
   });
 
   it('a take that does not match gets no fixes and no per-note claims', () => {

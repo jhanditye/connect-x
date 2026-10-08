@@ -15,7 +15,7 @@ import type { TrainerFix } from './feedback';
  * singing    recording; live pitch is available
  * processing analysing and comparing the take
  * result     `result` is set; Try again keeps the microphone open
- * interrupted the take was cancelled (phone call, app hidden, microphone ended, route change); `message` says what to do
+ * interrupted the take or the playback was cut short (phone call, app hidden, microphone ended, route change); `message` says what to do
  * error      something failed; `message` names the next step
  * closed     disposed
  */
@@ -60,6 +60,10 @@ export interface PracticeSnapshot {
   /** The reference phrase analysis (notes and contour for the strip); null while preparing. */
   reference: VoiceAnalysis | null;
   result: PracticeResult | null;
+  /** The microphone is open right now (it stays open for a short while after a take so Try again is instant). Absent = unknown / false. */
+  micOpen?: boolean;
+  /** The singer has confirmed sing-along without headphones for this route (the screen must not ask again). Absent = false. */
+  speakerConfirmed?: boolean;
 }
 
 export interface PracticeEngine {
@@ -80,8 +84,15 @@ export interface PracticeEngine {
    * do not always say so). It lasts until the route changes.
    */
   sing(opts?: { speakerConfirmed?: boolean }): Promise<void>;
-  /** Stops the guide or cancels a take in progress (nothing is scored). */
+  /** Stops the guide or cancels a take in progress (nothing is scored; the snapshot message says so). */
   stop(): void;
+  /**
+   * While recording: ends the take now and scores what was sung (the usual "Done"). In any other state it does what stop() does.
+   * Optional so older fakes keep working; the screen falls back to stop().
+   */
+  finish?(): void;
+  /** Turns the microphone (and the audio context) off now, when nothing is running. The next Sing opens it again. */
+  releaseMicrophone?(): void;
   /** After a result: hear the original, your take, or both side by side (guide left, you right, lined up by the sync offset). */
   playAttempt(which: 'original' | 'you' | 'both'): Promise<void>;
   /** Releases the microphone and the audio context. Idempotent. */

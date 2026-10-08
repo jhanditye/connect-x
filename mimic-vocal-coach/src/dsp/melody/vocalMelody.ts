@@ -14,7 +14,12 @@
 //   5. Viterbi path over salience bins with a pitch-continuity penalty (viterbi.ts).
 //   6. Refinement of f0 to a few cents with a harmonic-comb fit on the cleaned spectrum.
 //   7. Voicing: level of the cleaned harmonic energy at f0 relative to the clip's own 90th
-//      percentile; frames more than 10 dB below it (instrumental passages, breaths) are unvoiced.
+//      percentile; frames more than 10 dB below it (instrumental passages, breaths) are unvoiced. The level is read from a
+//      slightly more strongly suppressed copy of the spectrum than the one the pitch is tracked on (LEVEL_STRENGTH 0.9, tracking
+//      0.8): suppressing harder cuts the band's level in the gaps between phrases (voicing false alarms with the voice at the
+//      band's level: 0.47 -> 0.13 on the proxy mixes, 0.25 -> 0.04 on real voices over the proxy band) but, used for the pitch
+//      too, it also thins a voice that holds a straight note, so the pitch keeps the gentler setting.
+//   7b. Fragments: pitch stretches under 150 ms that the confidence cues do not vouch for are dropped (clean.ts).
 //   8. Optionally the cleaned mono signal (inverse STFT of the gain applied above, plus a harmonic
 //      comb around f0) for listening back; it is NOT suitable for the spectral style measures.
 //   9. Noise gate: if less than MIN_HARMONIC_SHARE of the cleaned spectral energy of the voiced frames sits on
@@ -24,9 +29,10 @@
 //      noise measured 0.07-0.11. This changes nothing for clips that contain music.
 //
 // Memory: the cleaned magnitude (372 bins) and salience (222 bins) of every frame are kept as
-// Float32, 2.4 KB per 10 ms frame (57 MB for a 4 minute song); everything else is block-local. Measured
-// peak typed-array memory for 4 minutes of mono 22.05 kHz input: 65 MB (103 MB with withSignal).
-// Time: about 11 ms per second of audio on one Xeon VM core under Node 22 (2.4-2.6 s for 4 minutes of mono,
+// Float32, 2.4 KB per 10 ms frame (57 MB for a 4 minute song), plus what the suppression removed as bfloat16 (0.7 KB per
+// frame, 18 MB: the voicing level is read from it); everything else is block-local. Measured peak typed-array memory for
+// 4 minutes of mono 22.05 kHz input: 83 MB (was 65 MB before the voicing level; about 120 MB with withSignal).
+// Time: about 11 ms per second of audio on one Xeon VM core under Node 22 (2.4-2.7 s for 4 minutes of mono,
 // 3.2 s stereo, +1.3 s with withSignal, plus about 1.6 s per channel to resample 44.1/48 kHz input to
 // 22.05 kHz); not measured on an iPhone.
 //
@@ -38,6 +44,7 @@ import { frameCentre, frameCount, FrameFft, HOP_SEC, OverlapAdd } from './stft';
 import { resample, ANALYSIS_RATE } from '../resample';
 import type { PitchTrack } from '../pitch';
 import { centreGain } from './centre';
+import { dropFragments } from './clean';
 import { slidingMedian } from './runningMedian';
 import { BINS_PER_OCTAVE, SalienceMap } from './salience';
 import { trackSalience } from './viterbi';
@@ -55,6 +62,8 @@ const MAX_HZ = 4000;
 const BLOCK = 600;
 const STAT_HALF = 25;
 const STAT_STRENGTH = 0.8;
+/** Suppression strength of the copy the voicing level is read from (see header, 7). */
+const LEVEL_STRENGTH = 0.9;
 /** Bins below ~54 Hz are never used (the salience grid starts at 70 Hz). */
 const K_START = 5;
 
@@ -68,6 +77,10 @@ const REFINE_MAX_HZ = 3600;
 const VOICING_ENTER_DB = 10;
 const VOICING_HYST_DB = 3;
 const VOICING_MAX_GAP_SEC = 0.12;
+/** A longer level dip is still bridged when the tracked pitch stays on the same note across it (a held note, not a pause). */
+const VOICING_SAME_NOTE_GAP_SEC = 0.4;
+const VOICING_SAME_NOTE_SEMITONES = 0.8;
+const VOICING_EDGE_FRAMES = 5;
 const VOICING_MIN_RUN_SEC = 0.2;
 /** Nothing quieter than this (dB re full scale, RMS of the extracted harmonics) counts as singing. */
 const VOICING_ABS_FLOOR_DB = -75;
@@ -97,6 +110,8 @@ export interface VocalMelodyOptions {
   withSignal?: boolean;
   /** Analyse at most this many seconds from the start (default and ceiling MAX_MELODY_SEC); the track is then shorter than the input. */
   maxSeconds?: number;
+  /** Drop short pitch fragments the confidence cues do not vouch for (default true; false only for measuring, see clean.ts). */
+  dropFragments?: boolean;
   onProgress?: (fraction: number) => void;
 }
 
@@ -122,6 +137,12 @@ export interface VocalMelody {
    * is reported as having no melody (nothing voiced), and this value says by how much.
    */
   harmonicShare: number;
+  /**
+   * Per-frame cues behind `track.periodicity` (the same 10 ms grid), for judging a stretch of the track: salience dominance of the
+   * chosen pitch, share of the cleaned spectral energy on its harmonics, and the clip's 90th-percentile harmonic level (dB re
+   * full scale) that `track.rmsDb` is measured against.
+   */
+  cues: { dominance: Float32Array; share: Float32Array; levelRefDb: number };
   /** Wall time per stage, ms (diagnostics). */
   timingsMs: Record<string, number>;
 }
@@ -156,6 +177,7 @@ export function emptyVocalMelody(): VocalMelody {
     sideToMidDb: -Infinity,
     voicedSec: 0,
     harmonicShare: 0,
+    cues: { dominance: new Float32Array(0), share: new Float32Array(0), levelRefDb: 0 },
     timingsMs: {},
   };
 }
@@ -213,6 +235,8 @@ export function extractVocalMelody(
   const sal = new SalienceMap({ sampleRate: sr, fftSize: n, fMin, fMax }, K);
   const nBins = sal.nBins;
   const V = new Float32Array(nFrames * K);
+  // min(|M|, stationary median) per bin as bfloat16: what the suppression removed is STAT_STRENGTH x this (see levelPower)
+  const M = new Uint16Array(nFrames * K);
   const S = new Float32Array(nFrames * nBins);
 
   // ---- passes over blocks: spectra, centre emphasis, stationary suppression, salience
@@ -276,7 +300,9 @@ export function extractVocalMelody(
         }
         const r = raw[rb + k];
         const ratio = med[rb + k] / (r + 1e-20);
-        V[vb + k] = r * (1 - STAT_STRENGTH * (ratio < 1 ? ratio : 1));
+        const still = r * (ratio < 1 ? ratio : 1);
+        V[vb + k] = r - STAT_STRENGTH * still;
+        M[vb + k] = toBf16(still);
       }
       sal.frame(V, vb, K, S, t * nBins);
     }
@@ -296,8 +322,8 @@ export function extractVocalMelody(
   for (let t = 0; t < nFrames; t++) {
     const r = refineF0(V, t * K, K, binHz, sal.freqOf(tr.bin[t]));
     f0[t] = r.f0;
-    // sum over h of (|X_h| / 512)^2 / 2 = mean square of the extracted harmonics
-    levelDb[t] = 10 * Math.log10(r.power / (2 * PEAK_PER_AMPLITUDE * PEAK_PER_AMPLITUDE) + 1e-12);
+    // sum over h of (|X_h| / 512)^2 / 2 = mean square of the extracted harmonics (of the more strongly suppressed copy)
+    levelDb[t] = 10 * Math.log10(levelPower(V, M, t * K, K, binHz, r.f0) / (2 * PEAK_PER_AMPLITUDE * PEAK_PER_AMPLITUDE) + 1e-12);
     dominance[t] = salienceDominance(S, t * nBins, nBins, tr.bin[t]);
     let total = 0;
     for (let k = K_START; k < shareTop; k++) total += V[t * K + k] * V[t * K + k];
@@ -311,6 +337,10 @@ export function extractVocalMelody(
   const confidence = new Float64Array(nFrames);
   for (let t = 0; t < nFrames; t++) {
     confidence[t] = 1 / (1 + Math.exp(-(CONF_DOMINANCE * dominance[t] + CONF_REL_LEVEL * (levelDb[t] - refLevel) + CONF_INTERCEPT)));
+  }
+  if (opts.dropFragments !== false) {
+    const relLevelDb = Float64Array.from(levelDb, (v) => v - refLevel);
+    dropFragments(f0, voiced, HOP_SEC, { confidence, relLevelDb, dominance, share });
   }
   const times = new Float64Array(nFrames);
   let voicedCount = 0;
@@ -329,6 +359,7 @@ export function extractVocalMelody(
     sideToMidDb: R !== null && sideEnergy > 0 && midEnergy > 0 ? 10 * Math.log10(sideEnergy / midEnergy) : -Infinity,
     voicedSec: voicedCount * HOP_SEC,
     harmonicShare,
+    cues: { dominance: Float32Array.from(dominance), share: Float32Array.from(share), levelRefDb: refLevel },
     timingsMs,
   };
   if (opts.withSignal) {
@@ -379,6 +410,42 @@ function sampleSpectrum(V: Float32Array, base: number, K: number, x: number): nu
   return V[base + i] * (1 - f) + V[base + i + 1] * f;
 }
 
+const f32 = new Float32Array(1);
+const u32 = new Uint32Array(f32.buffer);
+/** bfloat16 (the top 16 bits of a float32; 3 significant digits is plenty for a level) round trip. */
+function toBf16(x: number): number {
+  f32[0] = x;
+  return u32[0] >>> 16;
+}
+function fromBf16(h: number): number {
+  u32[0] = h << 16;
+  return f32[0];
+}
+
+/** Linear interpolation of a bfloat16 row at fractional bin x (0 outside). */
+function sampleBf16(M: Uint16Array, base: number, K: number, x: number): number {
+  if (x < 0 || x >= K - 1) return 0;
+  const i = Math.floor(x);
+  const f = x - i;
+  return fromBf16(M[base + i]) * (1 - f) + fromBf16(M[base + i + 1]) * f;
+}
+
+/**
+ * Harmonic power of the voicing copy of the spectrum, sum(W(h f)^2), W = V - (LEVEL_STRENGTH - STAT_STRENGTH) x M: the same
+ * spectrum with the stationary part suppressed harder (V = raw - STAT_STRENGTH M, so W = raw - LEVEL_STRENGTH M).
+ */
+function levelPower(V: Float32Array, M: Uint16Array, base: number, K: number, binHz: number, f0: number): number {
+  if (!(f0 > 0) || !Number.isFinite(f0)) return 0;
+  const nH = Math.max(2, Math.min(REFINE_MAX_HARMONICS, Math.floor(REFINE_MAX_HZ / f0)));
+  let power = 0;
+  for (let h = 1; h <= nH; h++) {
+    const x = (h * f0) / binHz;
+    const w = sampleSpectrum(V, base, K, x) - (LEVEL_STRENGTH - STAT_STRENGTH) * sampleBf16(M, base, K, x);
+    power += w > 0 ? w * w : 0;
+  }
+  return power;
+}
+
 /**
  * Harmonic-comb refinement of a coarse f0: the sum over harmonics of sqrt(V(h f)) is evaluated on a
  * 4 cent grid within +/-60 cents and the vertex of a parabola through the best three points is
@@ -418,11 +485,28 @@ export function refineF0(V: Float32Array, base: number, K: number, binHz: number
   return { f0: f, power };
 }
 
+/** True when the pitch before the gap [a, b), inside it and after it all lie within VOICING_SAME_NOTE_SEMITONES of each other. */
+function sameNote(f0: Float64Array, a: number, b: number, edge: number): boolean {
+  const med = (from: number, to: number): number => {
+    const v: number[] = [];
+    for (let i = Math.max(0, from); i < Math.min(f0.length, to); i++) if (f0[i] > 0) v.push(f0[i]);
+    if (v.length < Math.min(3, to - from)) return NaN;
+    v.sort((x, y) => x - y);
+    return v[v.length >> 1];
+  };
+  const before = med(a - edge, a);
+  const inside = med(a, b);
+  const after = med(b, b + edge);
+  if (!(before > 0 && inside > 0 && after > 0)) return false;
+  const st = (x: number, y: number) => Math.abs(12 * Math.log2(x / y));
+  return st(before, inside) <= VOICING_SAME_NOTE_SEMITONES && st(after, inside) <= VOICING_SAME_NOTE_SEMITONES && st(before, after) <= VOICING_SAME_NOTE_SEMITONES;
+}
+
 /**
  * Level-based voicing. Smooth the harmonic level (dB) with a 5-frame median; the reference is its
  * 90th percentile over the clip. A frame turns voiced when its level is within VOICING_ENTER_DB of
  * the reference and unvoiced again when it falls VOICING_HYST_DB further; unvoiced gaps shorter
- * than 0.12 s are bridged and voiced runs shorter than 0.2 s dropped (the shortest phrase analyze/phrases.ts keeps). On the proxy mixes the level
+ * than 0.12 s are bridged (up to 0.4 s when the tracked pitch stays on one note across the dip) and voiced runs shorter than 0.2 s dropped (the shortest phrase analyze/phrases.ts keeps). On the proxy mixes the level
  * separated voiced from unvoiced frames with an AUC of 0.93, better than the salience value (0.79),
  * the share of harmonic energy that survives the suppression (0.86) or pitch-track stability.
  */
@@ -458,6 +542,20 @@ export function applyLevelVoicing(f0: Float64Array, levelDb: Float64Array, hopSe
     let u = t;
     while (u < n && !on[u]) u++;
     if (t > 0 && u < n && u - t <= maxGap) on.fill(1, t, u);
+    t = u;
+  }
+  // A level dip inside a held note (a straight note is suppressed as stationary, so its level sags): when the pitch the
+  // tracker follows stays within a semitone across the whole dip, it is one note.
+  const maxSame = Math.round(VOICING_SAME_NOTE_GAP_SEC / hopSec);
+  t = 0;
+  while (t < n) {
+    if (on[t]) {
+      t++;
+      continue;
+    }
+    let u = t;
+    while (u < n && !on[u]) u++;
+    if (t > 0 && u < n && u - t <= maxSame && u - t > maxGap && sameNote(f0, t, u, VOICING_EDGE_FRAMES)) on.fill(1, t, u);
     t = u;
   }
   const minRun = Math.round(VOICING_MIN_RUN_SEC / hopSec);

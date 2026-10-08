@@ -74,6 +74,11 @@ Tell me which song types fail (loud band, sung low, choir).
 then switch to another app for 30 seconds and come back.
 *You should see:* it finishes (or restarts cleanly) and the phone does not get hot or reload the page.
 *Protects against:* iOS killing the page for using too much memory, and analysis that silently never finishes.
+Also add three long songs at once, tap "Skip this file" on the first two while they are being read, and close the sheet during the third.
+*You should see:* the phone cools down at once after each skip or close (the reading stops), and nothing is left running.
+*Protects against:* abandoned analyses keeping the phone busy, and several songs held in memory together.
+Also add a 96 kHz WAV and a very long MP3 or FLAC (over 15 minutes, if you have one).
+*You should see:* the 96 kHz file reads with a moving progress bar and the screen stays responsive; the long file is refused within a second, with a message that says how to cut it down.
 
 **11. A protected track.** If you have an Apple Music download, try to add it.
 *You should see:* a plain message that it is protected and how to get a version you own.
@@ -154,6 +159,9 @@ is not marked down.
 Then Delete all clips and scores, Import a backup, and add the audio file again when it asks.
 *You should see:* your phrases, scores and singer choices come back; the clips ask for their audio files by name.
 *Protects against:* iOS not letting a Home Screen app save a file (a known risk). The backup never contains audio.
+Two honest messages to look for: if the share sheet does not open on the first tap the page says "Tap the same button again to finish" (the second tap must open it), and if the phone can only start a download it says it cannot tell whether the file was saved and tells you to look in Files, Downloads.
+*You should see:* in both cases the backup reminder on the Today screen stays on, and it goes off only after Save to Files (or another choice in the share sheet) was completed.
+*Protects against:* being told "Backup saved" when no file exists, then deleting everything.
 
 **25. An update.** After a new version is published, open the app twice.
 *You should see:* a banner "A new version of Mimic is ready"; tapping Update now reloads once.

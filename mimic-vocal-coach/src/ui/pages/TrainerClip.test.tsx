@@ -26,6 +26,14 @@ const type = (input: HTMLInputElement | HTMLTextAreaElement, value: string) => {
 };
 
 describe('Clip detail', () => {
+  it('names a phrase card with its length and range apart ("7.3 s, G3–E4"), not run together', () => {
+    clipPage();
+    const first = screen.qa<HTMLAnchorElement>('.cl-phrases > li > a')[0];
+    expect(first.textContent).toMatch(/\d s · , [A-G]#?\d/); // the dot is aria-hidden; the comma is what is read
+    expect(first.querySelector('.cp-meta .visually-hidden')?.textContent).toBe(', ');
+    expect(first.textContent).not.toMatch(/\ds[A-G]/);
+  });
+
   it('shows the title, the singer, how much is mastered and every phrase as a link in order', () => {
     clipPage();
     expect(screen.q('h1').textContent).toBe('Fake clip, 12 phrases');
@@ -283,6 +291,32 @@ describe('Clip detail: editing phrases', () => {
     expect(ctl.calls).not.toContain('updatePhrases');
     await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
     expect(document.activeElement).toBe(screen.button(/Edit phrases/));
+  });
+
+  it('moves focus to the editor heading when it opens, never to <body>', async () => {
+    clipPage();
+    const edit = screen.button(/Edit phrases/);
+    edit.focus();
+    screen.click(edit);
+    await act(async () => new Promise<void>((r) => requestAnimationFrame(() => r())));
+    expect(document.activeElement).toBe(screen.q('#cl-edit-h'));
+    expect(screen.q('#cl-edit-h').getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('a pressed control keeps focus while the change is saved (aria-disabled, not disabled)', async () => {
+    const ctl = clipPage();
+    let release: () => void = () => undefined;
+    ctl.updateClip = () => new Promise<void>((r) => (release = r));
+    const chip = screen.qa<HTMLButtonElement>('.tr-chip').find((b) => /Daniel/.test(b.textContent ?? ''))!;
+    chip.focus();
+    screen.click(chip);
+    await tick();
+    expect(chip.disabled).toBe(false);
+    expect(chip.getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(chip);
+    // Pressing again while it is busy does nothing.
+    screen.click(screen.qa<HTMLButtonElement>('.tr-chip').find((b) => /Jalen/.test(b.textContent ?? ''))!);
+    await act(async () => release());
   });
 
   it('saving without a change keeps every phrase and its history', async () => {
