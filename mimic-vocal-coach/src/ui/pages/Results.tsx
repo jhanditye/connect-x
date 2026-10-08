@@ -16,6 +16,7 @@ import { DimensionMeter } from '../charts/DimensionMeter';
 import { PitchPlot } from '../charts/PitchPlot';
 import { RangeKeyboard } from '../charts/RangeKeyboard';
 import { ReferenceDiffPlot } from '../charts/ReferenceDiffPlot';
+import { OpenInTrainer } from '../components/OpenInTrainer';
 import { RegisterBar } from '../charts/RegisterBar';
 import { ScoreDial } from '../charts/ScoreDial';
 import { StyleRadar } from '../charts/StyleRadar';
@@ -496,6 +497,15 @@ export function ResultsPage() {
               </p>
             )}
           </div>
+          <OpenInTrainer
+            name={reference.name}
+            samples={reference.samples}
+            sampleRate={reference.sampleRate}
+            addLabel="Practise this phrase by phrase"
+            openLabel="Practise this phrase by phrase"
+            className="button button--small"
+            hint="The Trainer splits the clip into phrases and shows exactly where each one drifts. The clip stays on this device."
+          />
           {refComp && aligned && (
             <>
               <dl className="facts">

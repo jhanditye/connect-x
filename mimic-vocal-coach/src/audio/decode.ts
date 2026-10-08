@@ -18,7 +18,16 @@ export interface DecodedTake {
 export interface DecodeOptions {
   /** Keep only the first this-many seconds. WAV files are then only decoded that far. */
   maxSeconds?: number;
+  /**
+   * Refuse MP4/MOV/M4A files whose header says they are longer than this (seconds) before reading them: a compressed
+   * file is decoded whole, so a long one needs hundreds of MB of Float32 samples. Videos are always checked
+   * (MAX_VIDEO_SOURCE_SEC when this is not set); audio files only when the caller asks.
+   */
+  maxSourceSec?: number;
 }
+
+/** Why a file was refused, for callers that want to show a tailored next step. */
+export type DecodeFailure = 'empty' | 'unreadable' | 'too-large' | 'too-long' | 'protected' | 'no-decoder' | 'unsupported' | 'no-audio';
 
 /**
  * What the upload inputs advertise (browsers vary; the decoder is the final judge).
@@ -31,6 +40,36 @@ export const AUDIO_ACCEPT = [
   '.m4a', '.mp3', '.wav', '.wave', '.aac', '.caf', '.aif', '.aiff', '.flac', '.ogg', '.oga', '.opus', '.webm', '.mp4', '.qta',
   'audio/mp4', 'audio/x-m4a', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/aac', 'audio/flac', 'audio/ogg', 'audio/webm', 'audio/x-caf', 'audio/aiff',
 ].join(',');
+
+/**
+ * AUDIO_ACCEPT plus phone videos (.mov from the Camera, .mp4/.m4v). iOS offers the Photo Library for video/*, so a clip
+ * filmed on the phone can be picked without going through Files; only its audio track is used.
+ */
+export const MEDIA_ACCEPT = [AUDIO_ACCEPT, 'video/*', '.mov', '.m4v', 'video/mp4', 'video/quicktime', 'video/x-m4v'].join(',');
+
+const MEDIA_EXT = /\.(wav|wave|mp3|m4a|m4b|aac|ogg|oga|opus|webm|flac|caf|mp4|m4v|mov|qta|aiff?)$/i;
+
+/** True for audio or video files by MIME type or extension (the decoder is still the final judge). */
+export function looksLikeMedia(file: { name?: string; type?: string }): boolean {
+  return /^(audio|video)\//.test(file.type ?? '') || MEDIA_EXT.test(file.name ?? '');
+}
+
+/** A phone video (or any video container): only its audio track is read. A bare .mp4 with no type is treated as audio. */
+export function isVideoFile(file: { name?: string; type?: string }): boolean {
+  return /^video\//.test(file.type ?? '') || /\.(mov|m4v)$/i.test(file.name ?? '');
+}
+
+/** A video this big is not read into memory: iPhone Safari would run out before the audio is decoded. */
+export const MAX_VIDEO_BYTES = 150 * 1024 * 1024;
+/** Longest video (by its header) whose audio is decoded: 15 minutes is about 350 MB of decoded stereo samples. */
+export const MAX_VIDEO_SOURCE_SEC = 15 * 60;
+
+/** What to do with a video that is too big to open here (iPhone). Shown in the import sheet and the Guide as well. */
+export const VIDEO_SHORTCUT_TIP =
+  'Make an audio-only copy first: in the Shortcuts app use the "Encode Media" action with Audio Only switched on, ' +
+  'or trim the video in Photos so it is shorter, share it to Files, and add that file here.';
+
+export const PROTECTED_FILE_TIP = 'Use a DRM-free copy of a song you own, for example a purchased download, a CD rip or a file from your computer.';
 
 /** Bigger files are almost certainly not a single sung take and would exhaust memory when decoded. */
 const MAX_FILE_BYTES = 250 * 1024 * 1024;
@@ -48,9 +87,11 @@ const CANCEL_NOTICE =
   'The two channels of this file cancel each other out when mixed (one is phase-inverted, as some interfaces and mics do), so only the louder channel was analysed.';
 
 export class DecodeError extends Error {
-  constructor(message: string) {
+  readonly reason: DecodeFailure;
+  constructor(message: string, reason: DecodeFailure = 'unsupported') {
     super(message);
     this.name = 'DecodeError';
+    this.reason = reason;
   }
 }
 
@@ -190,22 +231,141 @@ function decodeWavFile(buf: ArrayBuffer, file: Blob, maxSeconds: number | undefi
 }
 
 function tooLarge(file: Blob): DecodeError {
-  return new DecodeError(`${fileLabel(file)} is too large (${Math.round(file.size / 1048576)} MB). Trim it to the part you sing and try again.`);
+  return new DecodeError(
+    `${fileLabel(file)} is too large (${Math.round(file.size / 1048576)} MB). Trim it to the part you sing and try again.`,
+    'too-large',
+  );
+}
+
+function videoTooLarge(file: Blob): DecodeError {
+  return new DecodeError(
+    `${fileLabel(file)} is a ${Math.round(file.size / 1048576)} MB video, more than this app can open at once (the limit is ${Math.round(MAX_VIDEO_BYTES / 1048576)} MB). ${VIDEO_SHORTCUT_TIP}`,
+    'too-large',
+  );
+}
+
+function tooLong(file: Blob, durationSec: number, limitSec: number, video: boolean): DecodeError {
+  const min = (s: number) => Math.round(s / 60);
+  return new DecodeError(
+    `${fileLabel(file)} is about ${min(durationSec)} minutes long, more than this app can open at once (the limit is ${min(limitSec)} minutes). ` +
+      (video ? VIDEO_SHORTCUT_TIP : 'Cut it down to the part with the singing and add it again.'),
+    'too-long',
+  );
+}
+
+function protectedFile(file: Blob): DecodeError {
+  return new DecodeError(`${fileLabel(file)} is copy-protected, so this app cannot read it. ${PROTECTED_FILE_TIP}`, 'protected');
+}
+
+const fourcc = (b: Uint8Array, o: number): string => String.fromCharCode(b[o], b[o + 1], b[o + 2], b[o + 3]);
+
+/** Boxes walked at the top level of an MP4/MOV before giving up (an iPhone movie has about five). */
+const MAX_BOX_WALK = 64;
+/** A movie header (moov) bigger than this is not parsed. */
+const MAX_MOOV_BYTES = 32 * 1024 * 1024;
+
+async function readSlice(file: Blob, start: number, end: number): Promise<Uint8Array> {
+  return new Uint8Array(await file.slice(start, end).arrayBuffer());
+}
+
+/** Duration in seconds from the movie header (mvhd) inside the bytes of a moov box, or null. */
+function durationFromMoov(body: Uint8Array): number | null {
+  const dv = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  let p = 0;
+  while (p + 8 <= body.length) {
+    let size = dv.getUint32(p);
+    const type = fourcc(body, p + 4);
+    if (size === 0) size = body.length - p;
+    if (size < 8) return null;
+    if (type === 'mvhd') {
+      const version = body[p + 8];
+      let timescale: number;
+      let duration: number;
+      if (version === 1) {
+        if (p + 40 > body.length) return null;
+        timescale = dv.getUint32(p + 28);
+        duration = Number(dv.getBigUint64(p + 32));
+      } else {
+        if (p + 28 > body.length) return null;
+        timescale = dv.getUint32(p + 20);
+        duration = dv.getUint32(p + 24);
+      }
+      return timescale > 0 && Number.isFinite(duration) ? duration / timescale : null;
+    }
+    p += size;
+  }
+  return null;
+}
+
+/**
+ * Length in seconds of an MP4, MOV or M4A file from its header, without reading the file: walks the top-level boxes
+ * with small slices (an iPhone movie keeps the header at the end, behind the media data) and reads only the moov box.
+ * Null when the file is not an ISO base media file, the header is missing or odd, or the Blob cannot be sliced.
+ */
+export async function probeIsoDurationSec(file: Blob): Promise<number | null> {
+  if (typeof file.slice !== 'function') return null;
+  try {
+    let pos = 0;
+    for (let n = 0; n < MAX_BOX_WALK && pos + 8 <= file.size; n++) {
+      const head = await readSlice(file, pos, Math.min(file.size, pos + 16));
+      if (head.length < 8) return null;
+      const dv = new DataView(head.buffer, head.byteOffset, head.byteLength);
+      let size = dv.getUint32(0);
+      const type = fourcc(head, 4);
+      let headerLen = 8;
+      if (n === 0 && type !== 'ftyp') return null;
+      if (size === 1) {
+        if (head.length < 16) return null;
+        size = Number(dv.getBigUint64(8));
+        headerLen = 16;
+      } else if (size === 0) {
+        size = file.size - pos;
+      }
+      if (!(size >= headerLen)) return null;
+      if (type === 'moov') {
+        if (size > MAX_MOOV_BYTES) return null;
+        return durationFromMoov(await readSlice(file, pos + headerLen, Math.min(file.size, pos + size)));
+      }
+      pos += size;
+    }
+  } catch {
+    // An unreadable header only means "length unknown"; decoding decides.
+  }
+  return null;
+}
+
+/** "M4P " is the brand of FairPlay-protected AAC (iTunes and Apple Music downloads). */
+function hasProtectedBrand(buf: ArrayBuffer): boolean {
+  if (buf.byteLength < 12) return false;
+  const b = new Uint8Array(buf, 0, 12);
+  return fourcc(b, 4) === 'ftyp' && fourcc(b, 8) === 'M4P ';
 }
 
 /**
  * Decode any browser-supported audio file to mono Float32 at its native rate. Uses decodeWav for WAV
- * first, then AudioContext.decodeAudioData. `opts.maxSeconds` keeps only the start of a long file.
+ * first, then AudioContext.decodeAudioData (and once more with an M4A brand relabelled when Safari refuses it).
+ * Phone videos (.mov, .mp4, .m4v) work the same way: the browser decodes their audio track. `opts.maxSeconds` keeps
+ * only the start of a long file. Failures are DecodeErrors whose message names the fix and whose `reason` says why.
  */
 export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Promise<DecodedTake> {
-  if (file.size === 0) throw new DecodeError(`${fileLabel(file)} is empty.`);
-  if (file.size > MAX_FILE_BYTES) throw tooLarge(file);
+  if (file.size === 0) throw new DecodeError(`${fileLabel(file)} is empty.`, 'empty');
+  const video = isVideoFile(file as { name?: string; type?: string });
+  if (/\.m4p$/i.test((file as File).name ?? '')) throw protectedFile(file);
+  if (video ? file.size > MAX_VIDEO_BYTES : file.size > MAX_FILE_BYTES) throw video ? videoTooLarge(file) : tooLarge(file);
+
+  const sourceLimit = opts.maxSourceSec ?? (video ? MAX_VIDEO_SOURCE_SEC : undefined);
+  if (sourceLimit !== undefined) {
+    const isoSec = await probeIsoDurationSec(file);
+    if (isoSec !== null && isoSec > sourceLimit) throw tooLong(file, isoSec, sourceLimit, video);
+  }
+
   let buf: ArrayBuffer;
   try {
     buf = await file.arrayBuffer();
   } catch {
-    throw new DecodeError(`${fileLabel(file)} could not be read.`);
+    throw new DecodeError(`${fileLabel(file)} could not be read.`, 'unreadable');
   }
+  if (hasProtectedBrand(buf)) throw protectedFile(file);
 
   if (isRiffWave(buf)) {
     try {
@@ -216,11 +376,11 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
       if (err instanceof DecodeError) throw err;
     }
   }
-  if (file.size > MAX_COMPRESSED_BYTES) throw tooLarge(file);
+  if (!video && file.size > MAX_COMPRESSED_BYTES) throw tooLarge(file);
 
   const ctx = createDecodingContext();
   if (!ctx) {
-    throw new DecodeError('This browser cannot decode compressed audio here. Export the take as a WAV file and upload that instead.');
+    throw new DecodeError('This browser cannot decode compressed audio here. Export the take as a WAV file and upload that instead.', 'no-decoder');
   }
   try {
     // decodeAudioData detaches its input, so the relabelled copy for the second attempt is made first.
@@ -237,8 +397,15 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
   } catch (err) {
     if (err instanceof DecodeError) throw err;
     const type = file.type ? ` (${file.type})` : '';
+    if (video) {
+      throw new DecodeError(
+        `${fileLabel(file)}${type} is a video and its sound could not be read in this browser. It may have no audio track or use a format Safari cannot open. ${VIDEO_SHORTCUT_TIP}`,
+        'unsupported',
+      );
+    }
     throw new DecodeError(
       `${fileLabel(file)}${type} could not be decoded as audio in this browser. Try WAV, MP3 or M4A; if it is a video, export just the audio.`,
+      'unsupported',
     );
   } finally {
     ctx.close?.().catch(() => undefined);
@@ -246,7 +413,7 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
 }
 
 function finish(samples: Float32Array, sampleRate: number, file: Blob, sourceDurationSec: number, cancelled: boolean): DecodedTake {
-  if (!(sampleRate > 0) || samples.length === 0) throw new DecodeError(`${fileLabel(file)} contains no audio.`);
+  if (!(sampleRate > 0) || samples.length === 0) throw new DecodeError(`${fileLabel(file)} contains no audio.`, 'no-audio');
   const durationSec = samples.length / sampleRate;
   return {
     samples,

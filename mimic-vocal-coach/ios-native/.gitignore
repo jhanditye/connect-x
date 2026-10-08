@@ -1,0 +1,16 @@
+# Installed by `npm install`
+node_modules/
+
+# Build outputs: `npm run build:web` writes the web app here, `cap sync` copies it into ios/App/App/public
+# (ios/.gitignore already ignores that copy and the other generated Capacitor files)
+www/
+check-www/
+
+# Zips made by `npm run zip`
+out/
+
+# Xcode and macOS
+.DS_Store
+*.xcuserstate
+xcuserdata/
+DerivedData/

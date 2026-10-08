@@ -64,6 +64,7 @@ function controller(overrides: Partial<AppState> = {}, fns: Partial<AppControlle
     clearSessions: vi.fn(),
     clearAllData: vi.fn(),
     measureClips: vi.fn(async () => ({ added: 0, rejected: [] })),
+    addMeasuredClip: vi.fn(),
     removeMeasuredClip: vi.fn(),
     clearMeasuredClips: vi.fn(),
     openPractice: vi.fn(),

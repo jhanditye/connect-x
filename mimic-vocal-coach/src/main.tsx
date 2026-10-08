@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import './styles/tokens.css';
 import './styles/app.css';
 import './styles/viz.css';
+import './styles/trainer.css';
 import { App } from './App';
 import { isStandalone } from './pwa/platform';
 import { startPwa } from './pwa/register';

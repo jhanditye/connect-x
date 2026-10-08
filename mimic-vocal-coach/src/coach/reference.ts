@@ -284,33 +284,61 @@ function sourceNoteFor(ref: VoiceAnalysis): string {
 
 /** Seconds of singing below which a reference clip can't give reliable targets. */
 const MIN_REFERENCE_VOICED_SEC = 5;
+/** Seconds of singing below which a clip is too short to practise a phrase against. */
+const MIN_COMPARISON_VOICED_SEC = 3;
 
 /**
- * Whether a reference clip can be used as a target, and if not, why, in plain English that names the
- * fix. Unusable: under 5 s of singing, singing over instruments (a full song mix), or mostly
- * speech-like syllables.
+ * What a reference clip is for. 'targets' (the default): its measured style becomes a singer's targets
+ * (profileFromReference, the measured-singer path), which needs clean tone measurements. 'comparison': the user's take is
+ * compared with it phrase by phrase (compareToReference), which needs only a trustworthy pitch contour and phrases, so a
+ * full-song analysis (VoiceAnalysis.mode === 'mix', lead vocal extracted from the band) is good enough.
  */
-export function referenceUsability(ref: VoiceAnalysis): { usable: boolean; reason: string | null } {
+export type ReferencePurpose = 'targets' | 'comparison';
+
+/**
+ * Whether a reference clip can be used for `purpose`, and if not, why, in plain English that names the fix.
+ *
+ * For 'targets' the clip is unusable with under 5 s of singing, when it is singing over instruments (a full song mix,
+ * analysed solo or in mix mode) or when it is mostly speech-like syllables. For 'comparison' a mix-mode analysis is
+ * accepted, a solo analysis that still raised 'accompaniment' is not (its pitch followed the band: analyse it as a full
+ * song instead), and the minimum is 3 s of singing.
+ */
+export function referenceUsability(ref: VoiceAnalysis, purpose: ReferencePurpose = 'targets'): { usable: boolean; reason: string | null } {
   const issues = ref.issues ?? [];
   const voiced = Number.isFinite(ref.voicedSec) ? Math.max(0, ref.voicedSec) : 0;
-  if (issues.includes('accompaniment')) {
+  const isMix = ref.mode === 'mix';
+  if (isMix && purpose === 'targets') {
     return {
       usable: false,
       reason:
-        'This clip sounds like a full song mix, so the analysis would follow the instruments or the bass rather than the voice. ' +
-        'Use an isolated vocal (a vocal stem) or an a cappella section instead.',
+        'This clip was analysed as a full song: the lead vocal was extracted from the band, so tone, breathiness and register are not measured and can\'t give targets. ' +
+        'Use an isolated vocal (a vocal stem) or an a cappella section to build targets. The song is still fine for phrase-by-phrase practice.',
     };
   }
-  if (issues.includes('too-little-singing') || voiced < MIN_REFERENCE_VOICED_SEC) {
+  if (!isMix && issues.includes('accompaniment')) {
+    return {
+      usable: false,
+      reason:
+        purpose === 'comparison'
+          ? 'This clip sounds like a full song mix, so the pitch analysis followed the instruments or the bass rather than the voice. ' +
+            'Analyse it as a full song (lead vocal extraction) or use an isolated vocal (a vocal stem) instead.'
+          : 'This clip sounds like a full song mix, so the analysis would follow the instruments or the bass rather than the voice. ' +
+            'Use an isolated vocal (a vocal stem) or an a cappella section instead.',
+    };
+  }
+  const minVoiced = purpose === 'comparison' ? MIN_COMPARISON_VOICED_SEC : MIN_REFERENCE_VOICED_SEC;
+  if (issues.includes('too-little-singing') || voiced < minVoiced) {
     const heard =
       voiced < 0.5
         ? 'No clear singing could be measured in this clip'
         : `Only ${voiced < 10 ? voiced.toFixed(1) : Math.round(voiced)} s of clear singing could be measured in this clip`;
     return {
       usable: false,
-      reason:
-        `${heard}, which is too little to build targets from; backing music or effects may be covering the voice. ` +
-        'Use an isolated vocal or an a cappella section with at least 10 seconds of singing.',
+      reason: isMix
+        ? `${heard}, which is too little to practise against; the lead vocal may be buried in the band. ` +
+          'Pick a section with continuous singing, or use an isolated vocal.'
+        : `${heard}, which is too little to build targets from; backing music or effects may be covering the voice. ` +
+          'Use an isolated vocal or an a cappella section with at least 10 seconds of singing.',
     };
   }
   if (issues.includes('speech-like')) {
@@ -567,7 +595,14 @@ function alignmentCost(user: Contour, ref: Contour, shift: number): number {
  * ornamented differently), then test the octave either side, which the median can't separate from
  * a register choice.
  */
-function estimateTranspose(user: Contour, ref: Contour): number {
+function estimateTranspose(user: Contour, ref: Contour, hint?: number): number {
+  // With a hint (the key this singer used last time on this phrase) only the hint +/- 1 is searched: a
+  // subharmonic-rich or noisy attempt can no longer pull the whole comparison an octave or a fifth away.
+  if (hint !== undefined && Number.isFinite(hint)) {
+    let b = Math.round(hint);
+    for (const s of [b - 1, b + 1]) if (alignmentCost(user, ref, s) < alignmentCost(user, ref, b)) b = s;
+    return b;
+  }
   const m0 = Math.round(median(user.midi) - median(ref.midi));
   const costs = new Map<number, number>();
   const cost = (s: number): number => {
@@ -714,7 +749,8 @@ const MIN_CONTOUR_POINTS = 10;
  * If either take has too little voiced material, returns an empty `path` and `segments`, with
  * `meanAbsCents` NaN and `withinFiftyCents` 0.
  */
-export function compareToReference(user: VoiceAnalysis, ref: VoiceAnalysis): ReferenceComparison {
+/** `transposeHint`: the transposition (semitones) found last time for this phrase; narrows the search to hint +/- 1. */
+export function compareToReference(user: VoiceAnalysis, ref: VoiceAnalysis, opts: { transposeHint?: number } = {}): ReferenceComparison {
   const styleDiff = styleDifference(user.style, ref.style);
   const { step, user: userC, ref: refC } = contoursWithin(user, ref, MAX_CELLS_FINAL);
   if (userC.midi.length < MIN_CONTOUR_POINTS || refC.midi.length < MIN_CONTOUR_POINTS) {
@@ -733,8 +769,8 @@ export function compareToReference(user: VoiceAnalysis, ref: VoiceAnalysis): Ref
   const search = contoursWithin(user, ref, MAX_CELLS_SEARCH);
   const shift =
     search.step > step && search.user.midi.length >= MIN_CONTOUR_POINTS && search.ref.midi.length >= MIN_CONTOUR_POINTS
-      ? estimateTranspose(search.user, search.ref)
-      : estimateTranspose(userC, refC);
+      ? estimateTranspose(search.user, search.ref, opts.transposeHint)
+      : estimateTranspose(userC, refC, opts.transposeHint);
 
   const pairs = alignedPairs(userC, refC, shift);
   const cents = pairs.map((p) => p.cents);

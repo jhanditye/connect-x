@@ -23,6 +23,25 @@ describe('runAnalysisJob', () => {
     expect(out.filter((m) => m.type !== 'progress')).toHaveLength(1);
   });
 
+  it('carries opts.mode to the analysis: a mix request gets a mix analysis, with increasing progress ending at 1', () => {
+    const samples = concat(silence(0.3, SR), synthMelody([{ midi: 57, durSec: 2 }, { midi: 60, durSec: 2 }], { sampleRate: SR, amplitude: 0.35 }), silence(0.3, SR));
+    const out: WorkerResponse[] = [];
+    runAnalysisJob({ type: 'analyze', samples, sampleRate: SR, opts: { voiceType: 'tenor', mode: 'mix' } }, (m) => out.push(m));
+    const progress = out.filter((m) => m.type === 'progress').map((m) => (m.type === 'progress' ? m.value : NaN));
+    expect(progress.length).toBeGreaterThan(3);
+    for (let i = 1; i < progress.length; i++) expect(progress[i]).toBeGreaterThan(progress[i - 1]);
+    expect(progress[progress.length - 1]).toBe(1);
+    const last = out[out.length - 1];
+    expect(last.type).toBe('result');
+    if (last.type === 'result') {
+      expect(last.analysis.mode).toBe('mix');
+      expect(last.analysis.style.breathiness).toBeNull();
+      // what the worker posts must survive structured clone
+      expect(structuredClone(last.analysis).mode).toBe('mix');
+    }
+    expect(out.filter((m) => m.type !== 'progress')).toHaveLength(1);
+  });
+
   it('answers a malformed request with an error message', () => {
     const out: WorkerResponse[] = [];
     runAnalysisJob({ type: 'analyze', samples: [1, 2, 3] } as unknown as AnalyzeRequest, (m) => out.push(m));

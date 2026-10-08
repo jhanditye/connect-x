@@ -1,0 +1,133 @@
+/* The phrase overlay plot (original against your take, in your key). Colours come only from tokens.css, directly or through
+   color-mix. The plot is drawn to its container's width (no horizontal page scroll at 320px) and a touch-drag reads out a note. */
+
+.pov {
+  min-width: 0;
+  max-width: 100%;
+}
+.pov-key {
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+}
+.pov-readout {
+  min-height: 2.6em;
+  margin: 0 0 var(--space-1);
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.pov-frame {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+}
+.pov-axis {
+  flex: none;
+}
+.pov-scroll {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+}
+.pov-scroll:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.pov-svg {
+  display: block;
+  max-width: 100%;
+  /* A sideways drag reads out notes; a vertical drag still scrolls the page. */
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pov-grid {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+.pov-grid--strong {
+  stroke: var(--grid-strong);
+}
+.pov-passaggio {
+  fill: var(--reg-mix);
+  fill-opacity: 0.09;
+}
+.pov-band {
+  fill: color-mix(in srgb, var(--ink-3) 14%, transparent);
+  stroke: color-mix(in srgb, var(--ink-3) 45%, transparent);
+  stroke-width: 1;
+}
+.pov-band--missed {
+  fill: transparent;
+  stroke-dasharray: 3 2;
+}
+.pov-band--selected {
+  fill: color-mix(in srgb, var(--accent) 16%, transparent);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+.pov-bandname {
+  fill: var(--ink-2);
+}
+.pov-ref {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pov-take {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pov-take--bar {
+  stroke-width: 3.5;
+}
+.pov-mark--warn {
+  fill: var(--warn);
+}
+.pov-mark--bad {
+  fill: var(--bad);
+}
+.pov-mark--line {
+  fill: none;
+  stroke: var(--bad);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.pov-mark--ring {
+  fill: none;
+  stroke: var(--bad);
+  stroke-width: 1.8;
+}
+.pov-cursor {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+
+.pov-key-band {
+  width: 16px;
+  height: 9px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--ink-3) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink-3) 45%, transparent);
+}
+.pov-key-marks {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.12em;
+  color: var(--ink-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pov * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

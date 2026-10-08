@@ -1,11 +1,17 @@
-// "Measure from real recordings": the user adds clips of a builtin singer from music they own and the
-// singer's targets are rebuilt from those measurements (coach/measured.ts). Lives in the Studio's
-// singer panel.
+// The Studio's singer panel entry for measured targets. With the Trainer present it reads "Add clips to the Trainer": clips of
+// the singer live in the Trainer (where they can be practised phrase by phrase), and each one can be switched on to shape the
+// singer's measured targets with one tap (coach/measured.ts builds the targets from the numbers; no audio is kept by the targets).
+// "Measure numbers only" keeps the older way: files are measured and only the numbers stay, no audio, no phrases.
 
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { contributionBlocker } from '../../storage/library';
 import type { MeasureProgress, MeasureResult } from '../../state/context';
+import { trainerHash } from '../../state/routing';
+import type { TrainerController } from '../../state/trainerContext';
 import type { MeasuredClip } from '../../types';
 import { FileDrop } from './FileDrop';
+import { Icon } from './Icon';
+import { phraseCount, visiblePhrases } from './phraseStatus';
 
 function firstName(name: string): string {
   return name.split(' ')[0] || name;
@@ -17,14 +23,20 @@ function progressText(p: MeasureProgress): string {
   return `Measuring ${which}${p.name} (${step})`;
 }
 
-export function MeasurePanel(props: {
+interface NumbersOnlyProps {
   singerName: string;
   clips: MeasuredClip[];
   onMeasure: (files: File[], onProgress: (p: MeasureProgress) => void) => Promise<MeasureResult>;
   onRemove: (clipId: string) => void;
   onClear: () => void;
-}) {
+  /** The heading's id (the Studio and its tests look for #measure-heading when this is the whole panel). */
+  headingId?: string;
+}
+
+/** Measures files and keeps only the numbers (no audio, no phrases). The older way, kept for people who do not want a clip stored. */
+function NumbersOnlyPanel(props: NumbersOnlyProps) {
   const { singerName, clips } = props;
+  const headingId = props.headingId ?? 'measure-heading';
   const who = firstName(singerName);
   const [progress, setProgress] = useState<MeasureProgress | null>(null);
   const [result, setResult] = useState<MeasureResult | null>(null);
@@ -59,8 +71,8 @@ export function MeasurePanel(props: {
   };
 
   return (
-    <div className="measure" aria-labelledby="measure-heading">
-      <h3 id="measure-heading" className="subhead" ref={headingRef} tabIndex={-1}>
+    <div className="measure" aria-labelledby={headingId}>
+      <h3 id={headingId} className="subhead" ref={headingRef} tabIndex={-1}>
         Measure {who} from real recordings
       </h3>
       {clips.length === 0 ? (
@@ -176,4 +188,147 @@ export function MeasurePanel(props: {
         ))}
     </div>
   );
+}
+
+export interface MeasurePanelProps extends Omit<NumbersOnlyProps, 'headingId'> {
+  /** The builtin singer these clips belong to; needed with `trainer` to list their clips. */
+  singerId?: string;
+  /** The Trainer's library. Without it (no Trainer in this build or test) the older numbers-only panel is the whole panel. */
+  trainer?: Pick<TrainerController, 'clips' | 'status' | 'setContributes'> | null;
+}
+
+function TrainerEntry(props: MeasurePanelProps & { singerId: string; trainer: NonNullable<MeasurePanelProps['trainer']> }) {
+  const { trainer, singerId, singerName } = props;
+  const who = firstName(singerName);
+  const ids = useId();
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const mine = trainer.clips.filter((c) => c.singerId === singerId);
+  const waiting = mine.filter((c) => !c.contributesToSinger && contributionBlocker(c) === null);
+  const counted = mine.filter((c) => c.contributesToSinger).length;
+  const ready = trainer.status === 'ready' || trainer.status === 'memory-only';
+
+  const toggle = async (id: string, title: string, on: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await trainer.setContributes(id, on);
+      setNote(on ? `${title} now counts toward ${who}'s targets.` : `${title} no longer counts toward ${who}'s targets.`);
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'That could not be changed. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const useAll = async () => {
+    setBusy(true);
+    setError(null);
+    let done = 0;
+    try {
+      for (const c of waiting) {
+        await trainer.setContributes(c.id, true);
+        done++;
+      }
+      setNote(`${done} ${done === 1 ? 'clip now counts' : 'clips now count'} toward ${who}'s targets.`);
+    } catch (err) {
+      setError(err instanceof Error && err.message ? err.message : 'That could not be changed. Try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="measure" aria-labelledby="measure-heading">
+      <h3 id="measure-heading" className="subhead" tabIndex={-1}>
+        Add clips to the Trainer
+      </h3>
+      <p className="measure-intro">
+        Add clips of {singerName} from music you own and practise their phrases one by one in the Trainer. Each clip can also shape {who}&apos;s targets here: switch it on and the
+        Studio scores your takes against the measured numbers instead of the estimates. Only the numbers are used, never the audio.
+      </p>
+      <a className="button button--accent" href="#trainer/add" aria-describedby={`${ids}-add`}>
+        <Icon name="add" size={18} /> Add clips in the Trainer
+      </a>
+      <p id={`${ids}-add`} className="visually-hidden">
+        Opens the Trainer&apos;s Add clips sheet.
+      </p>
+
+      {mine.length > 0 ? (
+        <>
+          <h4 className="subhead">Your clips of {who}</h4>
+          <ul className="mt-clips">
+            {mine.map((c) => {
+              const why = contributionBlocker(c);
+              return (
+                <li key={c.id} className="mt-clip">
+                  <a className="mt-clip-name" href={trainerHash({ view: 'clip', clipId: c.id })}>
+                    {c.title}
+                  </a>
+                  <span className="mt-clip-meta">
+                    {phraseCount(visiblePhrases(c).length)} · {c.kind === 'mix' ? 'full song' : 'solo vocal'}
+                  </span>
+                  <label className="tr-switch">
+                    <input
+                      type="checkbox"
+                      role="switch"
+                      checked={c.contributesToSinger}
+                      disabled={busy || (why !== null && !c.contributesToSinger)}
+                      onChange={(e) => void toggle(c.id, c.title, e.currentTarget.checked)}
+                      aria-describedby={why ? `${ids}-${c.id}` : undefined}
+                    />
+                    <span className="tr-switch-label">Counts toward {who}&apos;s targets</span>
+                  </label>
+                  {why && !c.contributesToSinger && (
+                    <span id={`${ids}-${c.id}`} className="field-hint">
+                      {why}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {waiting.length > 0 && (
+            <div className="button-row">
+              <button type="button" className="button" onClick={() => void useAll()} disabled={busy}>
+                Use {waiting.length === 1 ? 'this clip' : `all ${waiting.length} usable clips`} for {who}&apos;s targets
+              </button>
+            </div>
+          )}
+          {counted > 0 && (
+            <p className="field-hint">
+              <span className="num">{counted}</span> {counted === 1 ? 'clip counts' : 'clips count'} toward {who}&apos;s targets.
+            </p>
+          )}
+        </>
+      ) : ready ? (
+        <p className="field-hint">No clips of {who} in the Trainer yet. Add one and it will be listed here.</p>
+      ) : null}
+
+      <p className="visually-hidden" role="status">
+        {note}
+      </p>
+      {error && (
+        <p className="field-error" role="alert">
+          {error}
+        </p>
+      )}
+
+      <details className="mt-legacy">
+        <summary>Measure numbers only, without keeping the clip</summary>
+        <NumbersOnlyPanel {...props} headingId="measure-numbers-heading" />
+      </details>
+    </div>
+  );
+}
+
+/**
+ * "Add clips to the Trainer" when the Trainer is there, with the numbers-only measuring tucked under it; the numbers-only panel
+ * on its own otherwise.
+ */
+export function MeasurePanel(props: MeasurePanelProps) {
+  const { trainer, singerId, ...rest } = props;
+  if (!trainer || !singerId) return <NumbersOnlyPanel {...rest} />;
+  return <TrainerEntry {...props} singerId={singerId} trainer={trainer} />;
 }

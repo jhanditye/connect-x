@@ -1,7 +1,7 @@
 // Studio: pick the target singer, then record, upload or try the demo take. Optional reference
 // clip calibrates the target from a recording the user owns.
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { MAX_ANALYSIS_SEC } from '../../analysis/analyze';
 import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { createRecorder, MAX_RECORD_SEC, microphoneUnavailableReason, type InterruptionReason, type Recorder, type RecorderInfo } from '../../audio/recorder';
@@ -9,6 +9,7 @@ import { getExercise } from '../../coach/exercises';
 import { isIos } from '../../pwa/platform';
 import { useApp } from '../../state/context';
 import { REFERENCE_ID } from '../../state/reducer';
+import { TrainerContext } from '../../state/trainerContext';
 import type { SingerProfile, VoiceType } from '../../types';
 import { AnalysisProgress } from '../components/AnalysisProgress';
 import { FileDrop } from '../components/FileDrop';
@@ -18,6 +19,7 @@ import { Icon } from '../components/Icon';
 import { LiveMonitor } from '../components/LiveMonitor';
 import { MeasurePanel } from '../components/MeasurePanel';
 import { Notice } from '../components/Notice';
+import { OpenInTrainer } from '../components/OpenInTrainer';
 import { ReferenceCard, SingerCard } from '../components/SingerCard';
 import { shortName, singerColor } from '../components/singer';
 
@@ -111,6 +113,7 @@ function SingerPanel(props: { profile: SingerProfile; baseName?: string; measure
 
 export function StudioPage() {
   const app = useApp();
+  const trainer = useContext(TrainerContext);
   const { state, builtins, profile } = app;
   const busy = state.status !== 'idle';
   const micUnavailable = useMemo(() => microphoneUnavailableReason(), []);
@@ -502,6 +505,8 @@ export function StudioPage() {
                 profile.source === 'reference' ? undefined : (
                   <MeasurePanel
                     key={profile.id}
+                    singerId={profile.id}
+                    trainer={trainer}
                     singerName={profile.name}
                     clips={state.measurements[profile.id] ?? []}
                     onMeasure={(files, onProgress) => app.measureClips(profile.id, files, onProgress)}
@@ -555,6 +560,7 @@ export function StudioPage() {
                     Use as target
                   </button>
                 )}
+                <OpenInTrainer name={state.reference.name} samples={state.reference.samples} sampleRate={state.reference.sampleRate} addLabel="Open in Trainer" />
                 <button type="button" className="button button--ghost button--small" onClick={() => app.clearReference()} disabled={busy}>
                   Remove reference
                 </button>

@@ -48,7 +48,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   localStorage.clear();
-  window.location.hash = '';
+  // The default route is the Trainer; these flows start from the Studio.
+  window.location.hash = '#studio';
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -105,6 +106,12 @@ function h1(): string {
 }
 
 describe('App', () => {
+  it('opens the Trainer when there is no route in the URL', () => {
+    window.location.hash = '';
+    act(() => root.render(<App />));
+    expect(container.querySelector('h1')?.textContent).toMatch(/Practise with the voices you love/);
+  });
+
   it('starts in the Studio with Results disabled', () => {
     act(() => root.render(<App />));
     expect(container.querySelector('h1')?.textContent).toMatch(/Sing a take/);

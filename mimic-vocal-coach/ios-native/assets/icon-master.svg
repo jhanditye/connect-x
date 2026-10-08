@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  
+  <rect width="512" height="512" fill="#17191c"></rect>
+  <g id="art" transform="translate(256 256) scale(1) translate(-256 -256)">
+    <text id="m" x="48.5" y="391" font-family="Gloock, Georgia, 'Times New Roman', serif" font-size="360" fill="#eef0ea">M</text>
+    <circle id="dot" cx="445.5" cy="355" r="30" fill="#d33f2f"></circle>
+  </g>
+</svg>

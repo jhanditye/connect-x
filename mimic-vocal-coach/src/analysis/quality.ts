@@ -2,7 +2,7 @@
 // machine-readable issue codes (VoiceAnalysis.issues).
 
 import { median, percentile } from '../dsp/stats';
-import type { AnalysisIssue, AudioQuality, FrameFeatures, VoiceType } from '../types';
+import type { AnalysisIssue, AudioQuality, FrameFeatures, VoiceAnalysis, VoiceType } from '../types';
 import { VOICE_TYPE_NAMES } from './passaggio';
 import { PHRASE_MERGE_GAP_SEC } from './phrases';
 
@@ -250,4 +250,61 @@ export function qualityReport(input: QualityInput): { warnings: string[]; issues
 /** Warnings about the recording itself, each with the fix (see qualityReport for the issue codes). */
 export function qualityWarnings(input: QualityInput): string[] {
   return qualityReport(input).warnings;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Full-song (mix) mode: routing and the confidence warnings. The numbers come from the proxy-mix evaluation of the
+// lead-vocal extractor (dsp/melody): clips with confidence 0.70-0.80 had a raw pitch accuracy of about 0.55, 0.80-0.88
+// about 0.80 and above 0.88 about 0.87. The confidence itself was calibrated on synthetic mixes: a ranking, not a promise.
+
+/** Below this the lead vocal was hard to follow: warn. */
+export const MIX_CONFIDENCE_WARN = 0.8;
+/** Below this the contour is a rough guide at best. */
+export const MIX_CONFIDENCE_POOR = 0.7;
+/** At or above this the extraction was clear. */
+export const MIX_CONFIDENCE_HIGH = 0.88;
+
+export type MixConfidenceBand = 'high' | 'ok' | 'low' | 'poor';
+
+/** high >= 0.88, ok 0.80-0.88, low 0.70-0.80 (warned), poor < 0.70 (warned, stem recommended). Non-finite counts as poor. */
+export function mixConfidenceBand(confidence: number): MixConfidenceBand {
+  if (!(confidence >= MIX_CONFIDENCE_POOR)) return 'poor';
+  if (confidence < MIX_CONFIDENCE_WARN) return 'low';
+  return confidence < MIX_CONFIDENCE_HIGH ? 'ok' : 'high';
+}
+
+/**
+ * Whether a solo analysis suggests the audio is a full song, so the caller may offer (or just run) the same audio again
+ * in mix mode. The solo analysis flags 'accompaniment' on about 78% of mixes with no false alarm on 14 solo or speech
+ * clips; vocal-forward and EDM mixes are the usual misses, which is why there is also a manual full-song choice.
+ */
+export function suggestsFullSong(analysis: Pick<VoiceAnalysis, 'mode' | 'issues'>): boolean {
+  return analysis.mode !== 'mix' && (analysis.issues ?? []).includes('accompaniment');
+}
+
+/** Warnings and issue codes for a mix-mode analysis from the extractor's clip confidence and the singing it found. */
+export function mixReport(input: { confidence: number; voicedSec: number }): { warnings: string[]; issues: AnalysisIssue[] } {
+  const warnings: string[] = [];
+  const issues: AnalysisIssue[] = [];
+  const { confidence, voicedSec } = input;
+  if (!(voicedSec >= WARN_MIN_VOICED_SEC)) {
+    issues.push('too-little-singing');
+    warnings.push(
+      voicedSec < 0.2
+        ? 'No lead vocal could be followed in this clip. It may be an instrumental section, or the voice is too far below the band. Try a section with continuous singing, or use a vocal-only file.'
+        : `Only ${fmt(voicedSec, 1)} s of lead vocal could be followed, which is too little to compare. Pick a section with continuous singing, or use a vocal-only file.`,
+    );
+    return { warnings, issues };
+  }
+  const band = mixConfidenceBand(confidence);
+  if (band === 'poor') {
+    warnings.push(
+      'The lead vocal was very hard to follow in this song, so treat the contour as a rough guide and check it against the music. A vocal-only file (a vocal stem or an a cappella section) works far better.',
+    );
+  } else if (band === 'low') {
+    warnings.push(
+      'The lead vocal was hard to follow in places, so check the contour against the song before trusting it. A section where the voice is more forward, or a vocal-only file, works better.',
+    );
+  }
+  return { warnings, issues };
 }

@@ -1,14 +1,16 @@
 // Settings: voice type (drives the passaggio), tuning, AI coach key/model, theme, clear data.
 
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useContext, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { DEFAULT_AI_MODEL } from '../../coach/ai';
 import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
+import { TrainerContext } from '../../state/trainerContext';
 import { A4_MAX, A4_MIN, parseA4 } from '../components/format';
 import type { ThemePref } from '../../state/theme';
 import type { VoiceType } from '../../types';
 import { MicrophoneSetting, StoragePanel } from '../components/StoragePanel';
+import { TrainerSettings } from '../components/TrainerSettings';
 
 const VOICE_TYPES = Object.keys(VOICE_TYPE_LABELS) as VoiceType[];
 const THEMES: { value: ThemePref; label: string }[] = [
@@ -19,6 +21,7 @@ const THEMES: { value: ThemePref; label: string }[] = [
 
 export function SettingsPage() {
   const app = useApp();
+  const trainer = useContext(TrainerContext);
   const { settings } = app.state;
   const ids = { voice: useId(), a4: useId(), key: useId(), model: useId() };
   const [a4Draft, setA4Draft] = useState(String(settings.a4Hz));
@@ -264,6 +267,8 @@ export function SettingsPage() {
         </fieldset>
       </section>
 
+      <TrainerSettings />
+
       <StoragePanel />
 
       <section className="settings-section" aria-labelledby="data-heading">
@@ -271,14 +276,15 @@ export function SettingsPage() {
           Your data
         </h2>
         <p className="settings-text">
-          Recordings are analysed on this device and are not stored: only the scores you save to Progress
+          Recordings of your takes are analysed on this device and are not stored: only the scores you save to Progress
           {sessionsCount ? (
             <>
               {' '}
               (<span className="num">{sessionsCount}</span> saved)
             </>
           ) : null}
-          , your settings and your API key are kept, in this browser’s local storage.
+          , your settings and your API key are kept, in this browser’s local storage. Clips you add to the Trainer, their phrases and practice scores are kept on this device too
+          (see Trainer above).
         </p>
         {!confirmClear ? (
           <button
@@ -295,7 +301,7 @@ export function SettingsPage() {
         ) : (
           <div className="confirm" role="group" aria-labelledby="confirm-text">
             <p id="confirm-text">
-              Delete your saved progress, settings and API key from this browser, and close the current take? This cannot be undone.
+              Delete your saved progress, settings and API key from this browser, close the current take{trainer ? ', and delete every clip, phrase and practice score in the Trainer' : ''}? This cannot be undone.
             </p>
             <div className="button-row">
               <button
@@ -303,6 +309,8 @@ export function SettingsPage() {
                 className="button button--danger"
                 onClick={() => {
                   app.clearAllData();
+                  // The Trainer's library is its own store; a failure here is reported on the Trainer section's own delete.
+                  void trainer?.clearAll().catch(() => undefined);
                   setConfirmClear(false);
                   setCleared(true);
                 }}

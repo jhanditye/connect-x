@@ -1,0 +1,29 @@
+{
+  "name": "mimic-ios-native",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Capacitor wrapper that runs the Mimic Vocal Coach web app as a local, offline iPhone app.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "sync": "cap sync ios && node scripts/postprocess-ios.mjs",
+    "prepare:ios": "npm run build:web && npm run sync",
+    "open": "cap open ios",
+    "ios": "npm run prepare:ios && npm run open",
+    "postprocess": "node scripts/postprocess-ios.mjs",
+    "icons": "node scripts/render-icon.mjs",
+    "verify": "node scripts/verify-project.mjs",
+    "zip": "node scripts/make-zip.mjs"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.5.3",
+    "@capacitor/ios": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3",
+    "typescript": "~5.9.3"
+  }
+}

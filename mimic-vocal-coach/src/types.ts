@@ -17,6 +17,12 @@ export interface AnalysisOptions {
   voiceType: VoiceType;
   /** Reference tuning, default 440. */
   a4Hz?: number;
+  /**
+   * 'solo' (default, absent = solo): one voice on its own, the normal pipeline. 'mix': a full song with instruments;
+   * the lead-vocal melody is extracted first and only pitch, timing, vibrato and loudness contour are measured
+   * (see analysis/mixMode.ts).
+   */
+  mode?: 'solo' | 'mix';
 }
 
 /** Passaggio zone for a voice type, as MIDI numbers. Frames at or above `lowMidi` count as "upper range". */
@@ -150,6 +156,11 @@ export type AnalysisIssue = 'too-little-singing' | 'accompaniment' | 'speech-lik
 
 export interface VoiceAnalysis {
   version: 1;
+  /**
+   * How this analysis was made. Absent = 'solo'. 'mix' = lead-vocal extraction from a full song: the tone fields
+   * (`tone`, `registerShares`, the tone and register entries of `style`, `onsets`) are empty and must not be shown or scored.
+   */
+  mode?: 'solo' | 'mix';
   durationSec: number;
   /** Sample rate the analysis ran at (after resampling). */
   sampleRate: number;
@@ -390,4 +401,379 @@ export interface AppSettings {
   /** User-supplied Anthropic API key for the optional AI coach; stored only in this browser. */
   anthropicApiKey: string | null;
   aiModel: string;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Clip trainer: stored clips, phrases and attempts (see src/trainer/README.md)
+
+/** 'solo' = isolated vocal or a cappella; 'mix' = a full song mix (vocal with instruments). */
+export type ClipKind = 'solo' | 'mix';
+/** How the clip's pitch/tone were measured: the normal single-voice analysis, or melody extraction from a mix (pitch and timing only). */
+export type ClipAnalysisKind = 'solo' | 'mix-melody';
+
+/** 'sing-along': the guide plays while you sing (headphones). 'turn-taking': listen, then sing. */
+export type PlayMode = 'sing-along' | 'turn-taking';
+/** 'free': a constant detune is removed and any key is fine. 'locked': keep the detune (a guide you can hear is audible). */
+export type KeyMode = 'free' | 'locked';
+
+export interface ClipAudioInfo {
+  /** 'mix' = what the singer hears and follows; 'vocal' = an isolated stem used for analysis when there is one. */
+  kind: 'mix' | 'vocal';
+  /** Stored sample rate (the decoded rate, capped at 48000). Mono Int16 PCM in chunks of `chunkFrames`. */
+  sampleRate: number;
+  frames: number;
+  chunkFrames: number;
+}
+
+export interface ClipAnalysisSummary {
+  analysisVersion: number;
+  /** Voice type the clip was analysed as (coach/measured.ts ARTIST_VOICE_TYPE) and the tuning used. */
+  voiceType: VoiceType;
+  a4Hz: number;
+  durationSec: number;
+  voicedSec: number;
+  style: StyleVector;
+  pitch: { medianMidi: number | null; lowMidi: number | null; highMidi: number | null; tessituraLowMidi: number | null; tessituraHighMidi: number | null };
+  issues: AnalysisIssue[];
+  /** referenceUsability(): can this clip contribute to a singer's measured targets? */
+  usableAsTarget: boolean;
+  unusableReason: string | null;
+}
+
+export interface PhraseSummary {
+  durationSec: number;
+  voicedSec: number;
+  medianMidi: number | null;
+  lowMidi: number | null;
+  highMidi: number | null;
+  noteCount: number;
+  hasVibrato: boolean;
+  /** null for mix-melody clips (tone is not measured there). */
+  style: StyleVector | null;
+}
+
+export interface PhraseSrsState {
+  /** 0 = not mastered; 1..6 = rung on the review ladder (1, 3, 7, 14, 30, 60 days). */
+  rung: number;
+  dueAt: number | null;
+  masteredAt: number | null;
+}
+
+export interface PhraseStats {
+  attempts: number;
+  fullSpeedAttempts: number;
+  best: number | null;
+  last: number | null;
+  /** Overall scores of the last five attempts, oldest first. */
+  recent: number[];
+  lastAt: number | null;
+}
+
+export interface PhraseRecord {
+  id: string;
+  /** 0-based position in the clip. */
+  index: number;
+  /** Padded playback window, seconds in the clip. */
+  start: number;
+  end: number;
+  /** First/last sung time inside the window. */
+  voicedStart: number;
+  voicedEnd: number;
+  source: 'auto' | 'user';
+  label: string;
+  lyrics: string;
+  /** Fragments and phrases the user hid; excluded from practice queues. */
+  hidden: boolean;
+  summary: PhraseSummary | null;
+  /** Transposition (semitones) of the last scored attempt; passed to compareToReference as `transposeHint`. */
+  keyHint: number | null;
+  /** Preferred practice speed, 0.5..1. */
+  rate: number;
+  srs: PhraseSrsState;
+  stats: PhraseStats;
+}
+
+export interface ClipRecord {
+  /** Record schema version (see storage/clips.ts migrations). */
+  schema: 1;
+  id: string;
+  title: string;
+  /** Builtin singer id, or null for "someone else" (then `singerLabel` names them). */
+  singerId: string | null;
+  singerLabel: string;
+  sourceFileName: string;
+  sourceBytes: number;
+  /** audio/pcm.ts fingerprint: re-links a re-imported file to this clip if the audio was lost. */
+  fingerprint: string;
+  addedAt: string;
+  updatedAt: string;
+  durationSec: number;
+  kind: ClipKind;
+  analysisKind: ClipAnalysisKind;
+  audio: { mix: ClipAudioInfo; vocal: ClipAudioInfo | null };
+  /** True after a library import (JSON) that carried no audio; the clip is listed but needs its file again. */
+  audioMissing: boolean;
+  analysis: ClipAnalysisSummary;
+  phrases: PhraseRecord[];
+  notes: string;
+  tags: string[];
+  difficulty: 1 | 2 | 3 | null;
+  /** The clip's measurements are part of the singer's measured targets (MeasuredClip with the same id). */
+  contributesToSinger: boolean;
+  /** When the user confirmed the file is theirs. */
+  ownedConfirmedAt: string;
+}
+
+export interface AttemptNoteSummary {
+  /** Index into the reference phrase's notes. */
+  i: number;
+  refName: string;
+  userName: string | null;
+  cents: number | null;
+  onsetMs: number | null;
+  durationDeltaMs: number | null;
+  flags: string[];
+}
+
+export interface AttemptRecord {
+  id: string;
+  clipId: string;
+  phraseId: string;
+  /** ms since epoch. */
+  at: number;
+  mode: PlayMode;
+  keyMode: KeyMode;
+  /** Playback speed of the reference, 0.5..1. */
+  rate: number;
+  transposeSemitones: number;
+  /** The scorer's sub-scores (0..100); `overall` is the one number shown. null = not measured. */
+  scores: { overall: number; pitch: number; timing: number | null; tone: number | null; expression: number | null };
+  /** How far the scores can be trusted (AttemptScore.trust.level). */
+  trust: 'ok' | 'caution' | 'invalid';
+  coverage: number;
+  wrongNotes: number;
+  syncOffsetMs: number | null;
+  tempoRatio: number | null;
+  /** 'wired' | 'bluetooth' | 'builtin' | 'unknown' (from the input device label) - for latency statistics. */
+  route: string;
+  notes: AttemptNoteSummary[];
+  /** The attempt's own StyleVector (tone over time); numbers only. */
+  style: StyleVector;
+  tone: { key: string; diff: number }[];
+  fixIds: string[];
+  analysisVersion: number;
+  /** True when "keep my recordings" was on and a rolling copy exists in the attemptAudio store. */
+  hasAudio: boolean;
+}
+
+export interface LibraryExport {
+  format: 'mimic-library';
+  version: 1;
+  exportedAt: string;
+  /** Audio is never exported. */
+  clips: ClipRecord[];
+  attempts: AttemptRecord[];
+  calibration: Record<string, number>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Attempt scoring: the score authority (trainer/score/score.ts, scoreAttempt)
+
+export type SkillKey = 'pitch' | 'timing' | 'tone' | 'expression';
+
+export interface ScoreOptions {
+  /** Default 'turn-taking' (the user sings after listening). In 'sing-along' the lag is reported against the schedule. */
+  mode?: PlayMode;
+  /** Default 'free'. */
+  keyMode?: KeyMode;
+  /** Playback rate of the reference (0.5..1.5, default 1). The expected user tempo ratio is 1 / rate. */
+  rate?: number;
+  /** Sing-along only: where reference time 0 was scheduled in the attempt's own clock (s), and the known system latency (ms). */
+  refStartInCaptureSec?: number;
+  latencyMs?: number;
+  /** Override the skill weights (they are re-normalised over the skills that could be measured). */
+  weights?: Partial<Record<SkillKey, number>>;
+  /** Typical attempt-minus-reference offsets of THIS user's mic/room (see estimateToneBias), subtracted before judging tone. */
+  toneBias?: Partial<Record<'breathiness' | 'brightness' | 'rasp', number>>;
+  /** Treat the phrase as speech-like regardless of the reference's `issues`. */
+  forceSpeech?: boolean;
+  /** Inject a cached/alternative aligner (tests, performance). Defaults to compareToReference. */
+  compare?: (attempt: VoiceAnalysis, ref: VoiceAnalysis) => ReferenceComparison;
+}
+
+export interface ScoreComponent {
+  id: string;
+  skill: SkillKey;
+  label: string;
+  /** 0..100, null when it could not be measured (and is then left out of the skill's average). */
+  score: number | null;
+  /** Weight inside the skill (before re-normalisation over measured components). */
+  weight: number;
+  /** The measured quantity in plain units, e.g. '22 cents mean abs', for display. */
+  value?: string;
+  /** Number of observations behind the score (notes, frames/10, pairs). */
+  n?: number;
+}
+
+/** Per-note findings. The scorer emits all of them; the note table (NoteCompare) uses the same words. */
+export type NoteFlag =
+  | 'ok' | 'flat' | 'sharp' | 'wrong-note' | 'octave-displaced' | 'early' | 'late' | 'short' | 'long'
+  | 'missed' | 'merged' | 'split' | 'ornament';
+
+export interface NoteScore {
+  refIndex: number;
+  refStart: number;
+  refEnd: number;
+  /** Reference note in the user's key (after the transposition), e.g. "G3". */
+  refName: string;
+  matched: boolean;
+  userIndex: number | null;
+  userName: string | null;
+  /** Signed cents after the key shift and constant detune were removed (+ = sharp). */
+  cents: number | null;
+  /** Unfolded distance of the attempt's note from the reference note (in the user's key), semitones: + = above. Shows an octave-displaced or far-off note as it is. */
+  semitones: number | null;
+  pitchScore: number | null;
+  /** Signed ms after the global lag and tempo were removed (+ = late). */
+  onsetMs: number | null;
+  onsetScore: number | null;
+  /** user duration / (tempo ratio x reference duration). */
+  durRatio: number | null;
+  durScore: number | null;
+  /** (user level - phrase median) - (ref level - phrase median), dB. */
+  levelDeltaDb: number | null;
+  refVibrato: boolean;
+  userVibrato: boolean | null;
+  /** Contour (frame-level, vibrato removed) score of this note, 0..100. */
+  contourScore: number | null;
+  /** Ornament / run note: judged with wider tolerance and less weight. */
+  ornament: boolean;
+  flags: NoteFlag[];
+}
+
+/** One ranked "what to fix first" item from the scorer. */
+export interface Fix {
+  id: string;
+  skill: SkillKey;
+  title: string;
+  /** What to do, in the app's safe-coaching voice. */
+  advice: string;
+  /** Estimated points the overall score would gain if this were fixed (0..100 scale). */
+  gainPoints: number;
+  /** Reference note indices involved. */
+  notes: number[];
+}
+
+export interface AttemptScore {
+  status: 'ok' | 'low-evidence' | 'no-match';
+  /** 0..100 incl. the completeness factor; null when status is 'low-evidence'. */
+  overall: number | null;
+  /** Same, judged only on the part that was sung. */
+  overallOnSung: number | null;
+  skills: Record<SkillKey, number | null>;
+  /** Effective weights after re-normalising over measured skills (sum 1). */
+  weights: Record<SkillKey, number>;
+  components: ScoreComponent[];
+  /** Share of the reference's singing time that has a matched note, 0..1. */
+  coverage: number;
+  /** 1 when coverage >= 0.9, falling linearly to 0 at coverage 0. */
+  completeness: number;
+  kind: 'sung' | 'speech-like';
+  /** Semitones the attempt is above the reference (integer, from compareToReference). */
+  transposeSemitones: number;
+  /** Constant detune left after the key shift (cents); removed in 'free' key mode. */
+  keyOffsetCents: number;
+  timing: {
+    /** Global lag of the attempt behind the reference, ms (sing-along: against the schedule, minus latencyMs). null in turn-taking. */
+    lagMs: number | null;
+    /** User time per reference time divided by the expected value (1.0 = same tempo; > 1 slower/dragged). null when unmeasurable. */
+    tempoRatio: number | null;
+    onsetMadMs: number | null;
+  };
+  /** Time span of the attempt that was matched, s (the rest was ignored: lead-in, talking, tail). */
+  matchedSpan: { start: number; end: number } | null;
+  perNote: NoteScore[];
+  /** Plain-English findings, most important first. */
+  notes: string[];
+  fixes: Fix[];
+  trust: { level: 'ok' | 'caution' | 'invalid'; reasons: string[] };
+  diagnostics: Record<string, number | string | boolean | null>;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Phrase comparison: what the practice screen shows for one attempt (trainer/compare.ts, comparePhrase)
+//
+// ONE overall score per attempt: `score` (the scorer's AttemptScore) is the authority for the overall number and the four
+// sub-scores. `notes` (the per-note table), the sync/tempo model and `tone` (plain-words findings) come from the comparison
+// layer. `scores` is a flat copy of the score's numbers for convenience; never compute a second overall.
+
+export interface PlayTiming {
+  mode: PlayMode;
+  /** Playback rate of the reference (0.5..1). */
+  rate: number;
+  /** Where reference sample 0 (start of the phrase window) was scheduled, in the attempt's own clock (s). Sing-along only. */
+  refStartInCaptureSec?: number;
+  keyMode: KeyMode;
+  /** Sing-along: known system latency in ms (click probe), subtracted from the reported lag. */
+  latencyMs?: number;
+}
+
+export interface NoteCompare {
+  refIndex: number;
+  refStart: number;
+  refEnd: number;
+  /** Reference note in the singer's key (after the transposition), e.g. "G3". */
+  refName: string;
+  matched: boolean;
+  /** Note the attempt held over this reference note, e.g. "E3". */
+  userName: string | null;
+  /** Signed cents, + = sharp, constant detune removed in 'free' key mode. */
+  cents: number | null;
+  /** + = late, after the sync offset (and drift, in turn-taking) is removed. null for merged / unmeasurable onsets. */
+  onsetMs: number | null;
+  /** + = held longer than the reference at the playback rate. */
+  durationDeltaMs: number | null;
+  refVibrato: boolean;
+  userVibrato: boolean | null;
+  /** (attempt level relative to its phrase median) minus (reference's), dB; + = louder than the original. */
+  levelDeltaDb: number | null;
+  refRegister: string | null;
+  userRegister: string | null;
+  /** Seconds from note start to vibrato start, attempt minus reference; + = later. */
+  vibratoStartDeltaSec: number | null;
+  flags: NoteFlag[];
+}
+
+/** A tone difference worth telling the singer about (attempt minus reference). */
+export interface ToneFinding {
+  key: 'breathiness' | 'brightness' | 'rasp' | 'vibratoPresence' | 'vibratoRateHz' | 'vibratoExtentCents' | 'vibratoStart' | 'onset' | 'register' | 'level';
+  /** Signed difference in the key's own unit (index, Hz, cents, seconds, dB); 0 for onset/register. */
+  diff: number;
+  /** How far past its threshold, in thresholds (1 = just noticeable). Ranks the fixes. */
+  strength: number;
+  detail?: string;
+}
+
+export interface PhraseComparison {
+  transposeSemitones: number;
+  /** Constant detune left after the integer transposition (cents), median over notes. */
+  biasCents: number;
+  syncOffsetMs: number | null;
+  syncConfidence: 'high' | 'low' | 'none';
+  /** Sing-along: attempt clock / playback clock (>1 = dragged). Turn-taking: the singer's own tempo vs the reference. */
+  tempoRatio: number | null;
+  /** The per-note table (pitch, onset, length, level, vibrato per reference note). */
+  notes: NoteCompare[];
+  extraNotes: number;
+  /** Share of reference singing time the attempt covers (the scorer's `coverage`). */
+  coverage: number;
+  withinFifty: number;
+  tone: ToneFinding[];
+  /** The score authority's full result (sub-scores, ranked fixes, trust, per-note scores). */
+  score: AttemptScore;
+  /** Flat copy of the authority's numbers: `overall` is 0 when status is 'low-evidence'. */
+  scores: { overall: number; pitch: number; timing: number | null; tone: number | null; expression: number | null };
+  base: ReferenceComparison;
+  /** Sing-along only: the attempt follows the playback too closely to be a human (speaker bleed). */
+  bleedSuspect: boolean;
 }

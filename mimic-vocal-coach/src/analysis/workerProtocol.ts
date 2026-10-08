@@ -6,8 +6,10 @@ import { analyzeTake } from './analyze';
 
 export interface AnalyzeRequest {
   type: 'analyze';
+  /** Mono samples at any rate. For a full song (opts.mode 'mix') this is the mono mix; a second channel is not carried yet. */
   samples: Float32Array;
   sampleRate: number;
+  /** `opts.mode` 'mix' runs the full-song analysis (analysis/mixMode.ts); absent or 'solo' the normal one. */
   opts: AnalysisOptions;
 }
 

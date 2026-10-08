@@ -1,0 +1,354 @@
+/* Trainer diagnostics. Colours come only from tokens.css; 44px touch targets, 16px inputs, no horizontal scroll at 320px
+   (long report lines wrap inside their own box), visible focus, no motion beyond the meter width. */
+
+.td {
+  display: block;
+  max-width: 760px;
+  margin: 0 auto;
+}
+.td-head {
+  margin-bottom: var(--space-4);
+}
+.td-live {
+  min-height: 1.4em;
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.td-section {
+  padding: var(--space-5) 0;
+  border-top: 1px solid var(--line);
+}
+.td-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+}
+.td-num {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: var(--fs-sm);
+  font-family: var(--font-mono);
+}
+
+/* ------------------------------------------------------------------ results */
+
+.td-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.td-row {
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ink-3);
+  border-radius: var(--radius-sm);
+}
+.td-row--ok {
+  border-left-color: var(--good);
+}
+.td-row--warn {
+  border-left-color: var(--warn);
+}
+.td-row--fail {
+  border-left-color: var(--bad);
+}
+.td-row--info {
+  border-left-color: var(--accent);
+}
+.td-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+}
+.td-row-title {
+  font-family: var(--font-body);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.td-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: 999px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.td-status--ok {
+  background: color-mix(in srgb, var(--good) 18%, var(--surface));
+}
+.td-status--warn {
+  background: color-mix(in srgb, var(--warn) 22%, var(--surface));
+}
+.td-status--fail {
+  background: color-mix(in srgb, var(--bad) 20%, var(--surface));
+}
+.td-status--info {
+  background: var(--accent-soft);
+}
+.td-row-summary {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.td-numbers {
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+}
+.td-numbers summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+.td-numbers summary:focus-visible,
+.td-preview summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.td-numbers dl {
+  margin: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+.td-numbers dl div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+.td-numbers dt {
+  flex: 0 0 12em;
+  max-width: 100%;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.td-numbers dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------------ the two interactive tests */
+
+.td-card {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.td-card-title {
+  margin: 0 0 var(--space-1);
+  font-family: var(--font-body);
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+.td-meter-wrap {
+  margin-top: var(--space-3);
+}
+.td-meter,
+.td-progress {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.td-progress {
+  height: 6px;
+  margin-top: var(--space-2);
+}
+.td-meter-bar,
+.td-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .td-meter-bar,
+  .td-progress-bar {
+    transition: width 80ms linear;
+  }
+}
+.td-meter-text {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+/* ------------------------------------------------------------------ the checklist */
+
+.td-checklist {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-4);
+}
+.td-item {
+  margin: 0;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.td-item legend {
+  /* Floated so a long title wraps inside the card like a heading instead of straddling its top border. */
+  float: left;
+  width: 100%;
+  padding: 0;
+  margin: 0 0 var(--space-2);
+  font-weight: 700;
+  font-size: var(--fs-md);
+}
+.td-item legend + * {
+  clear: both;
+}
+.td-needs {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.td-steps-list {
+  margin: 0 0 var(--space-2);
+  padding-left: 1.3em;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+.td-steps-list li + li {
+  margin-top: var(--space-1);
+}
+.td-expect {
+  margin: 0 0 var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.td-answers {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.td-answer {
+  position: relative;
+  min-width: 0;
+}
+.td-answer input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.td-answer span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: center;
+}
+.td-answer input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.td-answer input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ the report */
+
+.td-notes {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-md); /* 16px: iOS does not zoom the page when this is focused */
+  resize: vertical;
+}
+.td-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-height: 44px;
+  margin-top: var(--space-3);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+.td-check input {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.td-preview {
+  margin-top: var(--space-3);
+}
+.td-preview summary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.td-report {
+  margin: 0;
+  padding: var(--space-3);
+  max-height: 24rem;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.td-report:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

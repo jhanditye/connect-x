@@ -1,5 +1,5 @@
 // Web Worker entry: runs analyzeTake off the main thread.
-// in:  { type: 'analyze', samples: Float32Array, sampleRate: number, opts: AnalysisOptions }
+// in:  { type: 'analyze', samples: Float32Array, sampleRate: number, opts: AnalysisOptions }   (opts.mode 'mix' = full song)
 // out: { type: 'progress', value: number } | { type: 'result', analysis: VoiceAnalysis } | { type: 'error', message: string }
 
 import { runAnalysisJob, type AnalyzeRequest, type WorkerResponse } from './workerProtocol';

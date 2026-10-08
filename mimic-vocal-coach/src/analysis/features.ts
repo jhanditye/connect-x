@@ -259,6 +259,15 @@ export function despikePitch(f0: Float64Array, voiced: Uint8Array): { f0: Float6
 
 // ---------------------------------------------------------------------------------------------
 
+export interface FrameTrackOptions {
+  /**
+   * Measure the per-frame voice-quality features (default true). With `false` only the pitch-derived fields (f0, midi,
+   * voiced, periodicity, rmsDb) are filled and every spectral field stays NaN: this is what mix mode (analysis/mixMode.ts)
+   * uses, because a song mix has no clean voice spectrum to measure. `x` and `sampleRate` are then not read.
+   */
+  spectral?: boolean;
+}
+
 /**
  * Builds FrameFeatures for every pitch-track frame and measures voice quality on voiced frames.
  * `x` must be the signal the track was computed from. Register labels are filled in later.
@@ -270,7 +279,9 @@ export function buildFrameTrack(
   track: PitchTrack,
   a4Hz: number,
   onProgress?: (fraction: number) => void,
+  opts: FrameTrackOptions = {},
 ): FrameTrack {
+  const spectral = opts.spectral !== false;
   const n = track.f0.length;
   const clean = despikePitch(track.f0, track.voiced);
   const frames: FrameFeatures[] = new Array(n);
@@ -301,7 +312,7 @@ export function buildFrameTrack(
       hnrDb: NaN,
       register: null,
     };
-    if (voiced) {
+    if (voiced && spectral) {
       const centre = Math.round(t * sampleRate);
       const s = analyzeSpectralFrame(x, sampleRate, centre, f0);
       frame.h1h2Db = s.h1h2Db;

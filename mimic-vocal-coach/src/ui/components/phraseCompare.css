@@ -1,0 +1,256 @@
+/* The attempt result pieces: note table (nt-), tone panel (tp-) and fix cards (fc-). Colours come only from tokens.css (directly or
+   through color-mix). 44px touch targets, no horizontal page scroll down to 320px, visible focus, reduced motion respected. */
+
+/* ---------------------------------------------------------------- note table */
+
+.nt {
+  min-width: 0;
+}
+.nt-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.nt-h {
+  padding: var(--space-1) 2px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-align: left;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--line);
+}
+.nt-h--note {
+  width: 22%;
+}
+.nt-row {
+  border-bottom: 1px solid var(--line);
+}
+.nt-row--selected {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.nt-name {
+  padding: 0;
+  text-align: left;
+  font-weight: 400;
+}
+.nt-button,
+.nt-static {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-1);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+}
+.nt-button {
+  cursor: pointer;
+}
+.nt-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.nt-button[aria-pressed='true'] .nt-note {
+  color: var(--accent);
+}
+.nt-index {
+  flex: none;
+  min-width: 1.2em;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.nt-note {
+  font-weight: 700;
+}
+.nt-cell {
+  padding: 4px 2px;
+  vertical-align: middle;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.nt-figure {
+  display: block;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+.nt-word {
+  display: block;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.nt-word--ok {
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.nt-cell--warn {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--warn);
+  padding-left: 6px;
+}
+.nt-cell--warn .nt-word {
+  color: var(--ink);
+}
+.nt-cell--bad {
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+  box-shadow: inset 3px 0 0 var(--bad);
+  padding-left: 6px;
+}
+.nt-cell--bad .nt-word {
+  color: var(--ink);
+}
+.nt-foot {
+  margin-top: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  max-width: 62ch;
+}
+
+/* ---------------------------------------------------------------- tone panel */
+
+.tp {
+  min-width: 0;
+}
+.tp-title {
+  font-family: var(--font-body);
+  font-size: var(--fs-md);
+  font-weight: 700;
+  margin-bottom: var(--space-2);
+}
+.tp-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.tp-list--detail {
+  opacity: 0.9;
+}
+.tp-item {
+  min-width: 0;
+}
+.tp-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.tp-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.tp-size {
+  font-size: var(--fs-xs);
+  color: var(--ink-2);
+}
+.tp-value {
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}
+.tp-text {
+  margin: 2px 0 var(--space-1);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+.tp-sub {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.tp-quiet {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  max-width: 60ch;
+}
+.tp-foot {
+  margin-top: var(--space-3);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  max-width: 62ch;
+}
+.tp-meter {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(40px, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.tp-meter-end--high {
+  text-align: right;
+}
+.tp-meter-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+.tp-meter-mid {
+  position: absolute;
+  left: 50%;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink-3);
+}
+.tp-meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  background: var(--accent);
+}
+.tp-meter-fill--high {
+  left: 50%;
+}
+.tp-meter-fill--low {
+  right: 50%;
+}
+
+/* ---------------------------------------------------------------- fix cards */
+
+.fc {
+  min-width: 0;
+}
+.fc-list {
+  display: grid;
+  gap: var(--space-3);
+}
+.fc-actions {
+  display: flex;
+  margin-top: var(--space-2);
+}
+.fc-loop {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.fc-empty {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nt *,
+  .tp *,
+  .fc * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

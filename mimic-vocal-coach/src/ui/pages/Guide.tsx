@@ -1,10 +1,12 @@
 // Guide: plain-language background on mixed voice, what the app measures and its limits, how to
 // record, how the singer profiles were made, vocal health and privacy.
 
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { passaggioFor, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
+import { parseSection } from '../../state/routing';
+import { IMPORT_FORMATS, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
 import type { VoiceType } from '../../types';
 
 const SECTIONS = [
@@ -12,6 +14,11 @@ const SECTIONS = [
   { id: 'guide-passaggio', title: 'The passaggio' },
   { id: 'guide-measures', title: 'What Mimic measures' },
   { id: 'guide-recording', title: 'Recording a good take' },
+  { id: 'guide-vocal', title: 'Getting a vocal onto your phone' },
+  { id: 'guide-stems', title: 'Full songs and vocal stems' },
+  { id: 'guide-modes', title: 'Sing along, or listen then sing' },
+  { id: 'guide-headphones', title: 'Headphones and AirPods' },
+  { id: 'guide-trainer-scores', title: 'What the Trainer scores, and what it cannot hear' },
   { id: 'guide-profiles', title: 'How the singer profiles were made' },
   { id: 'guide-health', title: 'Look after your voice' },
   { id: 'guide-privacy', title: 'Privacy' },
@@ -92,6 +99,20 @@ function jump(id: string) {
 export function GuidePage() {
   const app = useApp();
   const voiceType = app.state.settings.voiceType;
+
+  // A link such as #guide/guide-vocal opens the guide at that section.
+  useEffect(() => {
+    const open = () => {
+      const id = parseSection(window.location.hash);
+      if (id && document.getElementById(id)) jump(id);
+    };
+    const raf = requestAnimationFrame(open);
+    window.addEventListener('hashchange', open);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('hashchange', open);
+    };
+  }, []);
 
   return (
     <div className="page page--guide">
@@ -224,6 +245,136 @@ export function GuidePage() {
           </ul>
         </section>
 
+        <section id="guide-vocal" aria-labelledby="guide-vocal-h">
+          <h2 id="guide-vocal-h" tabIndex={-1}>Getting a vocal onto your phone</h2>
+          <p>
+            The Trainer works on audio files you already have. Mimic never downloads music, never searches for it and never uploads it:
+            you choose a file from your own phone, it is read here, and it is stored only on this device. Use music you own or have the
+            right to practise with.
+          </p>
+          <ul>
+            <li>
+              <strong>The Files app.</strong> Anything in On My iPhone or iCloud Drive can be picked, and so can files from Dropbox or
+              Google Drive that appear in Files. AirDrop a file from a Mac and save it to Files. In Mimic, open the Trainer, tap{' '}
+              <em>Add clips</em> and choose one or several files.
+            </li>
+            <li>
+              <strong>Voice Memos.</strong> Open the memo, tap Share, then Save to Files. Then add it from Files.
+            </li>
+            <li>
+              <strong>Purchased music without copy protection.</strong> Downloads from stores that sell DRM-free files, CD rips and files
+              from your computer all work. {PROTECTED_HELP}
+            </li>
+            <li>
+              <strong>Vocal stems.</strong> {STEM_HELP}
+            </li>
+            <li>
+              <strong>Sound from a phone video.</strong> {VIDEO_HELP}
+            </li>
+          </ul>
+          <p>
+            Mimic cannot appear in the iPhone Share sheet (a web app cannot), which is why the route is always Files, then <em>Add clips</em>.
+            It reads {IMPORT_FORMATS} Shorter is better: pick the part you want to learn, a verse and a chorus rather than the whole
+            track, and trim the clip when you add it.
+          </p>
+        </section>
+
+        <section id="guide-stems" aria-labelledby="guide-stems-h">
+          <h2 id="guide-stems-h" tabIndex={-1}>Full songs and vocal stems</h2>
+          <p>
+            An <strong>isolated vocal</strong> (a stem) or an a cappella section is the best material. Mimic can follow the voice
+            exactly, so it can judge pitch, timing, tone (airy, bright, rough) and vibrato, and the clip can also help set a singer’s measured
+            targets in the Studio.
+          </p>
+          <p>
+            A <strong>whole song</strong> works too, with limits. Mimic follows the lead vocal through the band by listening for the
+            steadiest melody line, and then judges pitch, timing, vibrato and loudness shape. It does <em>not</em> compare tone for a full
+            song: the instruments change the sound, so an airy or bright reading would mostly describe the band. The melody it finds can be
+            wrong where backing vocals, a doubled guitar line or a loud bass take over, so in the review screen play the detected melody and
+            check that it follows the singing before you save. A full song cannot count toward a singer’s measured targets.
+          </p>
+          <p>
+            If you have the song and also its vocal-only file, add the song and then the vocal file as its stem: you practise along with the
+            whole song while Mimic reads the voice from the stem.
+          </p>
+        </section>
+
+        <section id="guide-modes" aria-labelledby="guide-modes-h">
+          <h2 id="guide-modes-h" tabIndex={-1}>Sing along, or listen then sing</h2>
+          <p>
+            <strong>Sing along</strong> plays the phrase after a short count-in while you sing with it. Your timing is judged against the
+            track&apos;s clock, which is the closest thing to singing with the record. It needs headphones: through the speaker the microphone
+            hears the guide as well, and the score can end up describing the playback instead of you. Mimic starts in the other mode when no
+            headphones look connected, and asks before it lets you sing along without them.
+          </p>
+          <p>
+            <strong>Listen, then sing</strong> plays the phrase and then waits for your turn. There is no shared clock, so timing is judged
+            against your own pace: do the notes come at an even speed, and in the right order and lengths relative to each other? It works
+            with the speaker, and it is a good way to learn a new phrase before you sing it in time.
+          </p>
+          <p>
+            You can slow the phrase to 90, 75 or 60 percent (50 percent sounds rough, because stretching sound that much leaves artefacts)
+            and loop one note or a stretch by tapping it. <em>My key</em> plays the guide in the key you sang last time; the formants move
+            with it, so it sounds like a different singer, which is fine for a guide. Slow and half-sung takes build skill but do not count
+            toward mastering a phrase: that takes three good tries at full speed.
+          </p>
+        </section>
+
+        <section id="guide-headphones" aria-labelledby="guide-headphones-h">
+          <h2 id="guide-headphones-h" tabIndex={-1}>Headphones and AirPods</h2>
+          <ul>
+            <li>
+              Wired headphones or earbuds are the most dependable: no delay to speak of, and the iPhone&apos;s own microphone stays in use.
+            </li>
+            <li>
+              <strong>AirPods and other Bluetooth headphones</strong> change mode the moment an app opens their microphone: they drop to
+              phone-call quality (mono, 8 to 24 kHz) and add delay. Choose the iPhone&apos;s own microphone (Settings, under Your voice, or the
+              button the practice screen offers) so the headphones only play the guide.
+            </li>
+            <li>
+              iPhone does not say where sound is going, so Mimic guesses from the name of the microphone it is given. When it cannot tell,
+              it says so and asks before you sing along.
+            </li>
+            <li>
+              Every device adds some delay between the guide and what the microphone hears. Mimic measures it from your singing and shows it
+              as the <em>sync offset</em>; it is not counted against you. If it is much more than 400 ms, switch to wired headphones or to
+              Listen, then sing.
+            </li>
+            <li>
+              If you hear nothing, check the volume and the ring/silent switch: the phone can silence a web page&apos;s sound. A phone call, an
+              alarm or another app using the microphone interrupts a take; an interrupted take is not scored, and you tap Try again.
+            </li>
+            <li>The device checks in Settings (under Trainer) run these tests on your phone and make a report you can send us.</li>
+          </ul>
+        </section>
+
+        <section id="guide-trainer-scores" aria-labelledby="guide-trainer-scores-h">
+          <h2 id="guide-trainer-scores-h" tabIndex={-1}>What the Trainer scores, and what it cannot hear</h2>
+          <p>
+            Each take gets one number from 0 to 100: how close you came to the original. It is made of four skills:{' '}
+            <strong>pitch</strong> (40 percent: any key or octave is fine, so singing an octave lower is not a mistake),{' '}
+            <strong>timing</strong> (25: when each note starts and how long it lasts, after the delay of your headphones is taken out),{' '}
+            <strong>tone</strong> (20: airier, brighter or rougher than the original, from the same measures as the Studio), and{' '}
+            <strong>expression</strong> (15: vibrato, loudness shape and how notes are joined). Under the number it names up to three things
+            to fix, ranked by how many points each would win back.
+          </p>
+          <p>
+            It is <em>closeness</em>, not quality. A different voice will always differ in tone, and tone is the weakest of the four. The
+            thresholds were set on synthetic voices and a handful of short real recordings, not on ratings by people, so use the numbers to
+            see yourself moving, not as a verdict. Short phrases are scored about twice as roughly and are rounded to the nearest 5.
+          </p>
+          <p>
+            <strong>What it cannot hear:</strong> words and diction, the shape of your vowels, feeling, and whether a choice is
+            stylish; whether a sound is healthy; and notes below about C2 or above about F6, which its pitch tracker cannot follow
+            (it says so instead of marking them wrong). In a full song it cannot hear tone at all. A recording that is already pitch-corrected
+            will look more accurate than a live singer ever could. If your first try scores a perfect 100, check that the microphone did not
+            pick up the playback.
+          </p>
+          <p>
+            Fixes never ask for more volume or for rasp. If something feels tight, stop and rest.
+          </p>
+        </section>
+
         <section id="guide-profiles" aria-labelledby="guide-profiles-h">
           <h2 id="guide-profiles-h" tabIndex={-1}>How the singer profiles were made</h2>
           <p>
@@ -281,8 +432,14 @@ export function GuidePage() {
           <h2 id="guide-privacy-h" tabIndex={-1}>Privacy</h2>
           <ul>
             <li>
-              All analysis runs in your browser. Your recordings, reference clips and singer clips are never uploaded, and no audio is
-              stored; only the measurements of singer clips are kept, in this browser.
+              All analysis runs in your browser. Your takes, reference clips and singer clips are never uploaded. Takes you sing are not
+              kept, unless you switch on <em>Keep my recordings</em> in Settings.
+            </li>
+            <li>
+              <strong>Clips and attempts stay on this device.</strong> Clips you add to the Trainer are stored in this browser&apos;s storage on
+              this device only, with their phrases and your practice scores. A backup file holds phrases and scores, never audio. Safari can
+              clear a website&apos;s stored data after about a week of not using it, so add Mimic to your Home Screen to keep your clips, and
+              save a backup now and then.
             </li>
             <li>Saving to Progress keeps only scores and measurements, in this browser’s local storage.</li>
             <li>
@@ -293,7 +450,7 @@ export function GuidePage() {
               storage is shared with the site owner’s other GitHub Pages sites, so use a key with a spending limit.
             </li>
             <li>The fonts are bundled with the app, so loading Mimic makes no requests to other sites.</li>
-            <li>“Clear all data” in Settings removes everything Mimic has stored.</li>
+            <li>“Clear all data” in Settings removes everything Mimic has stored, including the Trainer’s clips and scores. The Trainer section has its own delete too.</li>
           </ul>
         </section>
       </article>

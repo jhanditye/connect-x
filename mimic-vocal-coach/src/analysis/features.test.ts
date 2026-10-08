@@ -92,6 +92,46 @@ describe('buildFrameTrack', () => {
   });
 });
 
+describe('buildFrameTrack with spectral: false (mix mode)', () => {
+  const x = new Float32Array(Math.round(1.2 * SR));
+  x.set(synthVoice({ sampleRate: SR, durationSec: 0.8, f0: 220 }), Math.round(0.2 * SR));
+  const track = trackPitch(x, SR);
+
+  it('keeps the pitch-derived fields and leaves every spectral field NaN', () => {
+    const full = buildFrameTrack(x, SR, track, 440);
+    const ft = buildFrameTrack(x, SR, track, 440, undefined, { spectral: false });
+    expect(ft.frames).toHaveLength(track.f0.length);
+    for (let i = 0; i < ft.frames.length; i++) {
+      const f = ft.frames[i];
+      const g = full.frames[i];
+      expect(f.voiced).toBe(g.voiced);
+      expect(Object.is(f.f0, g.f0)).toBe(true);
+      expect(Object.is(f.midi, g.midi)).toBe(true);
+      expect(f.periodicity).toBe(g.periodicity);
+      expect(f.rmsDb).toBe(g.rmsDb);
+      for (const key of ['h1h2Db', 'alphaRatioDb', 'centroidHz', 'tiltDbPerOct', 'cppDb', 'hnrDb'] as const) expect(f[key]).toBeNaN();
+      expect(f.register).toBeNull();
+    }
+    for (const arr of [ft.subharmonicDb, ft.harmonicBalanceDb, ft.harmonicSlope, ft.aspiration, ft.h1h2Norm]) {
+      expect(arr).toHaveLength(track.f0.length);
+      expect(arr.every((v) => Number.isNaN(v))).toBe(true);
+    }
+  });
+
+  it('does not read the signal, so an empty one is fine, and still despikes the pitch', () => {
+    const ft = buildFrameTrack(new Float32Array(0), 0, track, 440, undefined, { spectral: false });
+    expect(ft.frames.filter((f) => f.voiced).length).toBeGreaterThan(60);
+    const spiky = { ...track, f0: Float64Array.from([NaN, 1470, 220, 221, 219, NaN]), voiced: Uint8Array.from([0, 1, 1, 1, 1, 0]), times: new Float64Array(6), periodicity: new Float64Array(6), rmsDb: new Float64Array(6) };
+    expect(buildFrameTrack(x, SR, spiky, 440, undefined, { spectral: false }).frames[1].voiced).toBe(false);
+  });
+
+  it('spectral: true is the same as the default', () => {
+    const a = buildFrameTrack(x, SR, track, 440);
+    const b = buildFrameTrack(x, SR, track, 440, undefined, { spectral: true });
+    expect(JSON.stringify(b.frames)).toBe(JSON.stringify(a.frames));
+  });
+});
+
 describe('despikePitch', () => {
   it('removes one-frame spikes but keeps held leaps', () => {
     const f0 = Float64Array.from([NaN, 1470, 220, 221, 219, 900, 220, 220, 440, 440, 441, 440, NaN]);

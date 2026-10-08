@@ -8,8 +8,10 @@ import type { AnalysisIssue, AnalysisOptions, FrameFeatures, PassaggioZone, Styl
 import { buildFrameTrack, type FrameTrack } from './features';
 import { segmentNotes, buildNoteSegments } from './notes';
 import { classifyOnsets } from './onsets';
+import { analyzeMix } from './mixMode';
 import { passaggioFor } from './passaggio';
 import { findPhrases } from './phrases';
+import { pitchSummary } from './pitchSummary';
 import { clippingRatio, measureAccompaniment, measureQuality, qualityReport } from './quality';
 import { detectFlips, estimateRegisters, registerShares } from './register';
 import { detectRuns } from './runs';
@@ -36,9 +38,11 @@ const EMPTY_STYLE: StyleVector = {
   flipsPerMinute: null,
 };
 
-function emptyAnalysis(durationSec: number, zone: PassaggioZone, warnings: string[], issues: AnalysisIssue[]): VoiceAnalysis {
+function emptyAnalysis(durationSec: number, zone: PassaggioZone, warnings: string[], issues: AnalysisIssue[], mode?: 'mix'): VoiceAnalysis {
   return {
     version: 1,
+    // Only a mix analysis carries `mode` (absent = solo), so an empty solo result is exactly what it always was.
+    ...(mode ? { mode } : {}),
     durationSec,
     sampleRate: ANALYSIS_RATE,
     hopSec: HOP_SEC,
@@ -122,22 +126,11 @@ function medianOrNull(frames: FrameFeatures[], key: keyof FrameFeatures): number
   return Number.isFinite(m) ? m : null;
 }
 
-function pitchSummary(frames: FrameFeatures[], tuningOffsetCents: number): VoiceAnalysis['pitch'] {
-  const midi = frames.filter((f) => f.voiced).map((f) => f.midi);
-  if (midi.length < 20) {
-    return { medianMidi: null, lowMidi: null, highMidi: null, tessituraLowMidi: null, tessituraHighMidi: null, tuningOffsetCents };
-  }
-  return {
-    medianMidi: median(midi),
-    lowMidi: Math.round(percentile(midi, 5)),
-    highMidi: Math.round(percentile(midi, 95)),
-    tessituraLowMidi: Math.round(percentile(midi, 25)),
-    tessituraHighMidi: Math.round(percentile(midi, 75)),
-    tuningOffsetCents,
-  };
-}
-
-/** Full analysis of a take. `samples` is mono at any sample rate; resamples to ANALYSIS_RATE internally. */
+/**
+ * Full analysis of a take. `samples` is mono at any sample rate; resamples to ANALYSIS_RATE internally.
+ * `opts.mode === 'mix'` analyses a full song instead (analysis/mixMode.ts): the lead vocal is extracted first and only the
+ * measures that survive a mix are reported. Absent or 'solo' is the normal pipeline, unchanged.
+ */
 export function analyzeTake(
   samples: Float32Array,
   sampleRate: number,
@@ -149,6 +142,8 @@ export function analyzeTake(
   const a4Hz = opts.a4Hz !== undefined && opts.a4Hz >= 380 && opts.a4Hz <= 500 ? opts.a4Hz : 440;
   const warnings: string[] = [];
   const issues: AnalysisIssue[] = [];
+  const mixMode = opts.mode === 'mix';
+  const emptyMode = mixMode ? 'mix' : undefined;
 
   if (!(sampleRate > 0) || !Number.isFinite(sampleRate) || sampleRate < 4000) {
     progress(1);
@@ -157,6 +152,7 @@ export function analyzeTake(
       zone,
       ['The audio has an invalid sample rate, so it could not be analysed. Try exporting it again as WAV or M4A.'],
       ['too-little-singing'],
+      emptyMode,
     );
   }
   let durationSec = samples.length / sampleRate;
@@ -164,7 +160,9 @@ export function analyzeTake(
   if (durationSec > MAX_ANALYSIS_SEC) {
     input = samples.subarray(0, Math.round(MAX_ANALYSIS_SEC * sampleRate));
     warnings.push(
-      `Only the first 5 minutes of this ${(durationSec / 60).toFixed(1)}-minute take were analysed. Shorter takes (under a minute) give the clearest feedback.`,
+      mixMode
+        ? `Only the first 5 minutes of this ${(durationSec / 60).toFixed(1)}-minute song were analysed. Pick the section you want to practise, or cut it shorter.`
+        : `Only the first 5 minutes of this ${(durationSec / 60).toFixed(1)}-minute take were analysed. Shorter takes (under a minute) give the clearest feedback.`,
     );
     durationSec = MAX_ANALYSIS_SEC;
     issues.push('trimmed');
@@ -193,6 +191,7 @@ export function analyzeTake(
           : 'The recording contains no valid audio. Try recording again or exporting the file as WAV.',
       ],
       [...issues, 'too-little-singing'],
+      emptyMode,
     );
   }
   if (bad > 0) warnings.push('Some samples in the audio were invalid and were treated as silence. If the analysis looks wrong, export the file again.');
@@ -203,6 +202,16 @@ export function analyzeTake(
 
   const x = resample(clean, sampleRate, ANALYSIS_RATE);
   progress(0.1);
+  if (mixMode) {
+    const mix = analyzeMix(x, null, ANALYSIS_RATE, opts, (f) => progress(0.1 + 0.9 * f), {
+      warnings,
+      issues,
+      clippingRatio: clipping,
+      durationSec,
+    });
+    progress(1);
+    return mix;
+  }
   const pitchTrack = trackPitch(x, ANALYSIS_RATE, { hopSec: HOP_SEC });
   progress(0.3);
   const track: FrameTrack = buildFrameTrack(x, ANALYSIS_RATE, pitchTrack, a4Hz, (f) => progress(0.3 + 0.55 * f));

@@ -380,6 +380,8 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         refreshSessions();
       },
       measureClips,
+      addMeasuredClip: (singerId: string, clip: MeasuredClip) =>
+        setMeasuredClips(singerId, [...(stateRef.current.measurements[singerId] ?? []).filter((c) => c.id !== clip.id), clip].slice(-MAX_CLIPS_PER_SINGER)),
       removeMeasuredClip: (singerId: string, clipId: string) =>
         setMeasuredClips(
           singerId,

@@ -8,6 +8,7 @@ import { isReferenceProfileId } from '../../storage/history';
 import type { SessionRecord, StyleKey } from '../../types';
 import { DIM_DISPLAY, fmtSigned, singerVar } from '../charts/chartKit';
 import { hasScores, ProgressChart } from '../charts/ProgressChart';
+import { PhraseProgress } from '../components/PhraseProgress';
 
 const BUILTIN_ORDER = ['shawn-mendes', 'daniel-caesar', 'jalen-ngonda'];
 const LIST_PAGE = 25;
@@ -177,6 +178,7 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
             saved, on this device; the audio is not.
           </p>
         </div>
+        <PhraseProgress />
       </div>
     );
   }
@@ -265,6 +267,8 @@ export function ProgressPage(props: { sessions: SessionRecord[]; onDelete: (id: 
           </>
         )}
       </section>
+
+      <PhraseProgress />
 
       <section className="hist-section" aria-labelledby="hist-list">
         <h2 id="hist-list" className="section-title" ref={listHeadingRef} tabIndex={-1}>

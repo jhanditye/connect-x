@@ -4,6 +4,7 @@
 
 import type { AnalysisOptions, VoiceAnalysis } from '../types';
 import { analyzeTake } from './analyze';
+import { analyzeWithRouting, type AnalysisRouting, type AutoAnalysis } from './auto';
 import AnalysisWorker from './worker?worker&inline';
 import type { AnalyzeRequest, WorkerResponse } from './workerProtocol';
 
@@ -37,7 +38,10 @@ function createWorker(): Worker | null {
   }
 }
 
-/** Runs analyzeTake in a Web Worker (import with `?worker&inline` so single-file builds work). Falls back to the main thread if workers are unavailable. */
+/**
+ * Runs analyzeTake in a Web Worker (import with `?worker&inline` so single-file builds work). Falls back to the main thread if workers are unavailable.
+ * `opts.mode` ('solo' or 'mix') travels with the request: a mix analysis takes a few seconds per song minute on a phone.
+ */
 export function analyzeInWorker(
   samples: Float32Array,
   sampleRate: number,
@@ -94,4 +98,19 @@ export function analyzeInWorker(
       analyzeOnMainThread(samples, sampleRate, opts, onProgress).then(resolve, reject);
     }
   });
+}
+
+/**
+ * Solo analysis first; when it finds the audio is a full song ('accompaniment'), the same audio again in mix mode, all in the
+ * worker and with one progress stream (analysis/auto.ts). `routing` defaults to 'mix' when `opts.mode === 'mix'`, else 'auto';
+ * pass 'solo' or 'mix' for the manual choices.
+ */
+export function analyzeAuto(
+  samples: Float32Array,
+  sampleRate: number,
+  opts: AnalysisOptions,
+  onProgress?: (fraction: number) => void,
+  routing?: AnalysisRouting,
+): Promise<AutoAnalysis> {
+  return analyzeWithRouting(analyzeInWorker, samples, sampleRate, opts, routing, onProgress);
 }

@@ -2,7 +2,7 @@
 // rendered in tests with a hand-built controller value.
 
 import { createContext, useContext, type Dispatch } from 'react';
-import type { AppSettings, SessionRecord, SingerProfile, VoiceType } from '../types';
+import type { AppSettings, MeasuredClip, SessionRecord, SingerProfile, VoiceType } from '../types';
 import type { Action, AppState, TakeSource } from './reducer';
 import type { Route } from './routing';
 import type { ThemePref } from './theme';
@@ -65,6 +65,11 @@ export interface AppController {
   clearAllData(): void;
   /** Measures clips of a builtin singer from the user's own music; their targets replace the estimates. */
   measureClips(singerId: string, files: File[], onProgress?: (p: MeasureProgress) => void): Promise<MeasureResult>;
+  /**
+   * Adds one already-measured clip to a builtin singer's targets (the trainer's "use for this singer's targets").
+   * A clip with the same id replaces the old entry; only the newest MAX_CLIPS_PER_SINGER are kept.
+   */
+  addMeasuredClip(singerId: string, clip: MeasuredClip): void;
   removeMeasuredClip(singerId: string, clipId: string): void;
   /** Removes every measured clip of a singer, going back to the estimated targets. */
   clearMeasuredClips(singerId: string): void;
