@@ -1,4 +1,3 @@
-import { memoryUsage } from 'node:process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { floatToInt16 } from '../audio/pcm';
 import type { AttemptRecord, ClipRecord } from '../types';
@@ -105,22 +104,39 @@ describe.skipIf(!hasFakeIdb)('ClipStore contract: IndexedDB through fake-indexed
 describe('memory use', () => {
   const tone = (frames: number): Int16Array => floatToInt16(Float32Array.from({ length: frames }, (_, i) => 0.4 * Math.sin((2 * Math.PI * 220 * i) / SR)));
 
-  it('a four-minute clip is stored once and a phrase read allocates the phrase, not the clip', async () => {
+  // Checked by what the store reports and hands back (chunk counts, bytes written, the size of the returned buffer), never by the
+  // process heap: arrayBuffers moves with garbage collection and with every other test file running in the same process.
+  it('a four-minute clip is stored once, in 10 s chunks, and a phrase read allocates the phrase, not the clip', async () => {
     const s = createMemoryClipStore();
     const pcm = tone(240 * SR); // 21 MB
-    const clipBytes = pcm.byteLength;
-    const before = memoryUsage().arrayBuffers;
     const info = await s.writeAudio('big', 'mix', pcm, SR);
-    const stored = memoryUsage().arrayBuffers - before;
-    expect(info.chunkFrames).toBe(10 * SR);
-    expect(stored).toBeGreaterThan(clipBytes * 0.9);
-    expect(stored).toBeLessThan(clipBytes * 1.3);
-    const beforeRead = memoryUsage().arrayBuffers;
+    expect(info).toMatchObject({ kind: 'mix', sampleRate: SR, frames: 240 * SR, chunkFrames: 10 * SR });
+    expect(Math.ceil(info.frames / info.chunkFrames)).toBe(24);
+    // Stored once: the bytes it accounts for are the clip's own, not a second copy or a Float32 expansion (which would be double).
+    expect((await s.usage()).audioBytes).toBe(pcm.byteLength);
+
     const phrase = await s.readAudio('big', info, 100, 112);
-    const read = memoryUsage().arrayBuffers - beforeRead;
     expect(phrase.length).toBe(12 * SR);
-    expect(read).toBeLessThan(6 * 1024 * 1024);
+    // The result is its own small buffer (12 s as floats, about 2 MB), not a view into something clip-sized.
+    expect(phrase.buffer.byteLength).toBe(phrase.byteLength);
+    expect(phrase.byteLength).toBeLessThan(6 * 1024 * 1024);
+    expect(phrase.byteLength).toBeLessThan(pcm.byteLength / 4);
+    // It is the right part of the clip.
+    const again = await s.readAudio('big', info, 100, 100.001);
+    expect(again[0]).toBeCloseTo(phrase[0], 6);
   }, 60000);
+
+  it('keeps its own copy of what it was given, and hands out copies it does not share', async () => {
+    const s = createMemoryClipStore();
+    const pcm = tone(12 * SR);
+    const info = await s.writeAudio('c', 'mix', pcm, SR);
+    const first = await s.readAudio('c', info, 1, 2);
+    const expected = Float32Array.from(first);
+    pcm.fill(0); // the caller reuses its buffer
+    first.fill(0.5); // and scribbles on what it was handed
+    const second = await s.readAudio('c', info, 1, 2);
+    expect(Array.from(second.subarray(0, 50))).toEqual(Array.from(expected.subarray(0, 50)));
+  });
 });
 
 // ---------------------------------------------------------------------------------------------

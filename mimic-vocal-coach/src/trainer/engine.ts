@@ -73,8 +73,13 @@ export interface PracticeEngine {
   setOptions(patch: Partial<PracticeOptions>): void;
   /** Plays the guide once (or loops it). Needs no microphone. */
   listen(): Promise<void>;
-  /** Count-in, take, analysis, comparison, save. Prepares the microphone on the first call of a visit. */
-  sing(): Promise<void>;
+  /**
+   * Count-in, take, analysis, comparison, save. Prepares the microphone on the first call of a visit.
+   * `speakerConfirmed`: the singer has just said "I have headphones on" in the screen's own question, so a sing-along take
+   * is not refused for a route that does not look like headphones (the names iOS gives wired and some Bluetooth headsets
+   * do not always say so). It lasts until the route changes.
+   */
+  sing(opts?: { speakerConfirmed?: boolean }): Promise<void>;
   /** Stops the guide or cancels a take in progress (nothing is scored). */
   stop(): void;
   /** After a result: hear the original, your take, or both side by side (guide left, you right, lined up by the sync offset). */

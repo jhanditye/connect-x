@@ -2,12 +2,6 @@
    tokens.css (directly or through color-mix). Phone first: 44px targets, 16px side gutters, nothing wider than the screen,
    the primary buttons in the lower part of the screen. Loaded after app.css so it can refine the phone tab bar. */
 
-/* ---------------------------------------------------------------- phone tab bar: five tabs */
-
-.nav-list--tabs {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-}
-
 /* A control the keyboard (or a screen reader) moves to must not end up under a floating button bar: leave room for it, and for the
    phone tab bar below it, when the browser scrolls the control into view. */
 @media (max-width: 720px) {
@@ -267,7 +261,8 @@
   color: var(--ink-3);
 }
 .tr-start {
-  margin-top: var(--space-3);
+  /* Under the heading, not after the cards: the floating Add clips button sits at the bottom of the first screen and would cover it. */
+  margin: 0 0 var(--space-3);
 }
 
 .tr-group {

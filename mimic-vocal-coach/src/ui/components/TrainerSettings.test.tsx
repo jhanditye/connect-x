@@ -140,7 +140,7 @@ describe('Settings: Trainer backup', () => {
     await act(async () => void input.dispatchEvent(new Event('change', { bubbles: true })));
     await tick();
     expect(ctl.importLibrary).toHaveBeenCalledWith(file);
-    expect(screen.text()).toMatch(/Backup restored: 2 clips added, 1 updated\. Clips from a backup need their audio file added again/);
+    expect(screen.text()).toMatch(/Backup restored: 2 clips added, 1 updated\. A backup holds no audio, so open the Trainer and tap "Choose the files"/);
     expect(screen.text()).toMatch(/1 practice attempt was skipped/);
   });
 

@@ -25,7 +25,7 @@ describe('saveFile', () => {
     const save = vi.fn().mockRejectedValue({ code: 'declined', message: 'no' });
     (window as ClaudeWindow).claude = { use: vi.fn().mockResolvedValue({ save }) };
     const { saveFile } = await import('./download');
-    await expect(saveFile(new Blob(['{}']), 'a.json')).resolves.toBeUndefined();
+    await expect(saveFile(new Blob(['{}']), 'a.json')).resolves.toBe(true);
   });
 
   it('falls back to a normal browser download outside the viewer', async () => {
@@ -64,8 +64,15 @@ describe('saveFile on iOS', () => {
     iphone(vi.fn().mockRejectedValue(Object.assign(new Error('cancel'), { name: 'AbortError' })), vi.fn(() => true));
     const { saveFile } = await import('./download');
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-    await saveFile(new Blob(['x']), 'take.wav');
+    // false tells a caller that records "saved" (a backup) that nothing was saved.
+    await expect(saveFile(new Blob(['x']), 'take.wav')).resolves.toBe(false);
     expect(click).not.toHaveBeenCalled();
+  });
+
+  it('says it saved when the share sheet took the file', async () => {
+    iphone(vi.fn().mockResolvedValue(undefined), vi.fn(() => true));
+    const { saveFile } = await import('./download');
+    await expect(saveFile(new Blob(['x']), 'take.wav')).resolves.toBe(true);
   });
 
   it('falls back to a download when files cannot be shared', async () => {

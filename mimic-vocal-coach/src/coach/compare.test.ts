@@ -380,6 +380,12 @@ describe('isScoreable', () => {
     expect(isScoreable({ ...a, issues: ['noisy', 'clipping', 'too-quiet', 'speech-like', 'trimmed'] })).toBe(true);
   });
 
+  it('never scores a full-song reading against tone targets, even without the accompaniment issue', () => {
+    const a = makeFakeAnalysis();
+    expect(isScoreable({ ...a, mode: 'mix', issues: [] })).toBe(false);
+    expect(isScoreable({ ...a, mode: 'solo' })).toBe(true);
+  });
+
   it('needs at least four measured dimensions when given a comparison', () => {
     const p = makeFakeProfile(); // four targets
     expect(isScoreable(makeFakeAnalysis(), compareToProfile(makeFakeAnalysis(), p))).toBe(true);

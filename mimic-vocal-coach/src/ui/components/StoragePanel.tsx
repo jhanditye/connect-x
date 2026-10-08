@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { listMicrophones, loadMicChoice, saveMicChoice, type MicOption } from '../../audio/micChoice';
-import { installHelp, isIos, isStandalone } from '../../pwa/platform';
+import { installHelp, isIos, isNativeApp, isStandalone } from '../../pwa/platform';
 import { checkForUpdate, usePwa } from '../../pwa/register';
 import { formatBytes, readStorageStatus, requestPersistence, type StorageStatus } from '../../pwa/storage';
 
@@ -15,6 +15,7 @@ export function StoragePanel() {
   const [status, setStatus] = useState<StorageStatus | null>(null);
   const [asked, setAsked] = useState<boolean | null | undefined>(undefined);
   const [checking, setChecking] = useState(false);
+  const native = isNativeApp();
   const installed = isStandalone();
   const ios = isIos();
 
@@ -44,13 +45,13 @@ export function StoragePanel() {
         <div className="status-row">
           <dt>Installed app</dt>
           <dd>
-            {installed ? <Pill tone="good">Yes, running from the Home Screen</Pill> : <Pill tone={ios ? 'warn' : undefined}>{ios ? 'No, running in a browser tab' : 'Running in a browser tab'}</Pill>}
+            {native ? <Pill tone="good">Yes, this is the Mimic app</Pill> : installed ? <Pill tone="good">Yes, running from the Home Screen</Pill> : <Pill tone={ios ? 'warn' : undefined}>{ios ? 'No, running in a browser tab' : 'Running in a browser tab'}</Pill>}
           </dd>
         </div>
         <div className="status-row">
           <dt>Works offline</dt>
           <dd>
-            {!pwa.supported ? <Pill>Not available here</Pill> : pwa.offlineReady || pwa.version ? <Pill tone="good">Ready</Pill> : <Pill tone="warn">Preparing…</Pill>}
+            {native ? <Pill tone="good">Built into the app</Pill> : !pwa.supported ? <Pill>Not available here</Pill> : pwa.offlineReady || pwa.version ? <Pill tone="good">Ready</Pill> : <Pill tone="warn">Preparing…</Pill>}
             {pwa.version && <span className="muted num"> build {pwa.version.slice(0, 7)}</span>}
           </dd>
         </div>

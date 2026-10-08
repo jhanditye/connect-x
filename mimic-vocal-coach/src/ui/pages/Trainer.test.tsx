@@ -75,6 +75,29 @@ describe('Trainer library', () => {
     expect(screen.text()).toMatch(/Nothing is due today\. Open any clip below and pick a phrase, or add another clip\./);
   });
 
+  it('says which clips need their audio file again, how to add it, and that scores stay', () => {
+    page();
+    const note = screen.q('.notice--warn');
+    expect(note.textContent).toMatch(/One clip needs its audio file again/);
+    expect(note.textContent).toMatch(/never audio/);
+    expect(note.textContent).toMatch(/recognises each one by its\s+contents/);
+    expect(note.textContent).toMatch(/phrases and scores stay exactly as they were/);
+    expect(note.querySelector('ul')?.textContent).toContain('Restored from a backup');
+    screen.click(screen.button(/Choose the files/));
+    expect(window.location.hash).toBe('#trainer/add');
+  });
+
+  it('has no such note when every clip has its audio, and says nothing can be practised when none has', () => {
+    page(makeFakeTrainerController());
+    expect(screen.text()).not.toMatch(/needs? (its|their) audio files? again/);
+    screen.unmount();
+    const ctl = makeFakeTrainerController({ clips: [makeFakeClip({ audioMissing: true }), makeFakeClip({ id: 'b', audioMissing: true })] });
+    ctl.queue = [];
+    page(ctl);
+    expect(screen.text()).toMatch(/2 clips need their audio files again/);
+    expect(screen.text()).toMatch(/Nothing can be practised until the audio files are added again\./);
+  });
+
   it('filters by singer with real toggle buttons, and All brings everyone back', () => {
     page();
     const chip = (name: RegExp) => screen.qa<HTMLButtonElement>('.tr-filter .tr-chip').find((b) => name.test(b.textContent ?? ''))!;

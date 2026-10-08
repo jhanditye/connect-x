@@ -11,6 +11,7 @@ import {
   effectiveAnalysis,
   effectivePhrases,
   estimateStoredBytes,
+  leadConfidenceOf,
   preparedKind,
   reanalyzeClip,
   renderContourTone,
@@ -38,6 +39,7 @@ const OTHER = '__other__';
 /** Sample rate of the detected-melody tone (a sine with overtones does not need more). */
 const MELODY_RATE = 22050;
 const TRIM_STEP_SEC = 1;
+const LEAD_WORDS = { high: 'followed well', ok: 'followed fairly well', low: 'hard to follow in places', poor: 'very hard to follow' } as const;
 
 export interface ClipReviewProps {
   prepared: PreparedClip;
@@ -75,6 +77,8 @@ export function ClipReview(props: ClipReviewProps) {
   const kind = preparedKind(prep);
   const analysis = effectiveAnalysis(prep);
   const blockers = blockersOf(prep);
+  // How well the lead vocal of a full song was followed; with a vocal-only file attached the melody comes from that file.
+  const lead = kind === 'mix' && !prep.stem ? leadConfidenceOf(prep.analysis) : null;
 
   const [phrases, setPhrases] = useState<SegPhrase[]>(() => effectivePhrases(props.prepared));
   const [edited, setEdited] = useState(false);
@@ -351,13 +355,23 @@ export function ClipReview(props: ClipReviewProps) {
             <span className="rev-switch-title">This is a full song</span>
             <span className="rev-switch-hint">
               {kind === 'mix'
-                ? 'Singing with a band. Mimic follows the lead vocal and judges pitch and timing only.'
+                ? prep.suggestedKind === 'mix'
+                  ? 'Mimic found a band and followed the lead vocal. It judges pitch and timing only.'
+                  : 'Singing with a band. Mimic follows the lead vocal and judges pitch and timing only.'
                 : prep.suggestedKind === 'mix'
                   ? 'Mimic thinks this has a band in it. Switch on to follow the lead vocal.'
                   : 'Switch on if there are instruments with the voice.'}
             </span>
           </span>
         </label>
+        {lead && (
+          <p className={`rev-lead rev-lead--${lead.band}`} data-band={lead.band}>
+            <span className="chip rev-lead-badge">Lead vocal: {LEAD_WORDS[lead.band]}</span>
+            <span className="rev-lead-hint">
+              Mimic&rsquo;s own estimate of how well it followed the singing ({lead.confidence.toFixed(2)} out of 1). It is a ranking, not a measured accuracy: check it by ear below.
+            </span>
+          </p>
+        )}
         {pendingKind && (
           <div className="confirm" role="group" aria-label="Confirm changing how the clip is read">
             <p>Reading the clip as {pendingKind === 'mix' ? 'a full song' : 'a solo vocal'} finds the phrases again and drops the changes you made to them.</p>

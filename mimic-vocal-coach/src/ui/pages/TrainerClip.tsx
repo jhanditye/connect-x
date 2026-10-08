@@ -3,6 +3,7 @@
 // history, new ones start fresh. Everything goes through the TrainerController.
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { mixConfidenceBand } from '../../analysis/quality';
 import { MAX_CLIPS_PER_SINGER } from '../../coach/measured';
 import { contributionBlocker } from '../../storage/library';
 import { goTrainer, trainerHash } from '../../state/routing';
@@ -19,8 +20,12 @@ import { StatusChip } from '../components/StatusChip';
 import { clipColor } from '../components/ClipCard';
 import { noteRange } from '../components/format';
 import { clipLength, phraseCount, phraseLength, phraseNumber, phraseStatus, STATUS_LABEL, summariseClip, visiblePhrases } from '../components/phraseStatus';
+import { createSamplePlayer, type SamplePlayer } from '../components/samplePlayer';
 import { clearPendingImport } from '../trainerHandoff';
 import { singerName, singerOf, useFocusOnMount } from './trainerKit';
+import { useClipAudio } from './useClipAudio';
+
+const LEAD_WORDS = { high: 'followed well', ok: 'followed fairly well', low: 'hard to follow in places', poor: 'very hard to follow' } as const;
 
 function messageOf(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
@@ -83,6 +88,24 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
   const renameInput = useRef<HTMLInputElement>(null);
   const deleteButton = useRef<HTMLButtonElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
+  // The waveform and pitch line under the phrase editor, and a way to hear a phrase: loaded only while the editor is open.
+  const editorAudio = useClipAudio(trainer, clip, editing !== null);
+  const playerRef = useRef<SamplePlayer | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const stopPlayback = () => {
+    playerRef.current?.stop();
+    setPlaying(false);
+  };
+  useEffect(
+    () => () => {
+      playerRef.current?.dispose();
+      playerRef.current = null;
+    },
+    [],
+  );
+  useEffect(() => {
+    if (editing === null) stopPlayback();
+  }, [editing]);
 
   useEffect(() => {
     if (renaming) renameInput.current?.focus();
@@ -193,7 +216,24 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
     setEditing(segmentsFromRecords(clip.phrases));
   };
 
+  const playPhrase = async (index: number) => {
+    const p = editing?.[index];
+    const { samples, sampleRate } = editorAudio;
+    if (!p || !samples) return;
+    const from = Math.max(0, Math.floor(p.start * sampleRate));
+    const to = Math.min(samples.length, Math.ceil(p.end * sampleRate));
+    if (to <= from) return;
+    const player = (playerRef.current ??= createSamplePlayer());
+    setPlaying(true);
+    const ok = await player.play(samples.subarray(from, to), sampleRate, { fromSec: from / sampleRate, onEnded: () => setPlaying(false) });
+    if (!ok) {
+      setPlaying(false);
+      setError('This browser could not play audio here. Check the volume and the silent switch, then try again.');
+    }
+  };
+
   const cancelEdit = () => {
+    stopPlayback();
     setEditing(null);
     requestAnimationFrame(() => editButton.current?.focus());
   };
@@ -206,6 +246,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
     await run(async () => {
       await trainer.updatePhrases(clip.id, phrases);
       for (const phraseId of dropped) await trainer.deleteAttempts({ phraseId });
+      stopPlayback();
       setEditing(null);
       requestAnimationFrame(() => editButton.current?.focus());
     }, dropped.length > 0 ? `Phrases saved. ${dropped.length} changed ${dropped.length === 1 ? 'phrase' : 'phrases'} started fresh.` : 'Phrases saved.');
@@ -325,6 +366,13 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
       {clip.kind === 'mix' && (
         <Notice tone="info" title="A full song">
           <p>Mimic follows the lead vocal, so pitch and timing are scored; the tone of the voice is not compared because the band changes it.</p>
+          {typeof clip.analysis.leadConfidence === 'number' && (
+            <p className="field-hint">
+              When you added it, Mimic rated how well it followed the singing as <strong>{LEAD_WORDS[mixConfidenceBand(clip.analysis.leadConfidence)]}</strong> (
+              {clip.analysis.leadConfidence.toFixed(2)} out of 1, a ranking rather than a measured accuracy).
+              {clip.analysisKind === 'mix-melody' ? ' Edit the phrases if the melody missed part of a line.' : ''}
+            </p>
+          )}
         </Notice>
       )}
 
@@ -407,7 +455,27 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
           <p className="section-sub">
             Select a phrase, then merge it with the next one, split it, move its edges or hide it. A phrase whose edges you move keeps its history; a phrase you split or merge starts fresh.
           </p>
-          <PhraseEditor duration={clip.durationSec} phrases={editing} onChange={setEditing} />
+          {editorAudio.status === 'loading' && (
+            <p className="field-hint" role="status">
+              Loading the waveform…
+            </p>
+          )}
+          {editorAudio.status === 'error' && (
+            <p className="field-hint" role="status">
+              The waveform could not be loaded ({editorAudio.message}). You can still edit the phrases with the buttons.
+            </p>
+          )}
+          <PhraseEditor
+            duration={clip.durationSec}
+            phrases={editing}
+            onChange={setEditing}
+            samples={editorAudio.samples}
+            analysis={editorAudio.analysis}
+            onPlayPhrase={editorAudio.samples ? (i) => void playPhrase(i) : undefined}
+            onStop={stopPlayback}
+            playing={playing}
+            getPlayhead={() => playerRef.current?.position() ?? null}
+          />
           {problems.length > 0 && (
             <Notice tone="warn" title="Fix this before saving">
               <ul className="plain-list">

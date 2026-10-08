@@ -5,6 +5,7 @@ import { practiceFocusIds } from './state/reducer';
 import { TrainerProvider, type TrainerProviderProps } from './state/TrainerProvider';
 import { TrainerContext, type TrainerController } from './state/trainerContext';
 import { ROUTE_LABELS, routeHash } from './state/routing';
+import { openPractice } from './trainer/practiceEngine';
 import { TabBar, TopBar } from './ui/components/Nav';
 import { UpdateNotice } from './ui/components/UpdateNotice';
 import { GuidePage } from './ui/pages/Guide';
@@ -90,8 +91,8 @@ function Shell() {
 
 export interface AppProps {
   /**
-   * Seams for the Trainer's library. `openPractice` builds the PracticeEngine for one phrase (the audio and comparison modules);
-   * without it a phrase cannot be opened and the practice screen says so. `store` and `importer` are for tests.
+   * Seams for the Trainer's library. `openPractice` builds the PracticeEngine for one phrase; it defaults to the real engine
+   * (trainer/practiceEngine.ts) and tests pass a fake. `store` and `importer` are for tests.
    */
   trainer?: Omit<TrainerProviderProps, 'children'>;
   /** A ready-made controller instead of the real library (tests and the layout harness use the fakes in testing/trainerFixtures.ts). */
@@ -106,7 +107,7 @@ export function App(props: AppProps = {}) {
           <Shell />
         </TrainerContext.Provider>
       ) : (
-        <TrainerProvider {...props.trainer}>
+        <TrainerProvider openPractice={openPractice} {...props.trainer}>
           <Shell />
         </TrainerProvider>
       )}

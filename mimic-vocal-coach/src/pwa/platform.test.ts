@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { installHelp, iosBrowser, isIos, isStandalone, type PlatformEnv } from './platform';
+import { detectNative, installHelp, iosBrowser, isIos, isNativeApp, isStandalone, readEnv, type PlatformEnv } from './platform';
 
 const SAFARI_IPHONE =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1';
@@ -51,5 +51,41 @@ describe('installHelp', () => {
     expect(installHelp(env({ userAgent: INSTAGRAM })).needsSafari).toBe(true);
     expect(installHelp(env({})).needsSafari).toBe(false);
     expect(installHelp(env({ userAgent: CHROME_IPHONE })).needsSafari).toBe(false);
+  });
+});
+
+describe('the Capacitor app (ios-native/)', () => {
+  // Its web view has no navigator.standalone and a user agent without the "Safari/" token.
+  const WKWEBVIEW = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
+  const native = env({ userAgent: WKWEBVIEW, standaloneFlag: undefined, native: true });
+
+  it('counts as an installed app, so the Install card never shows inside it', () => {
+    expect(isNativeApp(native)).toBe(true);
+    expect(isStandalone(native)).toBe(true);
+    expect(installHelp(native).show).toBe(false);
+    expect(installHelp(native).needsSafari).toBe(false);
+    // The same web view without the flag looks like an unknown iOS browser: that was the problem.
+    const without = env({ userAgent: WKWEBVIEW, standaloneFlag: undefined });
+    expect(installHelp(without)).toMatchObject({ show: true, needsSafari: true });
+  });
+
+  it('is not guessed from a plain browser', () => {
+    expect(isNativeApp(env({}))).toBe(false);
+    expect(detectNative()).toBe(false);
+  });
+
+  it('is detected from window.Capacitor or the capacitor: scheme', () => {
+    const g = globalThis as { Capacitor?: unknown };
+    g.Capacitor = { isNativePlatform: () => true };
+    try {
+      expect(detectNative()).toBe(true);
+      expect(readEnv().native).toBe(true);
+      g.Capacitor = { isNativePlatform: () => false, getPlatform: () => 'web' };
+      expect(detectNative()).toBe(false);
+      g.Capacitor = { getPlatform: () => 'ios' };
+      expect(detectNative()).toBe(true);
+    } finally {
+      delete g.Capacitor;
+    }
   });
 });

@@ -423,7 +423,7 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
         hasResult={result !== null}
         onOptions={setOptions}
         onListen={() => engine && act(() => engine.listen())}
-        onSing={() => engine && act(() => engine.sing())}
+        onSing={(speakerConfirmed) => engine && act(() => engine.sing(speakerConfirmed ? { speakerConfirmed: true } : undefined))}
         onStop={() => engine?.stop()}
       />
     </div>

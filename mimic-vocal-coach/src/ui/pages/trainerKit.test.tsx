@@ -8,7 +8,7 @@ import { downloadLibraryBackup, groupClips, singerName, singerOf, useFocusOnMoun
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const saveFile = vi.fn(async (..._a: unknown[]) => undefined);
+const saveFile = vi.fn(async (..._a: unknown[]): Promise<boolean | undefined> => undefined);
 vi.mock('../components/download', async (orig) => ({ ...(await orig<typeof import('../components/download')>()), saveFile: (...a: unknown[]) => saveFile(...a) }));
 beforeEach(() => saveFile.mockClear());
 afterEach(() => vi.restoreAllMocks());
@@ -102,6 +102,34 @@ describe('downloadLibraryBackup', () => {
     expect(r.ok).toBe(true);
     expect(r.message).toMatch(/no audio/);
     expect(saveFile).toHaveBeenCalledWith(blob, expect.stringMatching(/^mimic-library-\d{4}-\d{2}-\d{2}\.json$/));
+  });
+
+  it('counts the backup as made only after the file was saved', async () => {
+    const markExported = vi.fn(async () => undefined);
+    const exportLibrary = vi.fn(async (_o?: { markDone?: boolean }) => new Blob(['{}']));
+    const ok = await downloadLibraryBackup({ exportLibrary, markExported });
+    expect(ok.ok).toBe(true);
+    expect(exportLibrary).toHaveBeenCalledWith({ markDone: false });
+    expect(markExported).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the reminder on when the share sheet was closed or the save failed', async () => {
+    const markExported = vi.fn(async () => undefined);
+    const exportLibrary = async () => new Blob(['{}']);
+    saveFile.mockResolvedValueOnce(false);
+    const closed = await downloadLibraryBackup({ exportLibrary, markExported });
+    expect(closed.ok).toBe(false);
+    expect(closed.message).toMatch(/share sheet was closed.*Save to Files/);
+    saveFile.mockRejectedValueOnce(new Error('No room'));
+    const failed = await downloadLibraryBackup({ exportLibrary, markExported });
+    expect(failed.ok).toBe(false);
+    expect(markExported).not.toHaveBeenCalled();
+  });
+
+  it('with a controller that cannot defer, the export itself marks the backup', async () => {
+    const exportLibrary = vi.fn(async (_o?: { markDone?: boolean }) => new Blob(['{}']));
+    await downloadLibraryBackup({ exportLibrary });
+    expect(exportLibrary).toHaveBeenCalledWith({ markDone: true });
   });
 
   it('never rejects: a failure becomes a sentence that says what to try', async () => {

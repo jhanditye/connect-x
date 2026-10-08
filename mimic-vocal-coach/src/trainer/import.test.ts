@@ -6,11 +6,12 @@ import { floatToInt16 } from '../audio/pcm';
 import { trackPitch } from '../dsp/pitch';
 import { median } from '../dsp/stats';
 import { createMemoryClipStore, QuotaError, type ClipStore } from '../storage/clips';
+import { measuredFromClip } from '../storage/library';
 import { DEFAULT_SETTINGS } from '../storage/settings';
 import { sine } from '../testing/synth';
 import { makeFakePreparedClip } from '../testing/trainerFixtures';
 import type { AnalysisOptions, AppSettings, ClipRecord, VoiceAnalysis } from '../types';
-import { FULL_SONG_UNAVAILABLE, MIX_REASON, SPEECH_REASON } from './importCopy';
+import { MIX_REASON, SPEECH_REASON } from './importCopy';
 import {
   analysisFromSpans,
   fakeAudioBuffer,
@@ -24,12 +25,14 @@ import {
 } from './importTestKit';
 import {
   blockersOf,
+  buildView,
   classifyClip,
   commitClip,
   defaultTitle,
   effectiveAnalysis,
   estimateStoredBytes,
   findRelinkMatches,
+  leadConfidenceOf,
   prepareClip,
   preparedKind,
   reanalyzeClip,
@@ -52,16 +55,16 @@ import { segmentPhrases, setHidden, toPhraseRecords } from './segment';
 
 // The default analysis entry runs in a worker; here it runs analyzeTake directly.
 vi.mock('../analysis/client', () => ({
-  analyzeInWorker: async (s: Float32Array, sr: number, opts: Parameters<typeof analyzeTake>[2], onProgress?: (f: number) => void) => analyzeTake(s, sr, { ...opts, mode: undefined }, onProgress),
+  analyzeInWorker: async (s: Float32Array, sr: number, opts: Parameters<typeof analyzeTake>[2], onProgress?: (f: number) => void) => analyzeTake(s, sr, opts, onProgress),
 }));
 
 const SETTINGS: AppSettings = { ...DEFAULT_SETTINGS, a4Hz: 440 };
 
-/** The analysis entry as it will behave once the full-song front end is wired into analyzeTake. */
+/** The analysis entry with the full-song front end (what the worker does): `mode: 'mix'` reads the lead vocal. */
 const withMixSupport: Pick<ImportDeps, 'analyze'> = {
   analyze: async (s, sr, opts, onProgress) => (opts.mode === 'mix' ? analyzeMix(s, null, sr, opts, onProgress) : analyzeTake(s, sr, { ...opts, mode: undefined }, onProgress)),
 };
-/** And as it behaves now: `mode: 'mix'` is ignored and a solo analysis comes back. */
+/** An analyzer that ignores `mode: 'mix'` and always hands back a solo analysis (a broken build, or a fake). */
 const withoutMixSupport: Pick<ImportDeps, 'analyze'> = {
   analyze: async (s, sr, opts, onProgress) => analyzeTake(s, sr, { ...opts, mode: undefined }, onProgress),
 };
@@ -219,7 +222,7 @@ describe('prepareClip: a melody over a band', () => {
     };
     const events: ImportProgress[] = [];
     const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, (p) => events.push(p), { deps: { analyze } });
-    expect(analyzeCalls).toEqual([undefined, 'mix']);
+    expect(analyzeCalls).toEqual(['solo', 'mix']);
     expect(prepared.suggestedKind).toBe('mix');
     expect(preparedKind(prepared)).toBe('mix');
     expect(prepared.analysis.mode).toBe('mix');
@@ -233,19 +236,70 @@ describe('prepareClip: a melody over a band', () => {
     expect([...analysing].sort((a, b) => a - b)).toEqual(analysing);
   }, 60000);
 
-  it('stays blocked with a clear message until the full-song analysis exists, and offers the stem route', async () => {
-    const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
+  it('reads the song in the worker path by default: solo first, then the lead vocal, with a confidence', async () => {
+    const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS);
+    expect(prepared.analysis.mode).toBe('mix');
+    expect(preparedKind(prepared)).toBe('mix');
+    expect(prepared.blockers).toEqual([]);
+    const lead = leadConfidenceOf(prepared.analysis);
+    expect(lead).not.toBeNull();
+    expect(lead!.confidence).toBeGreaterThan(0);
+    expect(['high', 'ok', 'low', 'poor']).toContain(lead!.band);
+    expect(leadConfidenceOf(prepared.views!.solo!.analysis)).toBeNull();
+  }, 60000);
+
+  it('adds the extractor\'s own warning when the lead vocal was hard to follow, and none when it was easy', () => {
+    const hard = analysisFromSpans([{ start: 1, end: 12 }], 14, { mode: 'mix', issues: ['accompaniment'] });
+    (hard as VoiceAnalysis & { leadExtraction: { confidence: number; sideToMidDb: null } }).leadExtraction = { confidence: 0.62, sideToMidDb: null };
+    const view = buildView('mix', hard);
+    expect(view.warnings[0]).toBe(MIX_REASON);
+    expect(view.warnings.join(' ')).toMatch(/very hard to follow/);
+    expect(leadConfidenceOf(hard)).toMatchObject({ band: 'poor' });
+
+    const easy = analysisFromSpans([{ start: 1, end: 12 }], 14, { mode: 'mix', issues: ['accompaniment'] });
+    (easy as VoiceAnalysis & { leadExtraction: { confidence: number; sideToMidDb: null } }).leadExtraction = { confidence: 0.9, sideToMidDb: null };
+    expect(buildView('mix', easy).warnings).toEqual([MIX_REASON]);
+  });
+
+  it('blocks a full song whose lead vocal is too short, with words for songs rather than for solo clips', () => {
+    const brief = analysisFromSpans([{ start: 1, end: 2 }], 8, { mode: 'mix', issues: ['accompaniment', 'too-little-singing'] });
+    const view = buildView('mix', brief);
+    expect(view.blockers).toHaveLength(1);
+    expect(view.blockers[0]).toMatch(/lead vocal/);
+    expect(view.blockers[0]).toMatch(/vocal-only version/);
+    expect(view.phrases).toEqual([]);
+  });
+
+  it('shows the solo reading with the reason and a way to retry when the automatic full-song pass fails', async () => {
+    let calls = 0;
+    const analyze: ImportDeps['analyze'] = async (s, sr, opts, p) => {
+      if (opts.mode === 'mix' && calls++ === 0) throw new Error('The analysis worker stopped unexpectedly.');
+      return withMixSupport.analyze(s, sr, opts, p);
+    };
+    const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: { analyze } });
+    expect(preparedKind(prepared)).toBe('solo');
     expect(prepared.suggestedKind).toBe('mix');
-    expect(prepared.blockers).toEqual([FULL_SONG_UNAVAILABLE]);
-    expect(prepared.blockers[0]).toMatch(/not available yet/);
-    expect(prepared.blockers[0]).toMatch(/vocal-only version/);
-    expect(prepared.phrases).toEqual([]);
-    expect(blockersOf(prepared)).toEqual([FULL_SONG_UNAVAILABLE]);
-    await expect(commitClip(prepared, edits(prepared, { phrases: [] }), createMemoryClipStore())).rejects.toThrow(/not available yet/);
+    expect(prepared.warnings[0]).toMatch(/could not follow the lead vocal automatically \(The analysis worker stopped unexpectedly\)/);
+    expect(prepared.warnings[0]).toMatch(/Switch on "This is a full song"/);
+    expect(prepared.warnings.join(' ')).not.toMatch(/sounds like it has instruments/);
+    expect(prepared.views?.mix).toBeUndefined();
+    // The toggle runs the full-song pass again, and this time it works.
+    const again = await reanalyzeClip(prepared, 'mix', undefined, { deps: { analyze } });
+    expect(preparedKind(again)).toBe('mix');
+    expect(again.analysis.mode).toBe('mix');
+    expect(again.blockers).toEqual([]);
+  }, 60000);
+
+  it('does not pass a solo reading off as a full song when the analyzer ignores the mode', async () => {
+    const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
+    expect(preparedKind(prepared)).toBe('solo');
+    expect(prepared.analysis.mode).toBeUndefined();
+    expect(prepared.warnings[0]).toMatch(/could not follow the lead vocal automatically \(The full-song reading did not run\)/);
+    await expect(reanalyzeClip(prepared, 'mix', undefined, { deps: withoutMixSupport })).rejects.toThrow(/did not run/);
   }, 60000);
 
   it('lets the user say "this is solo" after all: the solo reading is already there and carries a warning', async () => {
-    const analyze = vi.fn(withoutMixSupport.analyze);
+    const analyze = vi.fn(withMixSupport.analyze);
     const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: { analyze } });
     const calls = analyze.mock.calls.length;
     const solo = await reanalyzeClip(prepared, 'solo', undefined, { deps: { analyze } });
@@ -257,7 +311,8 @@ describe('prepareClip: a melody over a band', () => {
     // And back again without a new analysis.
     const again = await reanalyzeClip(solo, 'mix', undefined, { deps: { analyze } });
     expect(analyze.mock.calls.length).toBe(calls);
-    expect(again.blockers).toEqual([FULL_SONG_UNAVAILABLE]);
+    expect(again.blockers).toEqual([]);
+    expect(again.analysis.mode).toBe('mix');
   }, 60000);
 });
 
@@ -381,7 +436,7 @@ describe('reanalyzeClip and the vocal-only stem', () => {
   });
 
   it('pairs a song with its vocal-only file when they are the same length and the stem has singing', () => {
-    const mix = makeFakePreparedClip({ durationSec: 60, suggestedKind: 'mix', blockers: [FULL_SONG_UNAVAILABLE], phrases: [] });
+    const mix = makeFakePreparedClip({ durationSec: 60, suggestedKind: 'mix', phrases: [] });
     const stem = makeFakePreparedClip({ durationSec: 60.1 });
     expect(stemProblem(mix, stem)).toBeNull();
     const paired = withVocalStem(mix, stem);
@@ -396,7 +451,7 @@ describe('reanalyzeClip and the vocal-only stem', () => {
   });
 
   it('reads a file the user calls the vocal as a single voice, even when it still sounds like it has a band', async () => {
-    const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
+    const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withMixSupport });
     // The "stem" is itself flagged as a full song; its solo reading was kept when it was prepared.
     const flagged = await prepareClip(wavFile(band, KIT_RATE, 'Not really a stem.wav'), SETTINGS, undefined, { deps: withMixSupport });
     expect(preparedKind(flagged)).toBe('mix');
@@ -551,6 +606,19 @@ describe('commitClip', () => {
     expect(measured!.style).toEqual(prepared.analysis.style);
   }, 30000);
 
+  it('weights a trimmed clip by the singing in the kept excerpt, the same numbers a later "add to targets" tap builds', async () => {
+    const store = createMemoryClipStore();
+    const keep = { startSec: 0, endSec: Math.min(prepared.durationSec, 6) };
+    const { clip, measured } = await commitClip(prepared, edits(prepared, { singerId: 'shawn-mendes', contributeToSinger: true, trim: keep }), store);
+    expect(measured).toEqual(measuredFromClip(clip));
+    expect(clip.durationSec).toBeLessThan(prepared.durationSec);
+    expect(measured!.durationSec).toBeCloseTo(clip.analysis.durationSec, 6);
+    expect(measured!.voicedSec).toBeLessThan(prepared.analysis.voicedSec);
+    expect(measured!.voicedSec).toBeCloseTo(clip.analysis.voicedSec, 6);
+    // Style and range are the whole reading's numbers; only the singing-time weight follows the excerpt.
+    expect(measured!.style).toEqual(prepared.analysis.style);
+  }, 30000);
+
   it('never counts a clip toward targets when it is for someone else, a full song, or has too little singing', async () => {
     const store = createMemoryClipStore();
     const someone = await commitClip(prepared, edits(prepared, { singerId: null, singerLabel: '  A friend ', contributeToSinger: true }), store);
@@ -586,8 +654,9 @@ describe('commitClip', () => {
   it('stores a vocal-only stem next to the song and analyses phrases from the stem', async () => {
     const stemWav = wavFile(soloLine({ count: 4, sampleRate: 16000 }), 16000, 'vocals.wav');
     const stem = await prepareClip(stemWav, SETTINGS, undefined, { deps: withoutMixSupport });
-    const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
-    expect(mix.blockers).toEqual([FULL_SONG_UNAVAILABLE]);
+    const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withMixSupport });
+    expect(mix.blockers).toEqual([]);
+    expect(mix.analysis.mode).toBe("mix");
     expect(Math.abs(mix.durationSec - stem.durationSec)).toBeLessThan(0.2);
 
     const paired = withVocalStem(mix, stem);
@@ -640,7 +709,7 @@ describe('commitClip', () => {
 
     it('takes back the song audio when the stem does not fit', async () => {
       const stem = await prepareClip(wavFile(soloLine({ count: 4 }), KIT_RATE, 'v.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
-      const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
+      const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withMixSupport });
       const base = createMemoryClipStore();
       const deleted: string[] = [];
       const store: ClipStore = { ...wrapped(base, { vocal: true }), deleteAudio: async (id, kind) => (deleted.push(kind), base.deleteAudio(id, kind)) };
@@ -721,7 +790,7 @@ describe('relinkAudio', () => {
 
   it('needs the stem again for a clip that had one, and otherwise falls back to the full mix', async () => {
     const stem = await prepareClip(wavFile(soloLine({ count: 4 }), KIT_RATE, 'vocals.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
-    const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withoutMixSupport });
+    const mix = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withMixSupport });
     const paired = withVocalStem(mix, stem);
     const made = (await commitClip(paired, edits(paired, { kind: 'mix', trim: { startSec: 0, endSec: mix.durationSec } }), createMemoryClipStore())).clip;
     const missing: ClipRecord = { ...made, audioMissing: true };
@@ -737,6 +806,27 @@ describe('relinkAudio', () => {
     expect(withStem.audio.vocal).toMatchObject({ kind: 'vocal' });
     expect(withStem.analysisKind).toBe('solo');
     await expect(relinkAudio({ ...original, audioMissing: true }, prepared, store2, stem)).rejects.toThrow(/was not added with a vocal-only file/);
+  }, 60000);
+});
+
+describe('the detected-melody check on a full song', () => {
+  it('plays the lead-vocal contour (not the band), and the phrases come from that contour', async () => {
+    const prepared = await prepareClip(wavFile(band, KIT_RATE, 'Song.wav'), SETTINGS, undefined, { deps: withMixSupport });
+    expect(prepared.analysis.mode).toBe('mix');
+    const first = prepared.phrases[0];
+    const tone = renderContourTone(prepared.analysis, 22050, { startSec: first.start, endSec: first.end });
+    expect(tone.length).toBeGreaterThan(22050);
+    const heard = median(Array.from(trackPitch(tone, 22050).f0).filter((v) => Number.isFinite(v)));
+    const contour = median(prepared.analysis.frames.filter((f) => f.voiced && f.t >= first.start && f.t < first.end).map((f) => f.f0));
+    // The tone sits on the extracted melody, within a semitone.
+    expect(Math.abs(Math.log2(heard / contour)) * 12).toBeLessThan(1);
+    // The sung line of withBand(soloLine) is around G3-E4 (MIDI 55-64); the band chord is at A2-A3 and below. The contour is the voice.
+    const midi = 69 + 12 * Math.log2(contour / 440);
+    expect(midi).toBeGreaterThan(52);
+    // Phrases are cut from the contour: each one starts and ends where it has voiced frames.
+    for (const p of prepared.phrases) {
+      expect(prepared.analysis.frames.some((f) => f.voiced && f.t >= p.start && f.t < p.end)).toBe(true);
+    }
   }, 60000);
 });
 

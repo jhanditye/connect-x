@@ -188,7 +188,8 @@ button,
 }
 .nav-list--tabs {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  /* Five tabs: Trainer, Studio, Results, Progress, More. */
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 .nav-list--tabs .nav-link {
   display: flex;

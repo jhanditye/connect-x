@@ -23,11 +23,23 @@ export interface TrainerController {
   deleteClip(id: string): Promise<void>;
   /** Adds or removes the clip's measurements from its singer's targets (AppController.addMeasuredClip / removeMeasuredClip). */
   setContributes(clipId: string, on: boolean): Promise<void>;
-  exportLibrary(): Promise<Blob>;
+  /**
+   * The library as a backup file (JSON, never audio). By default it also counts as "backed up" (the reminder resets) as soon as the
+   * Blob is built; pass `markDone: false` and call `markExported` once the file has really been saved, so a cancelled or failed
+   * save does not silence the reminder.
+   */
+  exportLibrary(options?: { markDone?: boolean }): Promise<Blob>;
+  /** Records that the last exportLibrary({ markDone: false }) file was saved. Optional: controllers without a reminder omit it. */
+  markExported?(exportedAt?: string): Promise<void>;
   importLibrary(file: File): Promise<{ added: number; updated: number; warnings: string[] }>;
   /** Decode, analyse and segment one file. Nothing is stored until commitClip. Rejects with a message that names the fix. */
   prepareClip(file: File, onProgress?: (p: ImportProgress) => void): Promise<PreparedClip>;
   commitClip(prepared: PreparedClip, edits: CommitEdits, onProgress?: (p: ImportProgress) => void): Promise<ClipRecord>;
+  /**
+   * The stored audio of a clip as mono float samples (the vocal-only file when the clip has one, else the song), for the phrase editor's
+   * waveform. null when the clip has no audio on this device. Optional: controllers without it get an editor with no waveform.
+   */
+  readClipSamples?(clipId: string): Promise<{ samples: Float32Array; sampleRate: number; source: 'mix' | 'vocal' } | null>;
   /** Re-attaches the audio of a clip whose audio is missing (after a library import). */
   relinkClip(clipId: string, prepared: PreparedClip): Promise<ClipRecord>;
   /** Newest first. */

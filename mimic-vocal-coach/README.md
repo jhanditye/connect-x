@@ -79,6 +79,9 @@ npm run build:single # one self-contained HTML file in dist-single/
 Microphone access needs `https://` or `localhost`. On a phone, open the deployed site (see below) or
 record a voice memo and upload it.
 
+Everything was tested in a desktop Chromium pretending to be an iPhone; nothing has run on a real iPhone yet.
+`docs/IPHONE_CHECKLIST.md` is the plain-English list to run on the phone (and what each check protects against).
+
 ## Deploy to GitHub Pages
 
 `.github/workflows/pages.yml` builds and deploys on every push to `main`, and `ci.yml` runs the

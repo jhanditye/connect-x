@@ -9,6 +9,7 @@
 // to the foreground (at most every 30 minutes) and when the network returns.
 
 import { useSyncExternalStore } from 'react';
+import { detectNative } from './platform';
 
 export interface PwaState {
   /** Service workers are available (secure context, supported browser, production build). */
@@ -90,6 +91,9 @@ export function workerUrl(base: string = import.meta.env.BASE_URL, page: string 
 
 export function startPwa(): void {
   if (started || typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+  // Inside the Capacitor app the web build is bundled with the app and updated with it: a service worker would only pin an old copy
+  // (and WKWebView allows them for app-bound domains only). Offline needs no worker there.
+  if (detectNative()) return;
   // Production builds only; the single-file build (--mode single) ships no sw.js.
   if (!import.meta.env.PROD || import.meta.env.MODE === 'single' || (typeof isSecureContext !== 'undefined' && !isSecureContext)) return;
   started = true;

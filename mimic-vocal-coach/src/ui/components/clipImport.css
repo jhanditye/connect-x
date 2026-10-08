@@ -247,6 +247,33 @@ html.imp-open body {
 .rev-busy p {
   margin-bottom: var(--space-2);
 }
+.rev-lead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.rev-lead-badge {
+  font-weight: 600;
+  color: var(--ink);
+}
+.rev-lead--high .rev-lead-badge,
+.rev-lead--ok .rev-lead-badge {
+  background: color-mix(in srgb, var(--good) 18%, var(--surface));
+}
+.rev-lead--low .rev-lead-badge {
+  background: color-mix(in srgb, var(--warn) 22%, var(--surface));
+}
+.rev-lead--poor .rev-lead-badge {
+  background: color-mix(in srgb, var(--bad) 20%, var(--surface));
+}
+.rev-lead-hint {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
 .rev-ok {
   margin-top: var(--space-2);
   font-size: var(--fs-sm);

@@ -81,13 +81,31 @@ export const MIX_REASON =
   'This sounds like a full song: singing over instruments. Mimic follows the lead vocal and judges pitch and timing only; tone is not measured for full songs. ' +
   'Play the detected melody to check that it follows the singing.';
 
-export const FULL_SONG_UNAVAILABLE =
-  'Full-song analysis is not available yet in this version, so a clip with a band cannot be added. Add a vocal-only version of the song, or a clip with just the voice.';
+/** The lead-vocal reading of a full song found too little singing to practise with. */
+export function littleMixSingingReason(voicedSec: number): string {
+  const heard = !(voicedSec >= 0.5)
+    ? 'Mimic could not follow a lead vocal in this clip'
+    : `Mimic could follow only ${voicedSec < 10 ? voicedSec.toFixed(1) : Math.round(voicedSec)} s of lead vocal in this clip`;
+  return (
+    `${heard}, so there is nothing to practise yet. It may be an instrumental part, or the voice sits too far below the band. ` +
+    'Keep a part of the song with continuous singing, add the vocal-only version of the song, or pick another clip.'
+  );
+}
+
+/** The automatic full-song pass failed after the solo pass had found a band: the solo reading is shown instead. */
+export function mixAutoFailedWarning(why: string | null): string {
+  return (
+    'Mimic found a band in this clip but could not follow the lead vocal automatically' +
+    (why && why.trim() ? ` (${why.trim().slice(0, 140).replace(/[.\s]+$/, '')})` : '') +
+    '. The solo reading is shown, which may follow the band instead of the voice. Switch on "This is a full song" to try again.'
+  );
+}
 
 export const BAND_WARNING =
   'This clip sounds like it has instruments in it. If the detected melody does not follow the singing, switch on "This is a full song".';
 
-export const NOISY_WARNING = 'There is a lot of background noise in this clip, so the notes may be harder to follow.';
+export const NOISY_WARNING =
+  'There is a lot of background noise in this clip, so the notes may be harder to follow. If there is music behind the voice, switch on "This is a full song".';
 export const CLIPPING_WARNING = 'The recording is distorted (clipping), which can confuse the pitch tracking.';
 export const QUIET_WARNING = 'This clip is very quiet, so quiet notes may be missed.';
 

@@ -19,15 +19,10 @@ Honest limits carried over from the design notes: calibrated on synthetic voices
 tone is the weakest skill; the 65 Hz tracker floor makes some key shifts unscoreable; short phrases (under 5 notes or 4 s) are
 about twice as noisy (show those rounded to 5).
 
-### Known reconciliation work (first job of the compare owner, W4)
+### Reconciliation: done
 
-- `feedback.ts` `buildFixes` still ranks by its own `loss` estimates (legacy cents ramp, 3 points per late note ...). The
-  authority's `score.fixes` (ranked by `gainPoints`) and `perNote.pitchScore` should replace those estimates so the order of the
-  fixes agrees with the score. Keep `TrainerFix` (evidence, cue, drill, loop) as the UI shape.
-- `NoteCompare.cents` (model-window reading) and `NoteScore.cents` (aligner) can differ by a few cents; the table shows
-  `NoteCompare`, the score uses `NoteScore`. Decide whether to show `NoteScore` flags (superset: octave-displaced, ornament, split).
-- `PITCH_FULL_CENTS` / `PITCH_ZERO_CENTS` in `compare.ts` are legacy and only used by `feedback.ts`.
-- The prototype `feedback.ts` had an inverted pitch loss (`1 - centsScoreLoss`); fixed here, covered by `feedback.test.ts`.
+The rules for flags, the one time model, tone dead zones, short phrases, range, gates, bleed and tone bias are in
+`src/trainer/score/README.md`. `feedback.ts` ranks the scorer's own fixes (`score.fixes`, by points) and keeps `TrainerFix` as the UI shape.
 
 ## Types (all in `src/types.ts`, additive)
 
@@ -46,7 +41,7 @@ about twice as noisy (show those rounded to 5).
 ## The two seams screens code against
 
 - `TrainerController` (`useTrainer()`): library state and actions (clips, queue, storage, import `prepareClip` / `commitClip`,
-  attempts, export / import, `openPractice`). Provider: `state/TrainerProvider.tsx` (stub now). Tests wrap screens in
+  attempts, export / import, `openPractice`). Provider: `state/TrainerProvider.tsx`. Tests wrap screens in
   `<TrainerContext.Provider value={makeFakeTrainerController()}>`.
 - `PracticeEngine` (`trainer/engine.ts`): one per open phrase; `getSnapshot` / `subscribe` (works with `useSyncExternalStore`),
   `listen`, `sing`, `stop`, `playAttempt`, `setOptions`, `position()` for the rAF playhead, `dispose`.
@@ -61,35 +56,28 @@ shown on screen); `parseTrainerPath` / `trainerHash` / `useTrainerPath`. `parseR
 
 ## Module map
 
-Status: lifted = prototype moved into `src` with imports rewritten and compiled under the strict flags (tests for the module to be
-ported by its owner); stub = final exported signatures, bodies throw `Error('not implemented')` or return a safe default.
+All of it is implemented and tested unless a row says otherwise.
 
-| Path | Status | Owner |
-|---|---|---|
-| `storage/clips.ts` (ClipStore, IndexedDB + memory, `StoreUnavailableError`, `QuotaError`) | lifted | W1 |
-| `audio/pcm.ts` | lifted | W1 |
-| `storage/library.ts` | stub (`buildLibraryExport` works) | W1 |
-| `storage/quota.ts` | stub (safe defaults) | W1 |
-| `state/TrainerProvider.tsx` | stub (inert controller) | W1 |
-| `state/trainerContext.ts` (`TrainerController`, `TrainerContext`, `useTrainer`) | contract, final | W0 |
-| `trainer/segment.ts` | lifted | W2 |
-| `trainer/import.ts` | stub | W2 |
-| `trainer/keys.ts` | stub (minimal working) | W2 |
-| `audio/duplex.ts` (+ `DuplexSession`, minimal `listen`) | lifted | W3 |
-| `dsp/timestretch.ts` (`wsolaStretch`, `pitchShiftKeepDuration`) | lifted | W3 |
-| `trainer/latency.ts` | lifted | W3 |
-| `audio/player.ts`, `audio/route.ts`, `audio/diagnostics.ts` | stub (`describeRoute`, `formatDiagnostics` work) | W3 |
-| `trainer/score/*` (all 12 files) | lifted | W4 |
-| `trainer/compare.ts` | lifted + integrated with the scorer | W4 |
-| `trainer/feedback.ts`, `trainer/srs.ts` | lifted | W4 |
-| `trainer/phraseAnalysis.ts` | stub | W4 |
-| `trainer/engine.ts` (`PracticeEngine`) | contract, final (types only) | W0 |
-| `dsp/melody/*` (6 files) | lifted | W5 |
-| `analysis/mixMode.ts` (`analyzeMix`, sets `mode: 'mix'`) | lifted, not yet called by `analyzeTake` | W5 |
-| `coach/reference.ts` `transposeHint` | patched | W4 |
-| `testing/trainerFixtures.ts` | final | W0 |
-| `state/routing.ts`, `ui/components/Icon.tsx` | final (nav still maps `ROUTES`) | W6 |
-| `ui/pages/Trainer.tsx`, `ui/pages/More.tsx` | empty shells | W6 |
+| Path | What it is |
+|---|---|
+| `storage/clips.ts`, `storage/clipStoreContract.ts` | `ClipStore`: IndexedDB `mimic-trainer` + an in-memory twin, one shared contract suite (a change to the interface goes in both stores and in the contract). `openClipStoreWithFallback` never rejects |
+| `storage/library.ts`, `storage/quota.ts`, `audio/pcm.ts` | Backup export/import (never audio), merge, relink by fingerprint, `measuredFromClip`; storage estimate, persistence, space checks; Int16 chunks and fingerprints |
+| `state/TrainerProvider.tsx` (+ `trainerReducer.ts`) | The real `TrainerController`; `useTrainerExtras()` for the backup reminder, storage note and memory-only reason. Takes `openPractice` (engine factory) as a prop |
+| `state/trainerContext.ts` | `TrainerController`, `TrainerContext`, `useTrainer` |
+| `trainer/import.ts`, `importCopy.ts`, `segment.ts`, `keys.ts` | Decode, analyse (solo first; if the solo pass raises 'accompaniment' the same audio is read again as a full song, in the worker, via `analysis/auto.ts`), classify, segment, commit, relink |
+| `trainer/phraseAnalysis.ts` | Phrase window loading and the cached phrase analysis (mix-melody clips are analysed as a mix again) |
+| `analysis/mixMode.ts`, `analysis/auto.ts`, `dsp/melody/*` | Full-song front end: lead-vocal melody extraction, solo-then-mix routing, the confidence the review shows |
+| `audio/duplex.ts`, `audio/player.ts`, `audio/route.ts`, `audio/diagnostics.ts`, `dsp/timestretch.ts` (+ `stretch*`), `trainer/latency.ts` | One AudioContext for guide, count-in and stamped capture; phrase player; routes; device checks; WSOLA speed and key |
+| `trainer/score/*`, `trainer/compare.ts`, `trainer/feedback.ts`, `trainer/srs.ts` | The scorer (the one score authority), per-note table, fixes, mastery and review |
+| `trainer/engine.ts` | `PracticeEngine` contract. The real engine is `practiceEngine.ts` / `practiceSession.ts` (the engine workstream) |
+| `ui/pages/Trainer*.tsx`, `ui/components/{ImportSheet,ClipReview,PhraseEditor,PhraseStrip,ResultSheet,...}` | The screens, against `TrainerController` and `PracticeEngine` only |
+| `testing/trainerFixtures.ts`, `testing/songMix.ts`, `testing/fakeAudio.ts` | Fakes and synthetic audio. No recordings anywhere |
+
+Cross-feature wiring worth knowing: `AppController.onClear` runs the Trainer's `clearAll` from "Clear all data";
+`AppController.addMeasuredClip` is fed from the stored clip (`measuredFromClip`, weighted by the singing in the kept excerpt) both at
+import and when the switch is tapped later, so the two give the same targets; the backup is counted as made only after `saveFile`
+succeeds (`exportLibrary({ markDone: false })` then `markExported()`); inside the Capacitor app no service worker is registered
+(`pwa/platform.ts` `detectNative`).
 
 ## Privacy rules that apply to every module here
 

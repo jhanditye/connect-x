@@ -11,6 +11,7 @@ import { isScoreable } from '../coach/compare';
 import { getExercise } from '../coach/exercises';
 import { ARTIST_VOICE_TYPE, clipFromAnalysis, MAX_CLIPS_PER_SINGER } from '../coach/measured';
 import { clearSessions, deleteSession, loadSessions, saveSession, sessionFromResults } from '../storage/history';
+import { removeAllAppKeys } from '../storage/local';
 import { clearMeasurements, loadMeasurements, saveMeasurements } from '../storage/measurements';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage/settings';
 import type { AnalysisOptions, AppSettings, MeasuredClip, ReferenceComparison, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
@@ -86,6 +87,17 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
   const stateRef = useRef<AppState>(state);
   stateRef.current = state;
   const runRef = useRef(0);
+  // Measured targets as they are right now, including changes made earlier in the same tick that React has not rendered yet
+  // (the Trainer removes a clip from one singer and adds it to another in one go; each change must start from the last one).
+  const measuredRef = useRef<Record<string, MeasuredClip[]>>(state.measurements);
+  measuredRef.current = state.measurements;
+  const clearHooks = useRef(new Set<() => void | Promise<void>>());
+  const onClear = useCallback((fn: () => void | Promise<void>) => {
+    clearHooks.current.add(fn);
+    return () => {
+      clearHooks.current.delete(fn);
+    };
+  }, []);
   const failedOptsRef = useRef<string | null>(null);
 
   useEffect(() => applyTheme(theme), [theme]);
@@ -295,9 +307,10 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
   // artist's voice (not the user's), checked like a reference clip (song mixes, speech and too little
   // singing are refused with the reason), and only the measurements are kept.
   const setMeasuredClips = useCallback((singerId: string, clips: MeasuredClip[]) => {
-    const all = { ...stateRef.current.measurements };
+    const all = { ...measuredRef.current };
     if (clips.length) all[singerId] = clips;
     else delete all[singerId];
+    measuredRef.current = all;
     saveMeasurements(all);
     dispatch({ type: 'measurements/set', singerId, clips });
   }, []);
@@ -335,7 +348,7 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         added.push(clipFromAnalysis(analysis, name, newClipId(), new Date().toISOString()));
       }
       if (added.length) {
-        const current = stateRef.current.measurements[singerId] ?? [];
+        const current = measuredRef.current[singerId] ?? [];
         setMeasuredClips(singerId, [...current, ...added].slice(-MAX_CLIPS_PER_SINGER));
       }
       return { added: added.length, rejected };
@@ -381,11 +394,11 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
       },
       measureClips,
       addMeasuredClip: (singerId: string, clip: MeasuredClip) =>
-        setMeasuredClips(singerId, [...(stateRef.current.measurements[singerId] ?? []).filter((c) => c.id !== clip.id), clip].slice(-MAX_CLIPS_PER_SINGER)),
+        setMeasuredClips(singerId, [...(measuredRef.current[singerId] ?? []).filter((c) => c.id !== clip.id), clip].slice(-MAX_CLIPS_PER_SINGER)),
       removeMeasuredClip: (singerId: string, clipId: string) =>
         setMeasuredClips(
           singerId,
-          (stateRef.current.measurements[singerId] ?? []).filter((c) => c.id !== clipId),
+          (measuredRef.current[singerId] ?? []).filter((c) => c.id !== clipId),
         ),
       clearMeasuredClips: (singerId: string) => setMeasuredClips(singerId, []),
       clearAllData: () => {
@@ -394,8 +407,19 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         clearMeasurements();
         saveSettings(DEFAULT_SETTINGS);
         setTheme('system');
+        measuredRef.current = {};
+        removeAllAppKeys(); // also the microphone choice, trainer preferences and other small flags, not only the three main stores
         dispatch({ type: 'reset', settings: { ...DEFAULT_SETTINGS }, sessions: [] });
+        // The Trainer's library (and anything else that keeps data) clears itself. One that fails must not stop the rest.
+        for (const fn of [...clearHooks.current]) {
+          try {
+            void Promise.resolve(fn()).catch(() => undefined);
+          } catch {
+            // A hook that throws must not stop "delete everything".
+          }
+        }
       },
+      onClear,
       openPractice: (ids?: string[]) => {
         dispatch({ type: 'practice/focus', ids: ids && ids.length ? ids : null });
         go('practice');
@@ -423,6 +447,7 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
       refreshSessions,
       measureClips,
       setMeasuredClips,
+      onClear,
       theme,
       setTheme,
     ],

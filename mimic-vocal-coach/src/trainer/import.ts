@@ -3,13 +3,17 @@
 // then store after the user's review (commitClip). Nothing is stored until commitClip; a clip is either fully stored or absent.
 
 import { MAX_ANALYSIS_SEC } from '../analysis/analyze';
+import { analyzeWithRouting } from '../analysis/auto';
 import { analyzeInWorker } from '../analysis/client';
+import { leadExtractionOf } from '../analysis/mixMode';
+import { mixConfidenceBand, mixReport, type MixConfidenceBand } from '../analysis/quality';
 import { decodeAudioFile, isVideoFile, type DecodedTake, type DecodeOptions } from '../audio/decode';
 import { fingerprint as hashBytes, floatToInt16, MAX_STORE_RATE } from '../audio/pcm';
-import { ARTIST_VOICE_TYPE, clipFromAnalysis } from '../coach/measured';
+import { ARTIST_VOICE_TYPE } from '../coach/measured';
 import { referenceUsability } from '../coach/reference';
 import { resample } from '../dsp/resample';
 import type { ClipStore } from '../storage/clips';
+import { measuredFromClip } from '../storage/library';
 import type {
   AnalysisIssue,
   AnalysisOptions,
@@ -24,14 +28,15 @@ import type {
 import {
   BAND_WARNING,
   CLIPPING_WARNING,
-  FULL_SONG_UNAVAILABLE,
   MIX_REASON,
   NOISY_WARNING,
   NOT_FOR_TARGETS_MIX,
   NO_PHRASES_REASON,
   QUIET_WARNING,
   SPEECH_REASON,
+  littleMixSingingReason,
   littleSingingReason,
+  mixAutoFailedWarning,
 } from './importCopy';
 import { TRAINER_ANALYSIS_VERSION } from './phraseAnalysis';
 import {
@@ -235,14 +240,25 @@ export function classifyClip(analysis: VoiceAnalysis): { kind: ClipKind | 'block
   return { kind: 'solo', reason: null };
 }
 
+/** How sure Mimic is that it followed the lead vocal of a full song (null for a solo reading). A ranking, not a percentage of right notes. */
+export function leadConfidenceOf(analysis: VoiceAnalysis): { confidence: number; band: MixConfidenceBand } | null {
+  const le = leadExtractionOf(analysis);
+  return le ? { confidence: le.confidence, band: mixConfidenceBand(le.confidence) } : null;
+}
+
 /** A reading of the analysis as the given kind: the phrases found, warnings to show and blockers that stop the save. */
 export function buildView(kind: ClipKind, analysis: VoiceAnalysis): AnalysisView {
   const issues = analysis.issues ?? [];
   const warnings = qualityWarnings(issues);
   const blockers: string[] = [];
-  if (kind === 'mix') warnings.unshift(MIX_REASON);
+  if (kind === 'mix') {
+    warnings.unshift(MIX_REASON);
+    // Below 0.8 the extractor itself says it was hard to follow: say so before the user trusts the phrases.
+    const lead = leadConfidenceOf(analysis);
+    if (lead && analysis.mode === 'mix') warnings.splice(1, 0, ...mixReport({ confidence: lead.confidence, voicedSec: analysis.voicedSec }).warnings);
+  }
   if (kind === 'solo' && analysis.mode !== 'mix' && issues.includes('accompaniment')) warnings.unshift(BAND_WARNING);
-  if (issues.includes('too-little-singing')) blockers.push(littleSingingReason(analysis.voicedSec));
+  if (issues.includes('too-little-singing')) blockers.push(kind === 'mix' && analysis.mode === 'mix' ? littleMixSingingReason(analysis.voicedSec) : littleSingingReason(analysis.voicedSec));
   else if (issues.includes('speech-like') && kind === 'solo') blockers.push(SPEECH_REASON);
   let phrases: SegPhrase[] = [];
   if (blockers.length === 0) {
@@ -252,25 +268,17 @@ export function buildView(kind: ClipKind, analysis: VoiceAnalysis): AnalysisView
   return { kind, analysis, phrases, warnings, blockers };
 }
 
-/** The reading used when full-song analysis is not available: stays blocked, with the way out. */
-function mixUnavailableView(solo: VoiceAnalysis): AnalysisView {
-  return { kind: 'mix', analysis: solo, phrases: [], warnings: [], blockers: [FULL_SONG_UNAVAILABLE] };
-}
-
-/**
- * Runs the full-song front end (lead-vocal melody extraction) through the normal analysis entry point with `mode: 'mix'`.
- * An analysis that comes back without `mode: 'mix'` means this build cannot do it yet (null): the caller shows
- * FULL_SONG_UNAVAILABLE instead of passing a plain solo analysis off as a mix.
- */
-export async function analyzeAsMix(
+/** The full-song reading, from the analysis entry point with `mode: 'mix'`. A result that is not a mix analysis is an error, never passed off as one. */
+async function analyzeMixReading(
+  analyze: ImportDeps['analyze'],
   samples: Float32Array,
   sampleRate: number,
   opts: AnalysisOptions,
   onProgress?: (fraction: number) => void,
-  analyze: ImportDeps['analyze'] = DEFAULT_DEPS.analyze,
-): Promise<VoiceAnalysis | null> {
+): Promise<VoiceAnalysis> {
   const analysis = await analyze(samples, sampleRate, { ...opts, mode: 'mix' }, onProgress);
-  return analysis.mode === 'mix' ? analysis : null;
+  if (analysis.mode !== 'mix') throw new Error('The full-song reading did not run. Reload the app and try again, or add the vocal-only version of the song.');
+  return analysis;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -343,22 +351,27 @@ export async function prepareClip(
   const durationSec = samples.length / sampleRate;
   const opts: AnalysisOptions = { voiceType: ARTIST_VOICE_TYPE, a4Hz: settings.a4Hz };
 
+  // Solo first (it is what finds out whether this is a song). When it raises the band issue the same audio is read again as a
+  // full song, through the same analyzer (the worker in the app), with one progress stream.
   report('analysing', 0);
-  const solo = await deps.analyze(samples, sampleRate, opts, (f) => report('analysing', f * 0.6));
+  const auto = await analyzeWithRouting(deps.analyze, samples, sampleRate, opts, 'auto', (f) => report('analysing', f));
   check();
+  const solo = auto.solo ?? auto.analysis;
   const verdict = classifyClip(solo);
 
   let views: Views;
   let current: AnalysisView;
-  if (verdict.kind === 'mix') {
+  // An analyzer that hands back a plain solo reading for a full-song request has not run the full-song front end: treat it as failed.
+  const mixFailure = auto.route === 'mix-auto' && auto.analysis.mode !== 'mix' ? 'The full-song reading did not run' : auto.mixError;
+  if (auto.route === 'mix-auto' && mixFailure === null) {
     const soloView = buildView('solo', solo);
-    const mixAnalysis = await analyzeAsMix(samples, sampleRate, opts, (f) => report('analysing', 0.6 + f * 0.4), deps.analyze);
-    check();
-    const mixView = mixAnalysis ? buildView('mix', mixAnalysis) : mixUnavailableView(solo);
+    const mixView = buildView('mix', auto.analysis);
     views = { solo: soloView, mix: mixView };
     current = mixView;
   } else {
     current = buildView('solo', solo);
+    // The band was found but the full-song pass failed: show the solo reading with the reason, and let the toggle try again.
+    if (mixFailure !== null) current = { ...current, warnings: [mixAutoFailedWarning(mixFailure), ...current.warnings.filter((w) => w !== BAND_WARNING)] };
     views = { solo: current };
   }
   report('analysing', 1);
@@ -406,9 +419,7 @@ export async function reanalyzeClip(
       onProgress?.({ fileIndex: options.index ?? 0, fileCount: options.count ?? 1, name: prepared.file.name, phase: 'analysing', fraction });
     report(0);
     if (kind === 'mix') {
-      const mix = await analyzeAsMix(prepared.samples, prepared.sampleRate, opts, report, deps.analyze);
-      const soloAnalysis = views.solo?.analysis ?? prepared.analysis;
-      view = mix ? buildView('mix', mix) : mixUnavailableView(soloAnalysis);
+      view = buildView('mix', await analyzeMixReading(deps.analyze, prepared.samples, prepared.sampleRate, opts, report));
     } else {
       const solo = await deps.analyze(prepared.samples, prepared.sampleRate, opts, report);
       view = buildView('solo', solo);
@@ -509,6 +520,7 @@ function summaryOf(analysis: VoiceAnalysis, opts: AnalysisOptions, kind: ClipKin
     issues: [...(analysis.issues ?? [])],
     usableAsTarget: usable.usable,
     unusableReason: usable.usable ? null : usable.reason,
+    ...(analysis.mode === 'mix' ? { leadConfidence: leadExtractionOf(analysis)?.confidence ?? null } : {}),
   };
 }
 
@@ -617,7 +629,9 @@ export async function commitClip(
     };
     await store.putClip(clip);
     report(1);
-    return { clip, measured: measured ? clipFromAnalysis(analysis, title, clipId, now) : null };
+    // The same numbers a later "add to targets" tap builds from the stored clip (the kept excerpt's singing time is the weight),
+    // so counting a clip at import and counting it afterwards give the same targets.
+    return { clip, measured: measured ? measuredFromClip(clip) : null };
   } catch (err) {
     // Nothing half-stored: take back whatever audio was written for a clip that does not exist.
     await Promise.all(written.map((k) => store.deleteAudio(clipId, k).catch(() => undefined)));

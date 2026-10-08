@@ -438,6 +438,28 @@ describe('stale targets', () => {
   });
 });
 
+describe('reading a clip\'s audio for the phrase editor', () => {
+  it('gives the stored samples, preferring the vocal-only file, and null when the audio is not on the device', async () => {
+    const store = createMemoryClipStore();
+    const mix = await store.writeAudio('fake-clip', 'mix', new Int16Array(44100).fill(500), 44100);
+    await store.putClip({ ...makeFakeClip(), audio: { mix, vocal: null } });
+    const h = await mount({ props: { store } });
+    const got = await act1(() => h.c.readClipSamples!('fake-clip'));
+    expect(got).toMatchObject({ sampleRate: 44100, source: 'mix' });
+    expect(got!.samples.length).toBe(44100);
+
+    const vocal = await store.writeAudio('fake-clip', 'vocal', new Int16Array(22050).fill(1000), 22050);
+    await store.putClip({ ...makeFakeClip(), audio: { mix, vocal } });
+    const stem = await act1(() => h.c.readClipSamples!('fake-clip'));
+    expect(stem).toMatchObject({ sampleRate: 22050, source: 'vocal' });
+    expect(stem!.samples.length).toBe(22050);
+
+    await store.putClip({ ...makeFakeClip(), audio: { mix, vocal }, audioMissing: true });
+    expect(await act1(() => h.c.readClipSamples!('fake-clip'))).toBeNull();
+    await expect(h.c.readClipSamples!('ghost')).rejects.toThrow(/no longer in the library/);
+  });
+});
+
 describe('deleting', () => {
   it('removes the clip with its audio, attempts and queue entries', async () => {
     const store = await seededStore([makeFakeClip(), makeFakeClip({ id: 'second', phrases: makeFakeClip().phrases.map((p) => ({ ...p, id: `second-${p.id}` })) })], makeFakeAttempts());
@@ -656,6 +678,40 @@ describe('export and import', () => {
     expect(h.x.exportReminder.due).toBe(false);
     expect(await store.getMeta('attemptsSinceExport')).toBe(0);
     expect(typeof (await store.getMeta('lastExportAt'))).toBe('string');
+  });
+
+  it('keeps the reminder on until the file is saved when asked to (a closed share sheet is not a backup)', async () => {
+    const store = await seededStore();
+    await store.setMeta('attemptsSinceExport', 12);
+    const h = await mount({ props: { store } });
+    expect(h.x.exportReminder.due).toBe(true);
+    const blob = await act1(() => h.c.exportLibrary({ markDone: false }));
+    expect(JSON.parse(await blob.text()).clips).toHaveLength(1);
+    expect(h.x.exportReminder.due).toBe(true);
+    expect(await store.getMeta('attemptsSinceExport')).toBe(12);
+    await act1(() => h.c.markExported!());
+    expect(h.x.exportReminder.due).toBe(false);
+    expect(await store.getMeta('attemptsSinceExport')).toBe(0);
+    expect(typeof (await store.getMeta('lastExportAt'))).toBe('string');
+    // Nothing pending: a second call changes nothing.
+    await act1(() => h.c.markExported!());
+    expect(await store.getMeta('attemptsSinceExport')).toBe(0);
+  });
+
+  it('counts the takes saved while the share sheet was open toward the next reminder', async () => {
+    const store = await seededStore();
+    await store.setMeta('attemptsSinceExport', 12);
+    const sessions: PracticeSession[] = [];
+    const h = await mount({ props: { store, openPractice: async (x) => (sessions.push(x), new FakeTrainerEngine({ clip: x.clip, phrase: x.phrase })) } });
+    const id = (h.c.queue[0] as { phraseId: string }).phraseId;
+    await act1(() => h.c.openPractice('fake-clip', id));
+    await act1(() => h.c.exportLibrary({ markDone: false }));
+    const take = { ...makeFakeAttempts()[0], id: 'during-share', clipId: 'fake-clip', phraseId: id, at: FAKE_NOW + 1000, trust: 'ok' as const, hasAudio: false };
+    await act1(() => sessions[0].recordAttempt(take));
+    expect(await store.getMeta('attemptsSinceExport')).toBe(13);
+    await act1(() => h.c.markExported!());
+    // The file did not contain the take made meanwhile, so it still counts.
+    expect(await store.getMeta('attemptsSinceExport')).toBe(1);
   });
 
   it('still produces a backup of what is on screen when the store can no longer be read', async () => {

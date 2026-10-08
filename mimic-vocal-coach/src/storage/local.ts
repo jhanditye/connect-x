@@ -58,6 +58,27 @@ export function removeKey(key: string): boolean {
   }
 }
 
+/**
+ * Removes every key this app keeps in localStorage (they all start with "mimic." or "mimic:"): settings, the API key, saved
+ * sessions, measured targets, the microphone choice, trainer preferences and the small "already seen" flags. Returns how many were removed.
+ */
+export function removeAllAppKeys(): number {
+  const s = getStorage();
+  if (!s) return 0;
+  const doomed: string[] = [];
+  try {
+    for (let i = 0; i < s.length; i++) {
+      const k = s.key(i);
+      if (k !== null && /^mimic[.:]/.test(k)) doomed.push(k);
+    }
+  } catch {
+    return 0;
+  }
+  let n = 0;
+  for (const k of doomed) if (removeKey(k)) n++;
+  return n;
+}
+
 export function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
 }

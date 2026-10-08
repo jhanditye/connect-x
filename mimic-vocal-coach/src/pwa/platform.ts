@@ -10,6 +10,24 @@ export interface PlatformEnv {
   standaloneFlag: boolean | undefined;
   /** matchMedia('(display-mode: standalone)').matches (also true for installed PWAs elsewhere). */
   displayModeStandalone: boolean;
+  /** Running inside the Capacitor iOS app (ios-native/): the same web build in a WKWebView, no service worker, no Safari. */
+  native?: boolean;
+}
+
+/**
+ * True inside the Capacitor wrapper (ios-native/). Capacitor injects `window.Capacitor` before the page runs, and its web view
+ * is served from the `capacitor:` scheme (or http://localhost with an Android-style config); either one is enough.
+ */
+export function detectNative(): boolean {
+  try {
+    const w = globalThis as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string }; location?: Location };
+    if (w.Capacitor?.isNativePlatform?.() === true) return true;
+    const platform = w.Capacitor?.getPlatform?.();
+    if (platform && platform !== 'web') return true;
+    return w.location?.protocol === 'capacitor:';
+  } catch {
+    return false;
+  }
 }
 
 export function readEnv(): PlatformEnv {
@@ -26,6 +44,7 @@ export function readEnv(): PlatformEnv {
     maxTouchPoints: nav.maxTouchPoints ?? 0,
     standaloneFlag: nav.standalone,
     displayModeStandalone,
+    native: detectNative(),
   };
 }
 
@@ -35,9 +54,14 @@ export function isIos(env: PlatformEnv = readEnv()): boolean {
   return env.platform === 'MacIntel' && env.maxTouchPoints > 1;
 }
 
-/** Launched from the Home Screen (or installed as an app on other platforms). */
+/** Running as the Capacitor app. */
+export function isNativeApp(env: PlatformEnv = readEnv()): boolean {
+  return env.native === true;
+}
+
+/** Launched from the Home Screen (or installed as an app on other platforms), or running as the native app. */
 export function isStandalone(env: PlatformEnv = readEnv()): boolean {
-  return env.standaloneFlag === true || env.displayModeStandalone;
+  return env.native === true || env.standaloneFlag === true || env.displayModeStandalone;
 }
 
 export type IosBrowser = 'safari' | 'chrome' | 'firefox' | 'edge' | 'opera' | 'in-app' | 'other';
@@ -67,5 +91,5 @@ export function installHelp(env: PlatformEnv = readEnv()): InstallHelp {
   const ios = isIos(env);
   const standalone = isStandalone(env);
   const browser = ios ? iosBrowser(env) : 'other';
-  return { show: ios && !standalone, browser, needsSafari: ios && (browser === 'in-app' || browser === 'other') };
+  return { show: ios && !standalone, browser, needsSafari: ios && !standalone && (browser === 'in-app' || browser === 'other') };
 }

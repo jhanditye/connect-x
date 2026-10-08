@@ -34,33 +34,43 @@ export function hostDownloads(): Promise<HostDownloads | null> {
  * A blob <a download> works in a Safari tab but has been unreliable in Home Screen web apps (it can open the
  * file in a window with no way back), and Save to Files is what people want for a take anyway.
  * navigator.share() must be called inside the tap that asked for it, so nothing is awaited before it.
- * Resolves true when the share sheet handled it (or the user closed it), false when it is unavailable.
+ * Resolves 'shared' when the share sheet took it, 'cancelled' when the user closed the sheet without choosing anything, and
+ * 'unavailable' when the share sheet cannot be used (the caller falls back to a download).
  */
-async function shareFile(blob: Blob, filename: string): Promise<boolean> {
+async function shareFile(blob: Blob, filename: string): Promise<'shared' | 'cancelled' | 'unavailable'> {
   try {
-    if (typeof navigator === 'undefined' || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return false;
+    if (typeof navigator === 'undefined' || typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return 'unavailable';
     const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
-    if (!navigator.canShare({ files: [file] })) return false;
+    if (!navigator.canShare({ files: [file] })) return 'unavailable';
     await navigator.share({ files: [file] });
-    return true;
+    return 'shared';
   } catch (err) {
     // Closing the sheet rejects with AbortError: that is a cancel, not a failure.
-    if ((err as { name?: string } | null)?.name === 'AbortError') return true;
-    return false;
+    if ((err as { name?: string } | null)?.name === 'AbortError') return 'cancelled';
+    return 'unavailable';
   }
 }
 
-/** Save a generated file: through the host viewer when there is one, the share sheet on iOS, else a normal browser download. */
-export async function saveFile(blob: Blob, filename: string): Promise<void> {
+/**
+ * Save a generated file: through the host viewer when there is one, the share sheet on iOS, else a normal browser download.
+ * Resolves false only when the person closed the iPhone share sheet without saving anywhere, so a caller that records "this was
+ * saved" (a backup) can tell; every other path resolves true.
+ */
+export async function saveFile(blob: Blob, filename: string): Promise<boolean> {
   const inHostViewer = typeof window !== 'undefined' && typeof (window as HostWindow).claude?.use === 'function';
-  if (!inHostViewer && isIos() && (await shareFile(blob, filename))) return;
+  if (!inHostViewer && isIos()) {
+    const shared = await shareFile(blob, filename);
+    if (shared === 'shared') return true;
+    if (shared === 'cancelled') return false;
+  }
   const host = await hostDownloads();
   if (host) {
     // The viewer shows its own confirmation; a decline is the viewer's choice, not an error to show.
     await host.save({ filename, data: blob }).catch(() => undefined);
-    return;
+    return true;
   }
   downloadBlob(blob, filename);
+  return true;
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {

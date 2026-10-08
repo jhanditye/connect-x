@@ -37,7 +37,7 @@ export function MorePage() {
       </ul>
 
       <p className="mo-diag">
-        Something not working on your phone? <a href="#settings/diagnostics">Run the device checks</a> and send us the report.
+        Something not working on your phone? <a href="#settings/diagnostics">Run the device checks</a> and share the report with whoever is helping you.
       </p>
       <p className="caveat">
         Your clips, phrases and scores stay on this device. Mimic is an independent practice tool and is not affiliated with the artists.

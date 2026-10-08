@@ -201,7 +201,8 @@ export interface PracticeDockProps {
   hasResult: boolean;
   onOptions(patch: Partial<PracticeOptions>): void;
   onListen(): void;
-  onSing(): void;
+  /** `speakerConfirmed`: the singer said they have headphones on, though the route does not look like it. */
+  onSing(speakerConfirmed?: boolean): void;
   onStop(): void;
 }
 
@@ -221,7 +222,7 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
       setAsking(true);
       return;
     }
-    props.onSing();
+    props.onSing(speakerRisk && speakerOk ? true : undefined);
   };
 
   const singLabel =
@@ -262,7 +263,7 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
               onClick={() => {
                 setAsking(false);
                 setSpeakerOk(true);
-                props.onSing();
+                props.onSing(true);
               }}
             >
               I have headphones on

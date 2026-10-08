@@ -430,6 +430,8 @@ const MIN_SCOREABLE_DIMENSIONS = 4;
 export function isScoreable(analysis: VoiceAnalysis, comparison?: Comparison): boolean {
   const issues = analysis.issues ?? [];
   if (issues.includes('too-little-singing') || issues.includes('accompaniment')) return false;
+  // A full-song reading carries no tone measures: never a score against a singer's tone targets, whatever its issue list says.
+  if (analysis.mode === 'mix') return false;
   if (comparison && comparison.dimensions.filter((d) => d.value !== null).length < MIN_SCOREABLE_DIMENSIONS) return false;
   return true;
 }

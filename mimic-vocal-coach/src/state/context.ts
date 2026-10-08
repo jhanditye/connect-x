@@ -63,6 +63,11 @@ export interface AppController {
   deleteSession(id: string): void;
   clearSessions(): void;
   clearAllData(): void;
+  /**
+   * Registers a hook that runs at the end of clearAllData (the Trainer's library clears its store this way). Returns the function that
+   * unregisters it. Optional so hand-built controllers in tests stay valid; a hook that throws or rejects never stops "delete everything".
+   */
+  onClear?(fn: () => void | Promise<void>): () => void;
   /** Measures clips of a builtin singer from the user's own music; their targets replace the estimates. */
   measureClips(singerId: string, files: File[], onProgress?: (p: MeasureProgress) => void): Promise<MeasureResult>;
   /**

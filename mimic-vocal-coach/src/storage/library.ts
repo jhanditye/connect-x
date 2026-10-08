@@ -154,6 +154,7 @@ function parseAnalysis(x: unknown): ClipAnalysisSummary | null {
     issues: Array.isArray(x.issues) ? [...new Set(x.issues.filter(isIssue))] : [],
     usableAsTarget: x.usableAsTarget === true,
     unusableReason: typeof x.unusableReason === 'string' && x.unusableReason ? x.unusableReason : null,
+    ...(finite(x.leadConfidence) ? { leadConfidence: clampNum(x.leadConfidence, 0, 0, 1) } : {}),
   };
 }
 

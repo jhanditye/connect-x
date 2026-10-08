@@ -232,8 +232,10 @@ describe('PracticeDock', () => {
     click(btn(/^\s*Sing/));
     click(btn('I have headphones on'));
     expect(f.onSing).toHaveBeenCalledOnce();
+    expect(f.onSing).toHaveBeenLastCalledWith(true); // the engine is told, so it does not ask a second time
     click(btn(/^\s*Sing/));
     expect(f.onSing).toHaveBeenCalledTimes(2);
+    expect(f.onSing).toHaveBeenLastCalledWith(true);
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 

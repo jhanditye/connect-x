@@ -2,14 +2,12 @@
 // hidden) so keyboard and screen-reader users get the native control.
 
 import { useId, useRef, useState, type DragEvent, type ReactNode } from 'react';
-import { AUDIO_ACCEPT } from '../../audio/decode';
+import { looksLikeMedia, MEDIA_ACCEPT } from '../../audio/decode';
 import { Icon } from './Icon';
 
-const AUDIO_EXT = /\.(wav|wave|mp3|m4a|aac|ogg|oga|opus|webm|flac|caf|mp4|aiff?)$/i;
-
-/** Accepts audio/* and video/* (phones label some voice memos as video/mp4) or a known extension. */
+/** Accepts audio/* and video/* (phones label some voice memos as video/mp4; a phone video gives its sound) or a known extension. */
 export function looksLikeAudio(file: Pick<File, 'name' | 'type'>): boolean {
-  return /^(audio|video)\//.test(file.type) || AUDIO_EXT.test(file.name);
+  return looksLikeMedia(file);
 }
 
 export function FileDrop(props: {
@@ -43,7 +41,7 @@ export function FileDrop(props: {
     const file = files?.[0];
     if (!file) return;
     if (!looksLikeAudio(file)) {
-      props.onReject?.(`"${file.name}" does not look like an audio file. Use WAV, MP3, M4A, AAC, OGG, WebM or FLAC.`);
+      props.onReject?.(`"${file.name}" does not look like an audio file. Use WAV, MP3, M4A, AAC, OGG, WebM or FLAC, or the sound of a phone video (.mov, .mp4).`);
       return;
     }
     props.onFile(file);
@@ -70,7 +68,7 @@ export function FileDrop(props: {
         id={id}
         className="visually-hidden"
         type="file"
-        accept={AUDIO_ACCEPT}
+        accept={MEDIA_ACCEPT}
         multiple={props.multiple}
         disabled={props.disabled}
         onChange={(e) => {

@@ -183,6 +183,7 @@ describe('upload filter and singer helpers', () => {
     expect(looksLikeAudio({ name: 'memo.m4a', type: '' })).toBe(true);
     expect(looksLikeAudio({ name: 'clip.mp4', type: 'video/mp4' })).toBe(true);
     expect(looksLikeAudio({ name: 'notes.pdf', type: 'application/pdf' })).toBe(false);
+    expect(looksLikeAudio({ name: 'IMG_0042.MOV', type: '' })).toBe(true);
   });
 
   it('maps builtin ids to theme-aware CSS variables', () => {

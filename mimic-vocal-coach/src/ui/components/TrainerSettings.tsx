@@ -57,7 +57,10 @@ function Inner(props: { trainer: TrainerController }) {
       const bits = [r.added > 0 ? `${r.added} ${r.added === 1 ? 'clip' : 'clips'} added` : null, r.updated > 0 ? `${r.updated} updated` : null].filter(Boolean);
       setImportNote({
         ok: true,
-        message: bits.length > 0 ? `Backup restored: ${bits.join(', ')}. Clips from a backup need their audio file added again before you can practise them.` : 'That backup holds nothing new, so nothing changed.',
+        message:
+          bits.length > 0
+            ? `Backup restored: ${bits.join(', ')}. A backup holds no audio, so open the Trainer and tap "Choose the files" to add the original audio files again. Mimic recognises each file by its contents and keeps your phrases and scores.`
+            : 'That backup holds nothing new, so nothing changed.',
         warnings: r.warnings,
       });
     } catch (err) {
@@ -225,6 +228,13 @@ function Inner(props: { trainer: TrainerController }) {
       {importNote && (
         <Notice tone={importNote.ok ? 'info' : 'error'} onDismiss={() => setImportNote(null)}>
           <p>{importNote.message}</p>
+          {importNote.ok && importNote.message.startsWith('Backup restored') && (
+            <div className="button-row">
+              <a className="button button--small" href="#trainer">
+                Open the Trainer
+              </a>
+            </div>
+          )}
           {importNote.warnings.length > 0 && (
             <ul className="plain-list">
               {importNote.warnings.slice(0, 5).map((w) => (
@@ -236,7 +246,7 @@ function Inner(props: { trainer: TrainerController }) {
       )}
 
       <h3 className="subhead">Device checks</h3>
-      <p className="settings-text">If listening, recording or timing misbehaves on your phone, these checks say what the device does and make a report you can send us.</p>
+      <p className="settings-text">If listening, recording or timing misbehaves on your phone, these checks say what the device does and make a report you can copy or save. It holds no audio.</p>
       <div className="button-row">
         <button type="button" className="button button--ghost" aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)}>
           {showDiag ? 'Hide the device checks' : 'Open the device checks'}

@@ -673,11 +673,12 @@ function WorkStep(props: {
             duplicate ? (
               duplicate.audioMissing ? (
                 <Notice tone="info" title={`This is the file for "${duplicate.title}"`}>
-                  That clip is in your library but its audio is not on this device.{' '}
-                  <button type="button" className="link-button" onClick={() => props.onReattach(item, duplicate)}>
-                    Re-attach the audio
-                  </button>{' '}
-                  to keep its phrases and scores, or save this as a new clip below.
+                  <p>That clip is in your library but its audio is not on this device. Re-attach the audio to keep its phrases and scores, or save this as a new clip below.</p>
+                  <div className="button-row">
+                    <button type="button" className="button button--accent" disabled={item.status === 'saving'} onClick={() => props.onReattach(item, duplicate)}>
+                      Re-attach the audio
+                    </button>
+                  </div>
                 </Notice>
               ) : (
                 <Notice tone="warn" title={`Already in your library as "${duplicate.title}"`}>

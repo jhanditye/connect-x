@@ -86,7 +86,7 @@ describe('TrainerDiagnostics: first view', () => {
 
   it('has the four steps in order, and the page wrapper', () => {
     act(() => root.render(<TrainerDiagnosticsPage runner={makeRunner()} />));
-    expect([...container.querySelectorAll('.td-step')].map((h) => h.textContent?.replace(/^\d\s*/, ''))).toEqual(['Quick checks', 'Microphone and sound', 'On your iPhone', 'Send us the report']);
+    expect([...container.querySelectorAll('.td-step')].map((h) => h.textContent?.replace(/^\d\s*/, ''))).toEqual(['Quick checks', 'Microphone and sound', 'On your iPhone', 'Share the report']);
     expect(container.querySelector('.page--diagnostics')).not.toBeNull();
   });
 });
@@ -242,7 +242,7 @@ describe('the report', () => {
     const text = (writeText.mock.calls[0] as unknown as [string])[0];
     expect(text).toContain('Mimic Vocal Coach: device report');
     expect(text).toContain('iPhone 15, EarPods');
-    expect(container.querySelector('[role="status"]')?.textContent).toBe('Copied. Paste it into a message to us.');
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Copied. Paste it into a message to whoever is helping you.');
   });
 
   it('when copying is refused it opens the report and names the way out', async () => {
@@ -290,7 +290,7 @@ describe('the report', () => {
     const [blob, name] = vi.mocked(saveFile).mock.calls[0];
     expect(name).toBe('mimic-device-report.txt');
     expect(blob.type).toBe('text/plain');
-    expect(container.querySelector('[role="status"]')?.textContent).toBe('Saved. Send us the file.');
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('Saved. Share the file with whoever is helping you.');
   });
 
   it('closing the share sheet is not an error', async () => {

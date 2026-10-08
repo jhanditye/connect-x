@@ -62,6 +62,11 @@ function Today(props: { entries: QueueEntry[] }) {
           {entries.length} {entries.length === 1 ? 'phrase is' : 'phrases are'} worth your time now.
         </p>
       </div>
+      {first && (
+        <a className="button button--accent tr-start" href={trainerHash({ view: 'phrase', clipId: first.clip.id, phraseNumber: phraseNumber(first.phrase) })}>
+          <Icon name="play" size={14} /> Start with the first
+        </a>
+      )}
       <ul className="tr-queue">
         {shown.map(({ item, clip, phrase }) => (
           <li key={item.phraseId}>
@@ -84,11 +89,6 @@ function Today(props: { entries: QueueEntry[] }) {
         <p className="tr-more">
           and {entries.length - shown.length} more after these.
         </p>
-      )}
-      {first && (
-        <a className="button button--accent tr-start" href={trainerHash({ view: 'phrase', clipId: first.clip.id, phraseNumber: phraseNumber(first.phrase) })}>
-          <Icon name="play" size={14} /> Start with the first
-        </a>
       )}
     </section>
   );
@@ -144,6 +144,9 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
     setPendingImport(files);
     openAdd();
   };
+
+  // Clips that came back from a backup (or lost their audio) are listed, but cannot be practised until their file is added again.
+  const needAudio = trainer.clips.filter((c) => c.audioMissing);
 
   const storage = trainer.storage;
   const storageLine =
@@ -227,6 +230,30 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
         </Notice>
       )}
 
+      {ready && needAudio.length > 0 && (
+        <Notice tone="warn" title={needAudio.length === 1 ? 'One clip needs its audio file again' : `${needAudio.length} clips need their audio files again`}>
+          <p>
+            A backup keeps your phrases and scores but never audio, so {needAudio.length === 1 ? 'this clip' : 'these clips'} cannot be practised until{' '}
+            {needAudio.length === 1 ? 'its file is' : 'their files are'} added again. Choose the original {needAudio.length === 1 ? 'file' : 'files'} with Add clips: Mimic recognises each one by its
+            contents and offers to re-attach it, so your phrases and scores stay exactly as they were.
+          </p>
+          <ul className="plain-list" aria-label="Clips that need their file">
+            {needAudio.slice(0, 5).map((c) => (
+              <li key={c.id}>
+                <strong>{c.title}</strong>
+                {c.sourceFileName && c.sourceFileName !== c.title ? <span className="muted"> ({c.sourceFileName})</span> : null}
+              </li>
+            ))}
+            {needAudio.length > 5 && <li>and {needAudio.length - 5} more</li>}
+          </ul>
+          <div className="button-row">
+            <button type="button" className="button button--small" onClick={openAdd}>
+              Choose the files
+            </button>
+          </div>
+        </Notice>
+      )}
+
       {ready && trainer.clips.length === 0 && <TrainerEmpty onAdd={openAdd} />}
 
       {ready && trainer.clips.length > 0 && (
@@ -234,7 +261,11 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
           {entries.length > 0 ? (
             <Today entries={entries} />
           ) : (
-            <p className="tr-nothing">Nothing is due today. Open any clip below and pick a phrase, or add another clip.</p>
+            <p className="tr-nothing">
+              {needAudio.length === trainer.clips.length
+                ? 'Nothing can be practised until the audio files are added again.'
+                : 'Nothing is due today. Open any clip below and pick a phrase, or add another clip.'}
+            </p>
           )}
 
           {groups.length > 1 && (

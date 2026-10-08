@@ -11,7 +11,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:idb": "node scripts/clip-store-browser/run.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

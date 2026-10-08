@@ -294,6 +294,14 @@ export function GuidePage() {
             check that it follows the singing before you save. A full song cannot count toward a singer’s measured targets.
           </p>
           <p>
+            Mimic first reads the clip as a single voice. If that sounds like a band, it reads it again as a song and shows a{' '}
+            <strong>Lead vocal</strong> rating: how well it believes it followed the singing, from its own checks. It is a ranking, not a
+            measured accuracy, and it was tuned on synthetic songs, so a real recording can do worse than it says. Below
+            “followed well” you get a warning, and “very hard to follow” means the melody is a rough guide at best. Songs where the voice sits
+            well in front of a steady band, and some electronic tracks, may not be spotted as songs: if the melody you hear is the bass or a
+            guitar, answer “No” to <em>Does the melody follow the singing?</em> or switch on <em>This is a full song</em> yourself.
+          </p>
+          <p>
             If you have the song and also its vocal-only file, add the song and then the vocal file as its stem: you practise along with the
             whole song while Mimic reads the voice from the stem.
           </p>
@@ -337,14 +345,15 @@ export function GuidePage() {
             </li>
             <li>
               Every device adds some delay between the guide and what the microphone hears. Mimic measures it from your singing and shows it
-              as the <em>sync offset</em>; it is not counted against you. If it is much more than 400 ms, switch to wired headphones or to
-              Listen, then sing.
+              as the <em>sync offset</em>; it is not counted against you. If it is very large (several hundred milliseconds), switch to wired
+              headphones or to Listen, then sing. These figures have been checked on a computer, not yet on a range of iPhones, so treat
+              them as a guide.
             </li>
             <li>
               If you hear nothing, check the volume and the ring/silent switch: the phone can silence a web page&apos;s sound. A phone call, an
               alarm or another app using the microphone interrupts a take; an interrupted take is not scored, and you tap Try again.
             </li>
-            <li>The device checks in Settings (under Trainer) run these tests on your phone and make a report you can send us.</li>
+            <li>The device checks in Settings (under Trainer) run these tests on your phone and make a report you can copy or save and share with whoever is helping you. It holds no audio.</li>
           </ul>
         </section>
 
@@ -437,7 +446,9 @@ export function GuidePage() {
             </li>
             <li>
               <strong>Clips and attempts stay on this device.</strong> Clips you add to the Trainer are stored in this browser&apos;s storage on
-              this device only, with their phrases and your practice scores. A backup file holds phrases and scores, never audio. Safari can
+              this device only, with their phrases and your practice scores. A backup file holds phrases and scores, never audio: when you
+              restore one, the clips come back without sound, and the Trainer asks you to choose the original files again (it recognises each
+              one by its contents, so your scores stay). Safari can
               clear a website&apos;s stored data after about a week of not using it, so add Mimic to your Home Screen to keep your clips, and
               save a backup now and then.
             </li>

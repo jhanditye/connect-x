@@ -438,6 +438,8 @@ export interface ClipAnalysisSummary {
   /** referenceUsability(): can this clip contribute to a singer's measured targets? */
   usableAsTarget: boolean;
   unusableReason: string | null;
+  /** Full-song clips read by the lead-vocal extractor: how well it followed the voice, 0..1 (a ranking, calibrated on synthetic mixes). Absent for solo clips. */
+  leadConfidence?: number | null;
 }
 
 export interface PhraseSummary {

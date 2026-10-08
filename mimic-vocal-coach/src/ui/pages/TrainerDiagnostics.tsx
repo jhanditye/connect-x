@@ -195,9 +195,9 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
       <div className="td-live" role="status" aria-live="polite">
         {busy === 'quick' && 'Running the quick checks…'}
         {busy && busy !== 'quick' && (progress?.message ?? 'Working…')}
-        {!busy && copyState === 'copied' && 'Copied. Paste it into a message to us.'}
+        {!busy && copyState === 'copied' && 'Copied. Paste it into a message to whoever is helping you.'}
         {!busy && copyState === 'shared' && 'Shared.'}
-        {!busy && copyState === 'saved' && 'Saved. Send us the file.'}
+        {!busy && copyState === 'saved' && 'Saved. Share the file with whoever is helping you.'}
       </div>
 
       <section className="td-section" aria-labelledby={`${ids}-1`}>
@@ -342,12 +342,12 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
 
       <section className="td-section" aria-labelledby={`${ids}-4`}>
         <h3 id={`${ids}-4`} className="td-step">
-          <span className="td-num">4</span> Send us the report
+          <span className="td-num">4</span> Share the report
         </h3>
         <p className="field-hint">Numbers and words only: no audio and no recordings. Read it first if you like.</p>
         <div className="field">
           <label className="field-label" htmlFor={`${ids}-notes`}>
-            Anything else we should know? (iPhone model, which headphones, what went wrong)
+            Anything else worth noting? (iPhone model, which headphones, what went wrong)
           </label>
           <textarea
             id={`${ids}-notes`}
@@ -379,7 +379,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
         </div>
         {copyState === 'failed' && (
           <Notice tone="warn" title="Could not copy by itself">
-            Open “See the report” below, select all of it, copy it, and paste it into a message to us.
+            Open “See the report” below, select all of it, copy it, and paste it into a message to whoever is helping you.
           </Notice>
         )}
         {shown.length === 0 && answered === 0 && <p className="field-hint">The report is nearly empty because nothing has run yet. Run the quick checks above first.</p>}

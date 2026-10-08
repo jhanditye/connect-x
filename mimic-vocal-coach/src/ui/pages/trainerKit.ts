@@ -28,10 +28,13 @@ export function useFocusOnMount<T extends HTMLElement>(enabled: boolean): RefObj
 }
 
 /** Saves the library (never audio) as a JSON file. Resolves with a sentence to show, and never rejects. */
-export async function downloadLibraryBackup(trainer: Pick<TrainerController, 'exportLibrary'>): Promise<{ ok: boolean; message: string }> {
+export async function downloadLibraryBackup(trainer: Pick<TrainerController, 'exportLibrary' | 'markExported'>): Promise<{ ok: boolean; message: string }> {
   try {
-    const blob = await trainer.exportLibrary();
-    await saveFile(blob, exportFileName());
+    // The backup only counts as made once the file was really saved: a closed share sheet or a failed save leaves the reminder on.
+    const blob = await trainer.exportLibrary({ markDone: !trainer.markExported });
+    const saved = await saveFile(blob, exportFileName());
+    if (saved === false) return { ok: false, message: 'The backup was not saved because the share sheet was closed. Tap Back up again and choose Save to Files.' };
+    await trainer.markExported?.();
     return { ok: true, message: 'Backup saved. It holds your clips, phrases and scores but no audio; the audio stays on this device.' };
   } catch (err) {
     const why = err instanceof Error && err.message ? ` ${err.message}` : '';

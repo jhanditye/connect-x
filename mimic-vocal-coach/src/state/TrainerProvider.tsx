@@ -36,6 +36,7 @@ import {
 import { checkImportSpace, estimateImportBytes, getStorageStatus, isInstalledPwa, requestPersistence as askForPersistence, storageNote, type StorageStatus } from '../storage/quota';
 import { DEFAULT_SETTINGS } from '../storage/settings';
 import * as importModule from '../trainer/import';
+import { clearPhraseAnalysisCache } from '../trainer/phraseAnalysis';
 import type { CommitEdits, ImportProgress, PreparedClip } from '../trainer/import';
 import type { PracticeEngine } from '../trainer/engine';
 import { MAX_STORE_RATE } from '../audio/pcm';
@@ -250,6 +251,8 @@ export function TrainerProvider(props: TrainerProviderProps) {
   const loadedRef = useRef<Promise<void>>(Promise.resolve());
   const channelRef = useRef<BroadcastChannel | null>(null);
   const persistAskedRef = useRef(false);
+  const clearing = useRef<Promise<void> | null>(null);
+  const pendingExport = useRef<{ at: string; attemptsAtBuild: number } | null>(null);
   const queue = useMemo(createKeyedQueue, []);
 
   const send = useCallback((action: TrainerAction) => dispatch(action), []);
@@ -349,6 +352,16 @@ export function TrainerProvider(props: TrainerProviderProps) {
 
     const reloadRecent = async (store: ClipStore): Promise<void> => {
       send({ type: 'recent/replace', recent: recentFromAttempts(await store.listRecentAttempts(RECENT_PER_PHRASE)) });
+    };
+
+    const markDone = async (store: ClipStore, at: string, attemptsSince: number): Promise<void> => {
+      try {
+        await store.setMeta(META.lastExportAt, at);
+        await store.setMeta(META.attemptsSinceExport, attemptsSince);
+        send({ type: 'export', lastExportAt: at, attemptsSinceExport: attemptsSince });
+      } catch {
+        // The backup itself is what matters.
+      }
     };
 
     const bumpAttemptCount = async (store: ClipStore): Promise<void> => {
@@ -467,6 +480,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
           guard(async () => {
             const store = await getStore();
             await store.deleteClip(id);
+            clearPhraseAnalysisCache(); // a few analyses held for open phrases; none should outlive their clip
             healthy();
             send({ type: 'clip/remove', id });
             dropMeasured(id);
@@ -501,7 +515,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
           }),
         ),
 
-      exportLibrary: (): Promise<Blob> =>
+      exportLibrary: (options?: { markDone?: boolean }): Promise<Blob> =>
         queue('*library*', () =>
           guard(async () => {
             const store = await getStore();
@@ -518,14 +532,25 @@ export function TrainerProvider(props: TrainerProviderProps) {
             }
             const lib = buildLibraryExport(clips, attempts, calibration, new Date((propsRef.current.now ?? Date.now)()));
             const blob = new Blob([JSON.stringify(lib)], { type: 'application/json' });
-            try {
-              await store.setMeta(META.lastExportAt, lib.exportedAt);
-              await store.setMeta(META.attemptsSinceExport, 0);
-              send({ type: 'export', lastExportAt: lib.exportedAt, attemptsSinceExport: 0 });
-            } catch {
-              // The backup itself is what matters.
+            if (options?.markDone === false) {
+              pendingExport.current = { at: lib.exportedAt, attemptsAtBuild: stateRef.current.attemptsSinceExport };
+            } else {
+              await markDone(store, lib.exportedAt, 0);
             }
             return blob;
+          }),
+        ),
+
+      markExported: (): Promise<void> =>
+        queue('*library*', () =>
+          guard(async () => {
+            const pending = pendingExport.current;
+            if (!pending) return;
+            pendingExport.current = null;
+            const store = await getStore();
+            // Attempts saved while the share sheet was open are not in the file: they still count toward the next reminder.
+            const since = Math.max(0, stateRef.current.attemptsSinceExport - pending.attemptsAtBuild);
+            await markDone(store, pending.at, since);
           }),
         ),
 
@@ -626,6 +651,16 @@ export function TrainerProvider(props: TrainerProviderProps) {
           }),
         ),
 
+      readClipSamples: (clipId: string): Promise<{ samples: Float32Array; sampleRate: number; source: 'mix' | 'vocal' } | null> =>
+        guard(async () => {
+          const store = await getStore();
+          const clip = await freshClip(store, clipId);
+          if (clip.audioMissing) return null;
+          const info = clip.audio.vocal ?? clip.audio.mix;
+          const samples = await store.readAudio(clip.id, info, 0, info.frames / info.sampleRate + 1);
+          return { samples, sampleRate: info.sampleRate, source: info.kind };
+        }),
+
       listAttempts: (filter: { phraseId?: string; clipId?: string; limit?: number }): Promise<AttemptRecord[]> => guard(async () => (await getStore()).listAttempts(filter)),
 
       deleteAttempts: (filter: { phraseId?: string; clipId?: string }): Promise<number> =>
@@ -670,19 +705,28 @@ export function TrainerProvider(props: TrainerProviderProps) {
           });
         }),
 
-      clearAll: (): Promise<void> =>
-        queue('*library*', () =>
+      clearAll: (): Promise<void> => {
+        // "Delete everything" can arrive twice (the app's hook and a screen's own call): the second one shares the first one's run.
+        if (clearing.current) return clearing.current;
+        const run = queue('*library*', () =>
           guard(async () => {
             const store = await getStore();
             const ids = stateRef.current.clips.map((c) => c.id);
             await store.clearAll();
+            clearPhraseAnalysisCache();
             healthy();
             send({ type: 'reset' });
             for (const id of ids) dropMeasured(id);
             notifyTabs();
             void refreshStorage();
           }),
-        ),
+        );
+        const tracked = run.finally(() => {
+          if (clearing.current === tracked) clearing.current = null;
+        });
+        clearing.current = tracked;
+        return tracked;
+      },
     };
 
     const loadOnce = async (): Promise<void> => {
@@ -807,6 +851,8 @@ export function TrainerProvider(props: TrainerProviderProps) {
       deleteClip: c.deleteClip,
       setContributes: c.setContributes,
       exportLibrary: c.exportLibrary,
+      markExported: c.markExported,
+      readClipSamples: c.readClipSamples,
       importLibrary: c.importLibrary,
       prepareClip: c.prepareClip,
       commitClip: c.commitClip,

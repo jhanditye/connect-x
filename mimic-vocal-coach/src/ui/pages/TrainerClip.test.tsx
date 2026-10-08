@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FAKE_CLIP_ID, FAKE_NOW, makeFakeClip, makeFakeTrainerController, type FakeTrainerController } from '../../testing/trainerFixtures';
 import { tick, useScreen } from '../../testing/trainerUi';
 import type { ClipRecord } from '../../types';
+import { analysisFromSpans } from '../../trainer/importTestKit';
 import { ClipView } from './TrainerClip';
+
+const analyze = vi.fn(async (_s: Float32Array, _sr: number, _o: unknown) => analysisFromSpans([{ start: 1, end: 5 }], 8));
+vi.mock('../../analysis/client', () => ({ analyzeInWorker: (s: Float32Array, sr: number, o: unknown) => analyze(s, sr, o) }));
 
 const screen = useScreen();
 
@@ -94,6 +98,19 @@ describe('Clip detail', () => {
     const sw = screen.q<HTMLInputElement>('input[role="switch"]');
     expect(sw.disabled).toBe(true);
     expect(screen.text()).toMatch(/A full song mix cannot set a singer's targets/);
+  });
+});
+
+describe('Clip detail: a full song read by the lead-vocal extractor', () => {
+  it('repeats how well the singing was followed when the clip was added, as a ranking', () => {
+    clipPage({ kind: 'mix', analysisKind: 'mix-melody', analysis: { ...makeFakeClip().analysis, leadConfidence: 0.74 } });
+    expect(screen.text()).toMatch(/followed the singing as hard to follow in places \(0\.74 out of 1, a ranking rather than a measured accuracy\)/);
+    expect(screen.text()).toMatch(/Edit the phrases if the melody missed part of a line/);
+  });
+
+  it('says nothing about it for a clip stored before the rating existed, or one with a vocal-only file', () => {
+    clipPage({ kind: 'mix', analysisKind: 'mix-melody' });
+    expect(screen.text()).not.toMatch(/out of 1/);
   });
 });
 
@@ -326,5 +343,90 @@ describe('Clip detail: deleting', () => {
     await screen.clickAsync(screen.button(/Yes, delete the clip/));
     expect(screen.q('.notice--error').textContent).toMatch(/not open/);
     expect(ctl.clips).toHaveLength(1);
+  });
+});
+
+
+describe('Clip detail: the phrase editor shows the stored audio', () => {
+  const SR = 8000;
+  const reader = (over: Partial<{ source: 'mix' | 'vocal' }> = {}) =>
+    vi.fn(async (_id: string) => ({ samples: new Float32Array(SR * 8).fill(0.2), sampleRate: SR, source: over.source ?? ('mix' as const) }));
+
+  function withReader(read: ReturnType<typeof reader> | undefined, over: Partial<ClipRecord> = {}) {
+    const ctl = makeFakeTrainerController({ clips: [makeFakeClip(over)] });
+    if (read) ctl.readClipSamples = read;
+    clipPage(over, ctl);
+    return ctl;
+  }
+
+  it('reads the audio only while the editor is open, draws the waveform and the pitch line, and lets you hear a phrase', async () => {
+    analyze.mockClear();
+    const read = reader();
+    withReader(read);
+    expect(read).not.toHaveBeenCalled();
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    expect(read).toHaveBeenCalledWith(FAKE_CLIP_ID);
+    expect(analyze).toHaveBeenCalledTimes(1);
+    expect(screen.has('.pe-wave')).toBe(true);
+    expect(screen.has('.pe-contour')).toBe(true);
+    expect(screen.hasButton(/Play phrase 1/)).toBe(true);
+    // Closing the editor lets go of the samples; opening it again reads them again.
+    await screen.clickAsync(screen.button(/^\s*Cancel/));
+    expect(screen.has('.pe-wave')).toBe(false);
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('a song stored with its own vocal file is analysed from that file, and a song alone is analysed as a mix', async () => {
+    analyze.mockClear();
+    withReader(reader({ source: 'mix' }), { kind: 'mix', analysisKind: 'mix-melody' });
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    expect(analyze.mock.calls[0][2]).toMatchObject({ mode: 'mix' });
+    screen.unmount();
+    analyze.mockClear();
+    withReader(reader({ source: 'vocal' }), { kind: 'mix', analysisKind: 'solo' });
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    expect((analyze.mock.calls[0][2] as { mode?: string }).mode).toBeUndefined();
+  });
+
+  it('says so and still lets you edit when the audio cannot be read', async () => {
+    withReader(vi.fn(async () => Promise.reject(new Error('The chunks are gone.'))));
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    expect(screen.text()).toMatch(/The waveform could not be loaded \(The chunks are gone\.\)\. You can still edit the phrases with the buttons\./);
+    expect(screen.has('.pe-wave')).toBe(false);
+    expect(screen.hasButton(/Save phrases/)).toBe(true);
+  });
+
+  it('says it could not play when the browser has no audio, instead of doing nothing', async () => {
+    withReader(reader());
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    await screen.clickAsync(screen.button(/Play phrase 1/));
+    await tick(5);
+    expect(screen.text()).toMatch(/This browser could not play audio here/);
+  });
+
+  it('without a way to read audio (a controller that cannot) the editor is the plain one', async () => {
+    withReader(undefined);
+    screen.click(screen.button(/Edit phrases/));
+    await tick(20);
+    expect(screen.text()).not.toMatch(/Loading the waveform/);
+    expect(screen.has('.pe-wave')).toBe(false);
+    expect(screen.hasButton(/Play phrase/)).toBe(false);
+  });
+
+  it('a clip whose audio is missing does not try to read it', async () => {
+    const read = reader();
+    withReader(read, { audioMissing: true });
+    // The page offers the file again instead; the editor still opens for the phrases.
+    const edit = screen.qa<HTMLButtonElement>('button').find((b) => /Edit phrases/.test(b.textContent ?? ''));
+    if (edit && !edit.disabled) screen.click(edit);
+    await tick(20);
+    expect(read).not.toHaveBeenCalled();
   });
 });

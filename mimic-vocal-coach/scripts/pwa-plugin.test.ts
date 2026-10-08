@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { buildPrecacheList, renderServiceWorker, versionOf } from './pwa-plugin.ts';
 
@@ -68,5 +69,70 @@ describe('renderServiceWorker', () => {
     expect(out).not.toContain('__MIMIC_');
     // The generated worker must at least parse as JavaScript.
     expect(() => new Function(out)).not.toThrow();
+  });
+});
+
+describe('the generated worker at run time', () => {
+  const template = readFileSync(new URL('./sw.template.js', import.meta.url), 'utf8');
+  const entries = [{ url: 'index.html', revision: 'aaaaaaaaaaaa' }];
+  const SCOPE = 'https://example.test/app/';
+
+  /** Runs the worker in a sandbox with an in-memory Cache Storage and a network that can be switched off. */
+  function sandbox() {
+    const stores = new Map<string, Map<string, Response>>();
+    const handlers: Record<string, (e: unknown) => void> = {};
+    const net = { up: true, calls: [] as string[] };
+    const key = (r: Request | string) => (typeof r === 'string' ? r : r.url);
+    const cacheApi = (name: string) => ({
+      match: async (r: Request | string) => stores.get(name)?.get(key(r))?.clone(),
+      put: async (r: Request | string, res: Response) => void (stores.get(name) ?? stores.set(name, new Map()).get(name))!.set(key(r), res),
+      keys: async () => [...(stores.get(name)?.keys() ?? [])],
+    });
+    const caches = {
+      open: async (name: string) => (stores.has(name) || stores.set(name, new Map()), cacheApi(name)),
+      keys: async () => [...stores.keys()],
+      delete: async (name: string) => stores.delete(name),
+    };
+    const fetchFn = async (r: Request | string) => {
+      net.calls.push(key(r));
+      if (!net.up) throw new TypeError('offline');
+      const res = new Response('body of ' + key(r), { status: 200 });
+      Object.defineProperty(res, 'type', { value: 'basic' }); // what a same-origin fetch returns
+      return res;
+    };
+    const self = { registration: { scope: SCOPE }, location: new URL(SCOPE), addEventListener: (type: string, fn: (e: unknown) => void) => void (handlers[type] = fn), clients: { claim: async () => {} }, skipWaiting: () => {} };
+    runInNewContext(renderServiceWorker(template, entries), { self, caches, fetch: fetchFn, Request, Response, URL, Promise });
+    const ask = async (request: { url: string; method: string; mode: string }): Promise<Response | undefined> => {
+      let out: Promise<Response> | undefined;
+      handlers.fetch({ request, respondWith: (p: Promise<Response>) => (out = p) });
+      return out;
+    };
+    return { stores, handlers, net, ask, caches };
+  }
+
+  it('serves a missing file from the network and puts it back in the cache, so the next offline start works', async () => {
+    const sw = sandbox();
+    await new Promise<void>((resolve) => sw.handlers.install({ waitUntil: (p: Promise<void>) => void p.then(resolve) }));
+    const [cacheName] = [...sw.stores.keys()];
+    expect([...sw.stores.get(cacheName)!.keys()]).toEqual([SCOPE + 'index.html']);
+    // iOS (or the user) emptied the cache while the worker stayed registered.
+    await sw.caches.delete(cacheName);
+    const nav = await sw.ask({ url: SCOPE + '#trainer', method: 'GET', mode: 'navigate' });
+    expect(await nav?.text()).toContain('index.html');
+    const asset = await sw.ask({ url: SCOPE + 'assets/app-AbCd1234.js', method: 'GET', mode: 'no-cors' });
+    expect(await asset?.text()).toContain('app-AbCd1234.js');
+    sw.net.up = false;
+    const shell = await sw.ask({ url: SCOPE, method: 'GET', mode: 'navigate' });
+    expect(await shell?.text()).toContain('index.html');
+    const again = await sw.ask({ url: SCOPE + 'assets/app-AbCd1234.js', method: 'GET', mode: 'no-cors' });
+    expect(await again?.text()).toContain('app-AbCd1234.js');
+  });
+
+  it('leaves other origins, other projects and POSTs alone', async () => {
+    const sw = sandbox();
+    await sw.caches.open('x');
+    expect(await sw.ask({ url: 'https://api.anthropic.com/v1', method: 'GET', mode: 'cors' })).toBeUndefined();
+    expect(await sw.ask({ url: SCOPE + 'x', method: 'POST', mode: 'cors' })).toBeUndefined();
+    expect(await sw.ask({ url: 'https://example.test/other/', method: 'GET', mode: 'navigate' })).toBeUndefined();
   });
 });

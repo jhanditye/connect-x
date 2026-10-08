@@ -3,10 +3,10 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeFakeProfile } from '../../testing/fixtures';
-import { FULL_SONG_UNAVAILABLE, MIX_REASON, SPEECH_REASON } from '../../trainer/importCopy';
+import { littleMixSingingReason, MIX_REASON, SPEECH_REASON } from '../../trainer/importCopy';
 import { preparedKind, type CommitEdits, type PreparedClip } from '../../trainer/import';
 import { fakePrepared } from '../../trainer/importTestKit';
-import type { ClipKind } from '../../types';
+import type { ClipKind, VoiceAnalysis } from '../../types';
 import { ClipReview, type ClipReviewProps } from './ClipReview';
 import type { SamplePlayer, SamplePlayOptions } from './samplePlayer';
 
@@ -438,18 +438,83 @@ describe('ClipReview: clips that cannot be used', () => {
     expect(hasButton(/Hear the detected melody/)).toBe(false);
   });
 
-  it('tells a full-song clip that the analysis is not available yet and points to the vocal-only file', () => {
-    const mixed = fakePrepared({ kind: 'mix', blockers: [FULL_SONG_UNAVAILABLE] });
+  it('tells a full song with no followable lead vocal what to do, and still offers the vocal-only file', () => {
+    const mixed = fakePrepared({ kind: 'mix', blockers: [littleMixSingingReason(0.4)] });
     mount({ prepareStem: async () => fakePrepared() }, mixed);
-    expect($('.notice--error').textContent).toMatch(/not available yet/);
+    expect($('.notice--error').textContent).toMatch(/could not follow a lead vocal/);
+    expect($('.notice--error').textContent).toMatch(/vocal-only version/);
     expect(container.textContent).toMatch(/Have the vocal on its own/);
     expect(container.textContent).toMatch(/If you have this song's isolated vocal, add it here/);
     expect($('input[type="file"]').getAttribute('accept')).toContain('video/*');
   });
 });
 
+/** A prepared full song whose extractor reported this confidence. */
+function mixWithConfidence(confidence: number, over: Parameters<typeof fakePrepared>[0] = {}): PreparedClip {
+  const p = fakePrepared({ kind: 'mix', analysis: { mode: 'mix', issues: ['accompaniment'] }, warnings: [MIX_REASON], ...over });
+  (p.analysis as VoiceAnalysis & { leadExtraction: { confidence: number; sideToMidDb: null } }).leadExtraction = { confidence, sideToMidDb: null };
+  return p;
+}
+
+describe('ClipReview: the lead-vocal confidence of a full song', () => {
+  it('shows a badge with the band in words and the number, and says it is a ranking', () => {
+    mount({}, mixWithConfidence(0.91));
+    const badge = $('.rev-lead');
+    expect(badge.getAttribute('data-band')).toBe('high');
+    expect(badge.textContent).toMatch(/Lead vocal: followed well/);
+    expect(badge.textContent).toMatch(/0\.91 out of 1/);
+    expect(badge.textContent).toMatch(/ranking, not a measured accuracy/);
+  });
+
+  it('labels each band honestly', () => {
+    for (const [c, band, words] of [
+      [0.84, 'ok', /followed fairly well/],
+      [0.75, 'low', /hard to follow in places/],
+      [0.5, 'poor', /very hard to follow/],
+    ] as const) {
+      act(() => root.unmount());
+      root = createRoot(container);
+      mount({}, mixWithConfidence(c));
+      expect($('.rev-lead').getAttribute('data-band')).toBe(band);
+      expect($('.rev-lead').textContent).toMatch(words);
+    }
+  });
+
+  it('is not shown for a solo clip, or once a vocal-only file stands in for the song', () => {
+    mount();
+    expect(container.querySelector('.rev-lead')).toBeNull();
+    act(() => root.unmount());
+    root = createRoot(container);
+    const song = mixWithConfidence(0.6);
+    const stemmed = { ...song, stem: fakePrepared({ name: 'vocals.wav' }) };
+    mount({}, stemmed);
+    expect(container.querySelector('.rev-lead')).toBeNull();
+  });
+
+  it('says a found band was followed automatically, and a manual choice was made by the user', () => {
+    mount({}, mixWithConfidence(0.9));
+    expect(container.textContent).toMatch(/Mimic found a band and followed the lead vocal/);
+    act(() => root.unmount());
+    root = createRoot(container);
+    const manual = { ...mixWithConfidence(0.9), suggestedKind: 'solo' as const };
+    mount({}, manual);
+    expect(container.textContent).toMatch(/Singing with a band\. Mimic follows the lead vocal/);
+  });
+
+  it('shows the extractor\'s low-confidence warning among the notices', () => {
+    mount({}, mixWithConfidence(0.65, { warnings: [MIX_REASON, 'The lead vocal was very hard to follow in this song, so treat the contour as a rough guide.'] }));
+    expect($$('.notice--warn').map((n) => n.textContent).join(' ')).toMatch(/very hard to follow/);
+  });
+
+  it('never offers the one-tap singer targets for a full song', () => {
+    mount({}, mixWithConfidence(0.95));
+    click($$<HTMLInputElement>('input[type="radio"]')[0]);
+    expect(container.textContent).not.toMatch(/targets/i);
+  });
+});
+
 describe('ClipReview: the vocal-only file for a full song', () => {
-  const mixed = () => fakePrepared({ kind: 'mix', blockers: [FULL_SONG_UNAVAILABLE], name: 'Song.wav' });
+  const mixed = () => fakePrepared({ kind: 'mix', blockers: [littleMixSingingReason(0.4)], name: 'Song.wav' });
 
   async function pickStem(file: File) {
     const input = $<HTMLInputElement>('input[type="file"]');
@@ -472,9 +537,9 @@ describe('ClipReview: the vocal-only file for a full song', () => {
     click(saveButton());
     expect(m.saved[0].edits.kind).toBe('mix');
     expect(m.saved[0].edits.vocalStem).toBe(stem);
-    // Removing it goes back to the blocked full-song reading.
+    // Removing it goes back to the full-song reading, which had no followable lead vocal.
     click(button(/Remove it/));
-    expect($('.notice--error').textContent).toMatch(/not available yet/);
+    expect($('.notice--error').textContent).toMatch(/could not follow a lead vocal/);
     expect(saveButton().disabled).toBe(true);
   });
 

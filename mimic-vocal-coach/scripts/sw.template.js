@@ -74,11 +74,19 @@ self.addEventListener('fetch', (event) => {
 
 async function respond(request) {
   const cache = await caches.open(CACHE);
-  if (request.mode === 'navigate') {
-    // Single-page app with hash routes: every navigation inside the scope is the shell.
-    const shell = await cache.match(SHELL);
-    return shell || fetch(request);
+  // Single-page app with hash routes: every navigation inside the scope is the shell.
+  const navigating = request.mode === 'navigate';
+  const hit = navigating ? await cache.match(SHELL) : await cache.match(request, { ignoreSearch: true });
+  if (hit) return hit;
+  // A miss means the browser emptied this cache behind our back (iOS clears a site's storage as a whole) or the install was
+  // cut short. Go to the network and put what comes back in the cache, so the next offline start has the file again.
+  const response = await fetch(navigating ? new Request(SHELL, { cache: 'reload' }) : request);
+  if (response.ok && response.type === 'basic') {
+    try {
+      await cache.put(navigating ? SHELL : request, response.clone());
+    } catch {
+      // storage full: serve the response anyway
+    }
   }
-  const hit = await cache.match(request, { ignoreSearch: true });
-  return hit || fetch(request);
+  return response;
 }
