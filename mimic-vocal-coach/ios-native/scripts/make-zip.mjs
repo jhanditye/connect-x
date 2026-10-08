@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspectIsolation } from './lib/isolation.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nativeDir = path.resolve(here, '..');
@@ -33,6 +34,12 @@ if (!fs.existsSync(path.join(nativeDir, 'ios', 'App', 'App.xcodeproj'))) {
 if (withWeb && !fs.existsSync(path.join(nativeDir, 'ios', 'App', 'App', 'public', 'index.html'))) {
   console.error('make-zip: --with-web needs a synced web bundle. Run `npm run prepare:ios` first.');
   process.exit(1);
+}
+
+if (withWeb) {
+  // The zip carries whatever `cap sync` copied. The 20 MB vocal-isolation model is git-ignored, so a bundle made without it ships an app where the option never appears.
+  const iso = inspectIsolation(path.join(nativeDir, 'ios', 'App', 'App', 'public'));
+  if (iso.hasManifest && !iso.included) console.warn(`make-zip: WARNING  the web bundle inside the zip has no working vocal isolation (${iso.summary}).`);
 }
 
 const exclude = [

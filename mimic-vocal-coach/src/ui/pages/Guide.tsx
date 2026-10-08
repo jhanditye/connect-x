@@ -6,7 +6,8 @@ import { passaggioFor, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
 import { parseSection } from '../../state/routing';
-import { IMPORT_FORMATS, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
+import { SPLEETER_MIT_NOTICE, SPLEETER_SUMMARY, SPLEETER_URL } from '../../audio/separation/licence';
+import { IMPORT_FORMATS, ISOLATE_LIMIT_TEXT, ISOLATED_TONE_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
 import type { VoiceType } from '../../types';
 
 const SECTIONS = [
@@ -16,6 +17,7 @@ const SECTIONS = [
   { id: 'guide-recording', title: 'Recording a good take' },
   { id: 'guide-vocal', title: 'Getting a vocal onto your phone' },
   { id: 'guide-stems', title: 'Full songs and vocal stems' },
+  { id: 'guide-isolate', title: 'Pulling the vocal out of a song (AI)' },
   { id: 'guide-modes', title: 'Sing along, or listen then sing' },
   { id: 'guide-headphones', title: 'Headphones and AirPods' },
   { id: 'guide-trainer-scores', title: 'What the Trainer scores, and what it cannot hear' },
@@ -307,6 +309,45 @@ export function GuidePage() {
           </p>
         </section>
 
+        <section id="guide-isolate" aria-labelledby="guide-isolate-h">
+          <h2 id="guide-isolate-h" tabIndex={-1}>Pulling the vocal out of a song (AI)</h2>
+          <p>
+            No isolated vocal? Where this copy of Mimic includes the model, <em>Add clips</em> offers <strong>Isolate the vocal first (AI)</strong>, and the review of a
+            song offers <strong>Pull the vocal out of the song</strong>. Mimic then separates the voice from the band on your phone and reads that voice on its own, so tone
+            can be compared and the clip can count toward a singer’s targets, with the caveats below: it is an approximation of an isolated vocal, not the real thing.
+            It is off unless you choose it.
+          </p>
+          <ul>
+            <li>
+              <strong>What it costs.</strong> The first time, Mimic downloads about 31 MB from this site (the model, about 19 MB, and the engine that runs it, about 11 MB) and keeps
+              them on the phone (Settings shows them and can remove them). Splitting takes minutes, not seconds, and longer on an older phone. It uses a lot of battery and
+              warms the phone, so plug it in and keep the screen open; locking the phone can pause it. Mimic starts with 1 minute of the song; you can choose up to 5 minutes at
+              a time, and for a longer song, choose where to start.
+            </li>
+            <li>
+              <strong>What you get.</strong> {ISOLATE_LIMIT_TEXT} {ISOLATED_TONE_NOTE} Listen to the isolated vocal in the review before you trust the phrases, and use a
+              real isolated vocal file when you have one.
+            </li>
+            <li>
+              <strong>What it keeps.</strong> The isolated vocal becomes the clip’s sound (you do not hear the band while practising it). The clip is marked{' '}
+              <em>Isolated vocal (AI)</em>, with the model’s name and version. To go back to the whole song, add the file again without this option.
+            </li>
+            <li>
+              <strong>Privacy.</strong> The model and the engine come from this site only, and the song never leaves the phone.
+            </li>
+          </ul>
+          <details className="imp-more">
+            <summary>About the model and its licence</summary>
+            <p>{SPLEETER_SUMMARY}</p>
+            <p>
+              Source: <span className="num">{SPLEETER_URL}</span>
+            </p>
+            <pre className="licence-text" tabIndex={0} aria-label="Spleeter licence text">
+              {SPLEETER_MIT_NOTICE}
+            </pre>
+          </details>
+        </section>
+
         <section id="guide-modes" aria-labelledby="guide-modes-h">
           <h2 id="guide-modes-h" tabIndex={-1}>Sing along, or listen then sing</h2>
           <p>
@@ -461,7 +502,10 @@ export function GuidePage() {
               storage is shared with the site owner’s other GitHub Pages sites, so use a key with a spending limit.
             </li>
             <li>The fonts are bundled with the app, so loading Mimic makes no requests to other sites.</li>
-            <li>“Delete everything, including settings” in Settings removes everything Mimic has stored, including the Trainer’s clips and scores. “Delete clips and scores” in the Trainer section removes only those.</li>
+            <li>
+              Pulling a vocal out of a song (if you use it) downloads a model file and the engine that runs it from this site, once, and runs on your phone. The song is not sent anywhere.
+            </li>
+            <li>“Delete everything, including settings” in Settings removes everything Mimic has stored, including the Trainer’s clips and scores and the downloaded vocal-isolation model and engine. “Delete clips and scores” in the Trainer section removes only those.</li>
           </ul>
         </section>
       </article>

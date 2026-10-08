@@ -7,6 +7,23 @@ import { TonePanel } from './TonePanel';
 const html = (c: PhraseComparison, kind?: 'solo' | 'mix'): string => renderToStaticMarkup(<TonePanel comparison={c} referenceKind={kind} />);
 const withTone = (tone: ToneFinding[]): PhraseComparison => ({ ...makeFakePhraseComparison('perfect'), tone });
 
+describe('TonePanel and an isolated original', () => {
+  const htmlIso = (c: PhraseComparison, kind?: 'solo' | 'mix'): string => renderToStaticMarkup(<TonePanel comparison={c} referenceKind={kind} isolatedReference />);
+
+  it('says the tone numbers are estimates when the original is a vocal pulled out of a song, next to the numbers', () => {
+    const h = htmlIso(makeFakePhraseComparison('flat'));
+    expect(h).toContain('Airier than the original');
+    expect(h).toContain('isolated-tone-note');
+    expect(h).toMatch(/pulled out of a song by AI on this phone/);
+    expect(h).toMatch(/rough estimates/);
+  });
+
+  it('does not add the note to an ordinary original, or where tone is not compared at all', () => {
+    expect(html(makeFakePhraseComparison('flat'))).not.toContain('isolated-tone-note');
+    expect(htmlIso(makeFakePhraseComparison('flat'), 'mix')).not.toContain('isolated-tone-note');
+  });
+});
+
 describe('TonePanel', () => {
   it('tells the airy, straight take in plain words relative to the original, with a meter', () => {
     const h = html(makeFakePhraseComparison('flat'));

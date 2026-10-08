@@ -155,6 +155,24 @@ describe('StudioPage', () => {
     expect(container.textContent).toContain('full song mix');
   });
 
+  it('marks targets measured from AI-isolated clips on the card and in the panel, where the numbers are shown', () => {
+    const base = {
+      addedAt: '2026-09-26T10:00:00.000Z',
+      durationSec: 30,
+      voicedSec: 24,
+      style: makeFakeAnalysis().style,
+      pitch: { lowMidi: 50, highMidi: 70, tessituraLowMidi: 55, tessituraHighMidi: 65 },
+    };
+    const clips = [
+      { ...base, id: 'real', name: 'Real a cappella' },
+      { ...base, id: 'iso', name: 'Pulled from a song', isolated: true as const },
+    ];
+    render(controller({ measurements: { 'shawn-mendes': clips } }));
+    expect(container.querySelector('.singer-card .singer-card-footer')?.textContent).toBe('Measured from 2 clips (1 AI-isolated, tone approximate)');
+    expect(container.textContent).toMatch(/1 of them is a vocal pulled out of a song by AI/);
+    expect(container.textContent).toContain('AI-isolated');
+  });
+
   it('shows measured clips on the card and in the panel', () => {
     const clip = {
       id: 'c1',

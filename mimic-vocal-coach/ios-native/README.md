@@ -112,6 +112,25 @@ A zip made with `npm run zip -- --with-web` also contains the web app (`ios/App/
 is complete as it is: open `ios/App/App.xcodeproj` and start at step 4; Node is only needed to update later.
 A plain `npm run zip` leaves that folder out, and `npm run sync` (or `npm run ios`) is what puts it there.
 
+## Vocal isolation inside the app (optional, untested here)
+
+The web app can pull a vocal out of a song on the phone (`src/trainer/README.md`, "Vocal isolation"). In the app it only appears when the
+bundle carries all of: `models/vocal-isolation.onnx` (about 20 MB, **git-ignored, so a fresh checkout does not have it**) and its manifest,
+`assets/ort-wasm-simd-threaded-*.wasm` (11 MB) and `.mjs`, and `assets/separator.worker-*.js`. To get them in:
+
+1. In the web project (one folder up) put the model in place: `node scripts/prepare-separator-model.mjs --from <file.onnx>`, or, if it is
+   attached to a release, `node scripts/prepare-separator-model.mjs --from-url <https address>` (the download is kept only when its size
+   and SHA-256 match the committed manifest). `--check` verifies it.
+2. `npm run build:web` (it warns, in capitals, when the model, engine or worker is missing from the build; add `-- --require-isolation`
+   to make that an error), then `npm run sync`.
+3. `npm run verify` prints a `WARN` line when the bundle inside the app lacks them (`-- --require-isolation` fails instead), and
+   `npm run zip -- --with-web` warns the same way: a zip made without them ships an app where the option never appears.
+
+Inside the app the model is read from the bundle each time: Cache Storage is not used (it cannot hold a `capacitor://` URL), so Settings
+shows "Included in the app" and there is nothing to download or remove. **Never tried under `capacitor://localhost`**: the module worker,
+the blob-URL engine loader, `crypto.subtle`, the wasm MIME type and memory on a phone all need a check on the device
+(`docs/IPHONE_CHECKLIST.md`, section 8).
+
 ## What is in this folder
 
 ```
@@ -120,7 +139,7 @@ ios-native/
   capacitor.config.ts       appId app.mimic.vocalcoach, name "Mimic", webDir www, no server.url (offline)
   assets/                   icon-1024.png, splash-light.png, splash-dark.png, icon-master.svg (the design sources)
   scripts/
-    build-web.mjs           npm run build:web      builds ../ into www/ (or copies a built site with --from)
+    build-web.mjs           npm run build:web      builds ../ into www/ (or copies a built site with --from); warns when vocal isolation is incomplete
     postprocess-ios.mjs     npm run postprocess    applies the Info.plist, build setting and asset changes below
     verify-project.mjs      npm run verify         checks structure, plist, icons and web bundle (no Xcode needed)
     render-icon.mjs         npm run icons          optional: re-renders the launch images/icon with headless Chromium

@@ -4,6 +4,7 @@
 
 import type { JSX } from 'react';
 import { toneWords, type ToneWords } from '../../trainer/feedback';
+import { ISOLATED_TONE_NOTE } from '../../trainer/importCopy';
 import type { PhraseComparison, ToneFinding } from '../../types';
 import { Notice } from './Notice';
 import { signed } from './format';
@@ -13,6 +14,8 @@ export interface TonePanelProps {
   comparison: PhraseComparison;
   /** 'mix' when the original is a full song: its tone belongs to the band, so tone is not compared. */
   referenceKind?: 'solo' | 'mix';
+  /** The original is a vocal pulled out of a song by the isolation model: its tone is approximate, and the panel says so. */
+  isolatedReference?: boolean;
 }
 
 interface MeterSpec {
@@ -113,6 +116,11 @@ export function TonePanel(props: TonePanelProps): JSX.Element {
     <section className="tp" aria-label="Tone compared with the original">
       <h3 className="tp-title">Tone, compared with the original</h3>
       {body}
+      {props.isolatedReference && !mix && (
+        <p className="tp-foot" data-testid="isolated-tone-note">
+          {ISOLATED_TONE_NOTE}
+        </p>
+      )}
       <p className="tp-foot">
         These are estimates. They move with your microphone, your room and the key you sing in, and they never mean better or worse: a different voice will always sound a little different.
       </p>

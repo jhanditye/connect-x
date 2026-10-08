@@ -1,0 +1,9 @@
+{
+  "name": "Spleeter 2-stems, vocals (ratio mask, int8 weights)",
+  "version": "2stems-int8mix-1",
+  "bytes": 19903775,
+  "sha256": "a8b5502ae4aa2c58ec3f4297c8e9150f5241242cb2cfbcb53ee700ddf3d84d2c",
+  "licence": "Spleeter by Deezer. The code is MIT-licensed (Copyright (c) 2019-present Deezer SA). Deezer states no separate licence for the pretrained weights; confirm before a public release.",
+  "source": "https://github.com/deezer/spleeter (pretrained 2stems model, converted to ONNX with int8 weight storage)",
+  "inputRate": 44100
+}

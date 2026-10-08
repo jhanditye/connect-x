@@ -775,3 +775,33 @@ html.imp-open body {
 .rev-owned-file {
   overflow-wrap: anywhere;
 }
+
+/* Isolating the vocal of a song (optional): the choice on the Add clips screen, the offer in a clip's review, and the isolated clip's note. */
+.imp-isolate {
+  margin: var(--space-4) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}
+.imp-isolate-more {
+  margin-top: var(--space-3);
+}
+.rev-isolate-offer {
+  margin-top: var(--space-3);
+}
+.rev-isolated-title {
+  margin: 0 0 var(--space-2);
+  font: inherit;
+}
+.licence-text {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3);
+  max-height: 14rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+}

@@ -4,6 +4,7 @@
 
 import type { CSSProperties } from 'react';
 import { trainerHash } from '../../state/routing';
+import { ISOLATED_KIND_LABEL } from '../../trainer/importCopy';
 import type { ClipRecord, SingerProfile } from '../../types';
 import { Icon } from './Icon';
 import { clipLength, phraseCount, summariseClip } from './phraseStatus';
@@ -40,6 +41,7 @@ export function ClipCard(props: ClipCardProps) {
         <span aria-hidden="true"> · </span>
         <span className="num">{clipLength(clip.durationSec)}</span>
         {clip.kind === 'mix' && <span className="cc-badge">Full song</span>}
+        {clip.isolation && <span className="cc-badge">{ISOLATED_KIND_LABEL}</span>}
         {s.reviewDue > 0 && (
           <span className="cc-badge cc-badge--due">
             {s.reviewDue} to review

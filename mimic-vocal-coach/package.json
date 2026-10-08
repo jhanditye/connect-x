@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",
+    "onnxruntime-web": "1.19.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

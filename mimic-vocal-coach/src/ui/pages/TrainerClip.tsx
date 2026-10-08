@@ -10,6 +10,7 @@ import { contributionBlocker } from '../../storage/library';
 import { goTrainer, trainerHash } from '../../state/routing';
 import { useTrainer } from '../../state/trainerContext';
 import { newPhraseId } from '../../trainer/import';
+import { ISOLATED_KIND_LABEL, ISOLATED_TARGETS_NOTE, ISOLATED_TONE_NOTE } from '../../trainer/importCopy';
 import { remapPhraseRecords, segmentsFromRecords, validatePhrases, type SegPhrase } from '../../trainer/segment';
 import type { ClipRecord, PhraseRecord } from '../../types';
 import { Icon } from '../components/Icon';
@@ -271,7 +272,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
   };
 
   const color = clipColor(singer);
-  const typeWord = clip.kind === 'mix' ? 'Full song' : 'Solo vocal';
+  const typeWord = clip.kind === 'mix' ? 'Full song' : clip.isolation ? ISOLATED_KIND_LABEL : 'Solo vocal';
 
   return (
     <div className="page page--clip">
@@ -371,6 +372,15 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
               <Icon name="file" size={16} /> Pick the file
             </button>
           </div>
+        </Notice>
+      )}
+
+      {clip.isolation && (
+        <Notice tone="info" title={ISOLATED_KIND_LABEL}>
+          <p>{ISOLATED_TONE_NOTE}</p>
+          <p className="field-hint">
+            Made on this device by {clip.isolation.model} ({clip.isolation.version}){clip.isolation.sourceStartSec > 0 ? `, from ${Math.floor(clip.isolation.sourceStartSec / 60)}:${String(Math.round(clip.isolation.sourceStartSec % 60)).padStart(2, '0')} in the song` : ''}.
+          </p>
         </Notice>
       )}
 
@@ -567,6 +577,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
             {clip.contributesToSinger && singer
               ? `Its measurements shape ${singer.name}'s targets in the Studio. ${counted} of ${MAX_CLIPS_PER_SINGER} clips count.`
               : blocker ?? `Turn on to let this clip's measurements shape ${singer?.name ?? 'the singer'}'s targets in the Studio. Only the numbers are used, never the audio.`}
+            {clip.isolation ? ` ${ISOLATED_TARGETS_NOTE}` : ''}
           </p>
         </div>
 

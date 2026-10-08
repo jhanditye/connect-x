@@ -3,7 +3,7 @@
 
 import { createContext, useContext } from 'react';
 import type { StorageStatus } from '../storage/quota';
-import type { ImportProgress, CommitEdits, PreparedClip } from '../trainer/import';
+import type { ImportProgress, CommitEdits, IsolateRequest, PreparedClip } from '../trainer/import';
 import type { PracticeEngine } from '../trainer/engine';
 import type { QueueItem } from '../trainer/srs';
 import type { AttemptRecord, ClipRecord, PhraseRecord, SingerProfile } from '../types';
@@ -46,9 +46,10 @@ export interface TrainerController {
   importLibrary(file: File): Promise<{ added: number; updated: number; warnings: string[] }>;
   /**
    * Decode, analyse and segment one file. Nothing is stored until commitClip. Rejects with a message that names the fix. `signal`
-   * cancels: the analysis worker is stopped and the promise rejects with an AbortError (nothing to show for it).
+   * cancels: the analysis worker is stopped and the promise rejects with an AbortError (nothing to show for it). `options.isolate`
+   * pulls the vocal out of the song first (the optional on-device model) and reads that as a solo vocal.
    */
-  prepareClip(file: File, onProgress?: (p: ImportProgress) => void, signal?: AbortSignal): Promise<PreparedClip>;
+  prepareClip(file: File, onProgress?: (p: ImportProgress) => void, signal?: AbortSignal, options?: { isolate?: IsolateRequest }): Promise<PreparedClip>;
   commitClip(prepared: PreparedClip, edits: CommitEdits, onProgress?: (p: ImportProgress) => void): Promise<ClipRecord>;
   /**
    * The stored audio of a clip as mono float samples (the vocal-only file when the clip has one, else the song), for the phrase editor's

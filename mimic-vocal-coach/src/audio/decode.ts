@@ -27,6 +27,12 @@ export interface DecodeOptions {
    * is not set); audio files only when the caller asks. WAV files are never refused for length: only `maxSeconds` of them are read.
    */
   maxSourceSec?: number;
+  /**
+   * The rate the browser decodes compressed audio to (default 48 kHz, which keeps phone recordings close to native). The vocal separator
+   * wants 44.1 kHz: asking for it here saves a 48 -> 44.1 -> 48 kHz round trip of the whole song (extra memory and seconds on a phone).
+   * Ignored for WAV (decoded at its own rate, exactly) and when the browser has to fall back to a realtime context (its hardware rate).
+   */
+  sampleRate?: number;
 }
 
 /** Why a file was refused, for callers that want to show a tailored next step. */
@@ -128,7 +134,7 @@ type DecodingContext = {
  * An offline context is preferred: it needs no audio output device and no user gesture. Its rate
  * sets the decode rate, so 48 kHz keeps phone recordings (usually 44.1/48 kHz) close to native.
  */
-function createDecodingContext(): DecodingContext | null {
+function createDecodingContext(rate = 48000): DecodingContext | null {
   const g = globalThis as unknown as {
     OfflineAudioContext?: new (ch: number, len: number, rate: number) => DecodingContext;
     webkitOfflineAudioContext?: new (ch: number, len: number, rate: number) => DecodingContext;
@@ -138,7 +144,7 @@ function createDecodingContext(): DecodingContext | null {
   const Offline = g.OfflineAudioContext ?? g.webkitOfflineAudioContext;
   if (Offline) {
     try {
-      return new Offline(1, 1, 48000);
+      return new Offline(1, 1, rate);
     } catch {
       // Some browsers reject unusual rates; fall through to a realtime context.
     }
@@ -403,7 +409,7 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
   }
   if (!video && file.size > MAX_COMPRESSED_BYTES) throw tooLarge(file);
 
-  const ctx = createDecodingContext();
+  const ctx = createDecodingContext(opts.sampleRate !== undefined && opts.sampleRate >= 8000 && opts.sampleRate <= 96000 ? Math.round(opts.sampleRate) : 48000);
   if (!ctx) {
     throw new DecodeError('This browser cannot decode compressed audio here. Export the take as a WAV file and upload that instead.', 'no-decoder');
   }

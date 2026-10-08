@@ -36,6 +36,8 @@ export interface ResultSheetProps {
   reference: VoiceAnalysis | null;
   phrase: PhraseRecord;
   clipKind: ClipKind;
+  /** The original is an AI-isolated vocal (ClipRecord.isolation): the tone section says its numbers are estimates. */
+  isolatedReference?: boolean;
   /** Speed the take was sung at, 0.5..1. */
   rate: number;
   /** Takes made on this screen visit (3 or more offers the next phrase). */
@@ -347,7 +349,7 @@ export function ResultSheet(props: ResultSheetProps): JSX.Element {
             </>
           )}
           <h3 className="rs-sub">Tone, in words</h3>
-          <TonePanel comparison={c} referenceKind={clipKind} />
+          <TonePanel comparison={c} referenceKind={clipKind} isolatedReference={props.isolatedReference} />
 
           <h3 className="rs-sub">This phrase so far</h3>
           <p className="rs-history">

@@ -131,3 +131,61 @@ export const CLIPPING_WARNING = 'The recording is distorted (clipping), which ca
 export const QUIET_WARNING = 'This clip is very quiet, so quiet notes may be missed.';
 
 export const NOT_FOR_TARGETS_MIX = 'Full songs cannot count toward a singer\'s measured targets, because the band changes the tone.';
+
+// ---------------------------------------------------------------------------------------------
+// Isolating the vocal of a song on the device (src/audio/separation). Optional, off by default.
+
+export const ISOLATE_LABEL = 'Isolate the vocal first (AI)';
+/** The label on a clip whose audio is an isolated vocal. */
+export const ISOLATED_KIND_LABEL = 'Isolated vocal (AI)';
+
+/** The WebAssembly engine that runs the model, in MB (the size of the runtime's .wasm file); it is fetched with the model on first use. */
+export const ISOLATE_ENGINE_MB = 11;
+
+/** What it costs, said before anything is downloaded or run. `size` is the model's size in MB, from its manifest when known. */
+export function isolateCostText(sizeMb: number | null, kept = false): string {
+  const model = sizeMb && sizeMb > 0 ? Math.round(sizeMb) : 20;
+  const download = kept
+    ? 'The model is already on this phone, so there is no download.'
+    : `The first time, Mimic downloads about ${model + ISOLATE_ENGINE_MB} MB from this site (the model, about ${model} MB, and the engine that runs it, about ${ISOLATE_ENGINE_MB} MB) and keeps them on the phone (Settings shows them, and can remove them).`;
+  return (
+    `${download} Splitting a song takes minutes, not seconds (longer on an older phone), uses a lot of battery and makes the phone warm, so plug it in and keep this screen open: locking the phone can pause it. ` +
+    'It all happens on this device; nothing is uploaded.'
+  );
+}
+
+/** The honest limit, shown wherever the option is offered. */
+export const ISOLATE_LIMIT_TEXT =
+  'The vocal it pulls out is approximate: it keeps traces of the band and has small artefacts, so tone numbers measured on it are estimates. A real isolated vocal file is always better.';
+
+/** Added to a clip's warnings after isolation. */
+export const ISOLATED_VOCAL_WARNING =
+  'The vocal was pulled out of the song on this device, so it has small artefacts and traces of the band. Listen to it before you trust the phrases.';
+
+/** Added after isolation when the vocal still reads as having instruments in it: the split left the band in, so the phrases may follow it. */
+export const ISOLATED_BAND_LEFT_WARNING =
+  'The band is still in this vocal: the split did not take it out, so the detected melody may follow the instruments. Try another part of the song, or add the vocal-only version.';
+
+/** Shown on an isolated clip and next to every tone number measured on one. */
+export const ISOLATED_TONE_NOTE =
+  'This vocal was pulled out of a song by AI on this phone, so it carries small artefacts and traces of the band. Treat the tone numbers (breathiness, brightness, strain) as rough estimates; pitch and timing are less affected.';
+
+/** Counting an isolated clip toward a singer's measured targets. */
+export const ISOLATED_TARGETS_NOTE = 'This clip is an AI-isolated vocal, so its tone numbers are estimates. Counting it adds them to the singer\'s targets as they are.';
+
+export const ISOLATE_UNDO_NOTE = 'To go back to the whole song, add the file again without this option.';
+
+/** The long-song rule: how much of a song is split in one go. */
+export function isolateCapText(maxMinutes: number): string {
+  return `Only up to ${maxMinutes} minutes of a song are split at a time. For a longer song, choose where to start; the part you pick is what is stored.`;
+}
+
+/** Shown on the Add clips screen when an earlier split was cut off (the page ended mid-split: memory, or a locked screen). */
+export function interruptedSplitText(fileName: string, seconds: number): string {
+  const part = seconds >= 90 ? `${Math.round(seconds / 60)} minutes` : `${Math.max(1, Math.round(seconds))} seconds`;
+  return `The last split ("${fileName}", ${part} of it) did not finish. The phone may have run out of memory, or the screen locked and paused it. Try a shorter part (one minute is a good start), keep this screen open and plug the phone in.`;
+}
+
+export const ISOLATE_MODEL_MISSING = 'This copy of Mimic does not include the vocal-isolation model. Add the vocal-only version of the song instead.';
+
+export const ISOLATE_NOT_FOR_MIX = 'An isolated vocal is read as a single voice. To read this clip as a full song again, add the file again without isolating it.';

@@ -95,6 +95,29 @@ describe('GuidePage', () => {
     expect(text).toMatch(/cannot count toward a singer’s measured targets/);
   });
 
+  it('explains pulling the vocal out of a song: what it costs, what it cannot do, where the model comes from, and carries the Spleeter MIT notice', () => {
+    const toc = Array.from(container.querySelectorAll('.guide-toc button')).map((b) => b.textContent);
+    expect(toc).toContain('Pulling the vocal out of a song (AI)');
+    const text = container.querySelector('#guide-isolate')?.textContent ?? '';
+    expect(text).toMatch(/off unless you choose it/);
+    expect(text).toMatch(/about 31 MB/);
+    expect(text).toMatch(/the model, about 19 MB, and the engine that runs it, about 11 MB/);
+    expect(text).not.toMatch(/just like a real a cappella/);
+    expect(text).toMatch(/not the real thing/);
+    expect(text).toMatch(/minutes, not seconds/);
+    expect(text).toMatch(/battery/);
+    expect(text).toMatch(/approximate/);
+    expect(text).toMatch(/rough estimates/);
+    expect(text).toMatch(/Isolated vocal \(AI\)/);
+    expect(text).toMatch(/song never leaves the phone/);
+    expect(text).toMatch(/Spleeter/);
+    expect(text).toMatch(/MIT License/);
+    expect(text).toMatch(/Copyright \(c\) 2019-present, Deezer SA\./);
+    expect(text).toMatch(/Permission is hereby granted, free of charge/);
+    expect(text).toMatch(/no separate licence|without a separate licence/);
+    expect(container.querySelector('#privacy, #guide-privacy')?.textContent).toMatch(/Pulling a vocal out of a song/);
+  });
+
   it('explains sing along against listen then sing, and why sing along needs headphones', () => {
     const text = container.querySelector('#guide-modes')?.textContent ?? '';
     expect(text).toMatch(/Sing along.*headphones/s);

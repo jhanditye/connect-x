@@ -40,6 +40,7 @@ export function parseMeasuredClip(x: unknown): MeasuredClip | null {
       tessituraLowMidi: midiOrNull(pitch.tessituraLowMidi),
       tessituraHighMidi: midiOrNull(pitch.tessituraHighMidi),
     },
+    ...(x.isolated === true ? { isolated: true as const } : {}),
   };
 }
 

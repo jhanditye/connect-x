@@ -14,6 +14,7 @@ import type {
   ClipAnalysisKind,
   ClipAnalysisSummary,
   ClipAudioInfo,
+  ClipIsolation,
   ClipKind,
   ClipRecord,
   KeyMode,
@@ -133,6 +134,16 @@ function parseAudioInfo(x: unknown, kind: 'mix' | 'vocal'): ClipAudioInfo | null
   if (!finite(frames) || frames < 0 || !Number.isInteger(frames)) return null;
   if (!finite(chunkFrames) || chunkFrames < 1 || !Number.isInteger(chunkFrames)) return null;
   return { kind, sampleRate, frames, chunkFrames };
+}
+
+/** The mark of a clip whose audio is an AI-isolated vocal. A damaged mark is dropped (the clip is then an ordinary solo clip), never repaired by guessing. */
+function parseIsolation(x: unknown): ClipIsolation | null {
+  if (!isRecord(x)) return null;
+  const model = typeof x.model === 'string' ? x.model.trim().slice(0, 120) : '';
+  const version = typeof x.version === 'string' ? x.version.trim().slice(0, 60) : '';
+  if (!model || !version) return null;
+  const start = finite(x.sourceStartSec) && x.sourceStartSec >= 0 && x.sourceStartSec <= 86_400 ? x.sourceStartSec : 0;
+  return { model, version, sourceStartSec: start };
 }
 
 function parseAnalysis(x: unknown): ClipAnalysisSummary | null {
@@ -291,6 +302,7 @@ export function inspectClipRecord(input: unknown, migrations: MigrationSteps = C
     difficulty: x.difficulty === 1 || x.difficulty === 2 || x.difficulty === 3 ? x.difficulty : null,
     contributesToSinger: x.contributesToSinger === true,
     ownedConfirmedAt: iso(x.ownedConfirmedAt) ?? addedAt,
+    ...(parseIsolation(x.isolation) ? { isolation: parseIsolation(x.isolation) as ClipIsolation } : {}),
   };
   return { ok: true, clip };
 }
@@ -510,6 +522,11 @@ export interface FileProbe {
   fileName?: string;
   /** Duration of the whole file, seconds. */
   durationSec?: number;
+  /**
+   * The probe is an isolated part of a song: its fingerprint carries the length of the part that was decoded, not of the file, so
+   * only the size and content hash are compared.
+   */
+  isolated?: boolean;
 }
 
 /** File name and duration are close enough to call it the same file when the fingerprint is not available. */
@@ -528,7 +545,10 @@ export function findRelinkCandidates(clips: ClipRecord[], probe: FileProbe, opts
   const probeName = probe.fileName ? stripExt(probe.fileName) : '';
   for (const c of clips) {
     if (!opts.includeWithAudio && !c.audioMissing) continue;
-    if (probe.fingerprint && c.fingerprint && sameSourceFile(c.fingerprint, probe.fingerprint)) {
+    // An isolated clip's fingerprint holds the length of the window that was decoded (a trimmed clip is split from a shorter one than the
+    // original import used), so the same file can differ in length by minutes: size and content hash decide.
+    const anyLength = probe.isolated === true || !!c.isolation;
+    if (probe.fingerprint && c.fingerprint && sameSourceFile(c.fingerprint, probe.fingerprint, anyLength ? Number.POSITIVE_INFINITY : undefined)) {
       exact.push(c);
       continue;
     }
@@ -562,6 +582,7 @@ export function measuredFromClip(clip: ClipRecord): MeasuredClip {
     voicedSec: a.voicedSec,
     style: { ...a.style },
     pitch: { lowMidi: a.pitch.lowMidi, highMidi: a.pitch.highMidi, tessituraLowMidi: a.pitch.tessituraLowMidi, tessituraHighMidi: a.pitch.tessituraHighMidi },
+    ...(clip.isolation ? { isolated: true as const } : {}),
   };
 }
 

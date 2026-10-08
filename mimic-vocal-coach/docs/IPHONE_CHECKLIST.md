@@ -179,6 +179,64 @@ Two honest messages to look for: if the share sheet does not open on the first t
 *You should see:* a banner "New version ready." with an Update button; tapping Update reloads once.
 *Protects against:* an old copy staying on the phone forever.
 
+## 8. Pulling a vocal out of a song (optional, new)
+
+This feature separates the voice from the band **on the phone**, so a whole song can be practised like an isolated vocal. It is
+off unless you choose it, and it only appears where the copy of Mimic you are using includes the model file. **It has not been
+listened to by a person yet, and it has never run on an iPhone.** What was checked, on a computer, is that the numbers match a
+reference implementation and that the screens behave; whether the result *sounds* good, and whether an iPhone has enough memory
+and speed, nobody knows until you try. Use a song you own, about 3 to 4 minutes, and keep the phone plugged in.
+
+**26. It is offered, and says what it costs.** Trainer, Add clips. Look for the box **Isolate the vocal first (AI)**; tick it.
+*You should see:* a size (about 31 MB in total: the model, about 19 MB, and the engine, about 11 MB), "takes minutes", battery,
+"nothing is uploaded", and a plain warning that the result is approximate. "How much of the song" starts at **1 minute**. If the box is not there, this copy of Mimic has no model: that is fine, skip this section.
+*Protects against:* a download or a long wait you were not told about.
+
+**27. The first run.** With the box ticked, add your song. Leave the phone plugged in and the screen on.
+*You should see:* "Downloading the vocal model (one time)" with a bar, then "Splitting the song into voice and band" with a
+"minutes left" estimate that settles after the first piece, then "Listening for the melody", then the review. **Write down how
+long the splitting took for how long a song, and your iPhone model.** On the test computer one 12-second piece takes about
+1.3 seconds; a phone may be several times slower.
+*Protects against:* the page running out of memory (the page reloads or says "Splitting the song failed"), or iOS pausing it. If
+it fails, close other apps and try a shorter part ("How much of the song"); say what happened. If the page reloaded, open Add clips
+again: it should say that **the last split did not finish**. Then try 3 minutes, then 5, and say which was the first to fail. Also
+try once with the screen allowed to lock (Auto-Lock 30 seconds) and say whether the split carried on; a Home Screen app before iOS 18.4
+cannot hold the screen on.
+**Safari check:** if you can, ask for a build with the CSP word `'wasm-unsafe-eval'` removed (see the comment in `index.html`) and say
+whether the splitting still starts; if it does, the word can go.
+
+**28. Listen to it.** In the review, tap **Hear the original** on a phrase.
+*You should see:* mostly the voice, with some band left over and some watery or "swirly" sound. **That is expected** from this kind
+of model. The review says so, and calls the clip **Isolated vocal (AI)**. Tell me how it sounds in your own words, and whether the
+phrases it found follow the singing.
+*Protects against:* trusting a vocal that is mostly band. If it sounds mostly like the song, do not use that clip.
+
+**29. The tone numbers are marked as rough.** Save the clip, open it, practise a phrase, and look at the result's "Tone, in words".
+*You should see:* the note that this vocal was pulled out of a song by AI, so tone numbers are rough estimates. It also shows on the
+clip page and next to "counts toward targets".
+*Protects against:* treating tone numbers from an extracted vocal as if they came from a studio vocal.
+
+**30. Cancel, and a second run.** Add the same song again with the box ticked and tap **Cancel and leave this file out** during the
+splitting. Then add it again and let it finish.
+*You should see:* the cancel stops at once and nothing is added; the second run says "no download" and is faster to start.
+*Protects against:* a split that cannot be stopped and drains the battery, or a model downloaded again every time.
+
+**31. Offline, and where it lives.** Settings shows **Vocal isolation (optional)** with the model's size and **Remove the model and engine**.
+Turn on airplane mode and run the split again.
+*You should see:* it still works (the model and the engine are kept on the phone). Removing the model and engine frees about 31 MB, and
+"Space used" goes down.
+Also: after an app update, split once while online before relying on it offline (the engine files are fetched again for the new version).
+*Protects against:* the model being lost when the app updates, or never being removable. The Guide has a section "Pulling the vocal
+out of a song (AI)" with the Spleeter licence notice: check you can read it.
+
+Native app only: the option appears only if the model was put in before the build (`ios-native/README.md`, "Vocal isolation inside the
+app"). Settings should say **Included in the app**; run the split once and say whether it starts at all (the engine loader and the
+module worker have never been tried under `capacitor://localhost`).
+
+Limits to remember: only about 5 minutes of a song are split at a time (choose where to start for a longer one); the isolated vocal
+becomes the clip's sound, so you do not hear the band while practising it; a mono mix of the song is what is split, and the voice
+above 11 kHz is cut off (that is how the model works).
+
 ## Send the report back
 
 1. Settings, Device checks (or More, "Run the device checks").

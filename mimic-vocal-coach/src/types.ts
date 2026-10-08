@@ -348,6 +348,8 @@ export interface MeasuredClip {
   voicedSec: number;
   style: StyleVector;
   pitch: { lowMidi: number | null; highMidi: number | null; tessituraLowMidi: number | null; tessituraHighMidi: number | null };
+  /** Measured from a vocal pulled out of a song by the on-device model, so its tone numbers are estimates. Absent for a real isolated vocal. */
+  isolated?: true;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -423,6 +425,18 @@ export interface ClipAudioInfo {
   sampleRate: number;
   frames: number;
   chunkFrames: number;
+}
+
+/**
+ * A clip whose audio is a vocal pulled out of a full song, on this device, by the optional isolation model (src/audio/separation).
+ * Absent on every other clip. The isolated vocal is approximate: it carries artefacts, so tone numbers measured on it are estimates.
+ */
+export interface ClipIsolation {
+  /** The model's name and version as its manifest gave them (public/models/vocal-isolation.json). */
+  model: string;
+  version: string;
+  /** Where in the song file the isolated part starts, seconds (0 when it is the beginning). */
+  sourceStartSec: number;
 }
 
 export interface ClipAnalysisSummary {
@@ -526,6 +540,8 @@ export interface ClipRecord {
   contributesToSinger: boolean;
   /** When the user confirmed the file is theirs. */
   ownedConfirmedAt: string;
+  /** Set when `audio.mix` is an AI-isolated vocal rather than the file as it was (see ClipIsolation). Older clips never have it. */
+  isolation?: ClipIsolation;
 }
 
 export interface AttemptNoteSummary {

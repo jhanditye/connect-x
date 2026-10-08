@@ -10,16 +10,21 @@ import { leadExtractionOf } from '../analysis/mixMode';
 import { mixReport, mixTrustBand, type MixConfidenceBand } from '../analysis/quality';
 import { decodeAudioFile, isVideoFile, type DecodedTake, type DecodeOptions } from '../audio/decode';
 import { chunkFramesFor, fingerprint as hashBytes, floatToInt16, MAX_STORE_RATE, sameSourceFile } from '../audio/pcm';
+import { isolateVocal, type IsolateInput, type IsolateResult } from '../audio/separation/client';
+import { keepScreenAwake, type ScreenWakeLock } from '../audio/wakeLock';
 import { ARTIST_VOICE_TYPE } from '../coach/measured';
+import { MODEL_SAMPLE_RATE } from '../dsp/separate/constants';
 import { referenceUsability } from '../coach/reference';
 import type { ClipStore } from '../storage/clips';
 import { findRelinkCandidates, measuredFromClip } from '../storage/library';
+import { markSplitEnded, markSplitStarted } from './splitMarker';
 import type {
   AnalysisIssue,
   AnalysisOptions,
   AppSettings,
   ClipAnalysisSummary,
   ClipAudioInfo,
+  ClipIsolation,
   ClipKind,
   ClipRecord,
   MeasuredClip,
@@ -27,7 +32,10 @@ import type {
 } from '../types';
 import {
   BAND_WARNING,
+  ISOLATED_BAND_LEFT_WARNING,
   CLIPPING_WARNING,
+  ISOLATED_VOCAL_WARNING,
+  ISOLATE_NOT_FOR_MIX,
   MIX_REASON,
   NOISY_WARNING,
   NOT_FOR_TARGETS_MIX,
@@ -62,9 +70,13 @@ export interface ImportProgress {
   fileIndex: number;
   fileCount: number;
   name: string;
-  phase: 'reading' | 'decoding' | 'analysing' | 'segmenting' | 'storing';
+  phase: 'reading' | 'decoding' | 'downloading-model' | 'isolating' | 'analysing' | 'segmenting' | 'storing';
   /** 0..1 within the phase. */
   fraction: number;
+  /** True for every report of a file that is being isolated first, so the screen uses the progress plan that has room for it. */
+  isolating?: boolean;
+  /** While isolating: seconds left, from the patches finished so far; null until the first one is done. */
+  etaSec?: number | null;
 }
 
 /** One way of reading the clip: the analysis, the phrases found in it, and what to tell the user about it. */
@@ -105,6 +117,8 @@ export interface PreparedClip {
   views?: Views;
   /** A vocal-only file for a full song: playback uses this clip, the phrases and measurements come from the stem. */
   stem?: PreparedClip;
+  /** Set when `samples` are a vocal pulled out of the song by the isolation model: the clip is a solo reading of that vocal. */
+  isolation?: ClipIsolation;
 }
 
 export interface CommitEdits {
@@ -122,13 +136,27 @@ export interface CommitEdits {
   ownedConfirmed: true;
 }
 
+/** Which part of a song to isolate. Times are seconds into the file (prepareClip) or into the audio already read (isolatePrepared). */
+export interface IsolateRequest {
+  /** Where the part starts (default 0). */
+  startSec?: number;
+  /** How much to take (default and ceiling MAX_ISOLATE_SEC). */
+  maxSec?: number;
+}
+
 export interface ImportDeps {
+  /** Pulls the vocal out of a song (the separation worker in the app, a fake in tests). */
+  isolate(input: IsolateInput): Promise<IsolateResult>;
   decode(file: File, opts: DecodeOptions): Promise<DecodedTake>;
   analyze(samples: Float32Array, sampleRate: number, opts: AnalysisOptions, onProgress?: (fraction: number) => void, signal?: AbortSignal): Promise<VoiceAnalysis>;
   now(): number;
+  /** Keeps the screen on while a song is being split (a locked iPhone pauses the page). Default: the Screen Wake Lock, where it works. */
+  keepAwake?(): ScreenWakeLock;
 }
 
 const DEFAULT_DEPS: ImportDeps = {
+  keepAwake: () => keepScreenAwake(),
+  isolate: (input) => isolateVocal(input),
   decode: (file, opts) => decodeAudioFile(file, opts),
   analyze: (samples, sampleRate, opts, onProgress, signal) => analyzeInWorker(samples, sampleRate, opts, onProgress, signal),
   now: () => Date.now(),
@@ -140,7 +168,15 @@ export interface PrepareOptions {
   count?: number;
   signal?: AbortSignal;
   deps?: Partial<ImportDeps>;
+  /** Pull the vocal out of the song first and read that, as a solo vocal (prepareClip), instead of following the lead vocal of the mix. */
+  isolate?: IsolateRequest;
 }
+
+/**
+ * The most of a song that is split in one go. A phone runs the network at roughly a few times real time, so this keeps one run to
+ * minutes; the analysis reads at most MAX_ANALYSIS_SEC anyway, and a clip longer than that would have an unanalysed tail.
+ */
+export const MAX_ISOLATE_SEC = Math.min(6 * 60, MAX_ANALYSIS_SEC);
 
 /** Compressed files longer than this (by their header) are not opened: decoding needs hundreds of MB of samples. */
 export const MAX_IMPORT_SOURCE_SEC = 15 * 60;
@@ -316,6 +352,132 @@ async function readFingerprint(file: Blob, durationSec: number): Promise<string>
   }
 }
 
+function formatClock(sec: number): string {
+  const s = Math.max(0, Math.round(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** The part of a song to isolate, from a request: the start and the length, the length never above MAX_ISOLATE_SEC. */
+export function isolatePart(request: IsolateRequest): { startSec: number; lengthSec: number } {
+  const startSec = Number.isFinite(request.startSec) ? Math.max(0, request.startSec as number) : 0;
+  const wanted = Number.isFinite(request.maxSec) && (request.maxSec as number) > 0 ? (request.maxSec as number) : MAX_ISOLATE_SEC;
+  return { startSec, lengthSec: Math.min(wanted, MAX_ISOLATE_SEC) };
+}
+
+/** The solo reading of an isolated vocal. The song's band warning does not apply to it, and says the vocal was extracted. */
+export function isolatedView(analysis: VoiceAnalysis): AnalysisView {
+  const view = buildView('solo', analysis);
+  const warnings = view.warnings.filter((w) => w !== BAND_WARNING).map((w) => w.replace(` ${VOCAL_FORWARD_HINT}`, ''));
+  // "Switch on full song" is wrong advice for an extracted vocal, but a band that is still audible after the split must not go unsaid.
+  const bandLeft = analysis.mode !== 'mix' && (analysis.issues ?? []).includes('accompaniment');
+  return { ...view, warnings: [ISOLATED_VOCAL_WARNING, ...(bandLeft ? [ISOLATED_BAND_LEFT_WARNING] : []), ...warnings] };
+}
+
+type Reporter = (phase: ImportProgress['phase'], fraction: number, etaSec?: number | null) => void;
+
+/**
+ * Runs a long split with the screen kept on (taken first, while the tap that started it is fresh, as Safari requires) and a note left in
+ * storage until it ends, so a page that iOS ends mid-split can say so at the next start (splitMarker.ts).
+ */
+async function guardedSplit<T>(deps: ImportDeps, info: { fileName: string; seconds: number }, run: () => Promise<T>): Promise<T> {
+  let awake: ScreenWakeLock | null = null;
+  try {
+    awake = deps.keepAwake?.() ?? null;
+  } catch {
+    awake = null; // never let a refused lock stop the split
+  }
+  markSplitStarted(info);
+  try {
+    return await run();
+  } finally {
+    markSplitEnded();
+    awake?.release();
+  }
+}
+
+/** Added to a clip's notices when the browser would not keep the model, so it is downloaded again next time. */
+export const MODEL_NOT_KEPT_NOTICE = 'Your phone would not keep the vocal model (it may be short of space, or this is a private window), so it will be downloaded again the next time you split a song.';
+
+/**
+ * Split `samples` (a song section) into its vocal and read the vocal as a solo. The song's samples are given to the worker when
+ * `consume` is set (the caller no longer needs them); only the isolated vocal is kept.
+ */
+async function isolateAndRead(
+  deps: ImportDeps,
+  input: { samples: Float32Array; sampleRate: number; consume: boolean },
+  opts: AnalysisOptions,
+  report: Reporter,
+  signal: AbortSignal | undefined,
+): Promise<{ samples: Float32Array; sampleRate: number; view: AnalysisView; model: { name: string; version: string }; modelKept: boolean }> {
+  // "Downloading the model" is reported only when a download really starts (the separator calls onDownload), never when the model is
+  // already on the phone; the splitting step starts once the model is ready (the separator's first progress report).
+  const result = await deps.isolate({
+    samples: input.samples,
+    sampleRate: input.sampleRate,
+    consume: input.consume,
+    signal,
+    onDownload: (d) => report('downloading-model', d.fraction),
+    onProgress: (p) => report('isolating', p.fraction, p.etaSec),
+  });
+  if (signal?.aborted) throw abortError('The import was cancelled.');
+  report('isolating', 1, 0);
+  report('analysing', 0);
+  const auto = await analyzeWithRouting(deps.analyze, result.vocals, result.sampleRate, opts, 'solo', (f) => report('analysing', f), signal);
+  if (signal?.aborted) throw abortError('The import was cancelled.');
+  report('analysing', 1);
+  return { samples: result.vocals, sampleRate: result.sampleRate, view: isolatedView(auto.analysis), model: result.model, modelKept: result.modelKept };
+}
+
+/**
+ * The review's "Isolate the vocal" for a clip that is already read (typically one found to be a full song): the same split and
+ * solo reading as prepareClip with `isolate`, from the samples in hand, so the file is not decoded again. The song's samples are
+ * dropped once the vocal replaces them. A failed or cancelled run leaves `prepared` untouched.
+ */
+export async function isolatePrepared(
+  prepared: PreparedClip,
+  onProgress?: (p: ImportProgress) => void,
+  options: PrepareOptions & { part?: IsolateRequest } = {},
+): Promise<PreparedClip> {
+  if (prepared.isolation) return prepared;
+  const deps: ImportDeps = { ...DEFAULT_DEPS, ...options.deps };
+  const part = isolatePart(options.part ?? {});
+  const report: Reporter = (phase, fraction, etaSec) =>
+    onProgress?.({
+      fileIndex: options.index ?? 0,
+      fileCount: options.count ?? 1,
+      name: prepared.file.name,
+      phase,
+      fraction: Math.max(0, Math.min(1, fraction)),
+      isolating: true,
+      ...(etaSec !== undefined ? { etaSec } : {}),
+    });
+  const from = Math.min(prepared.samples.length, Math.round(part.startSec * prepared.sampleRate));
+  const section = prepared.samples.subarray(from, Math.min(prepared.samples.length, from + Math.round(part.lengthSec * prepared.sampleRate)));
+  if (section.length === 0) throw new Error('There is nothing to split at the start you chose. Choose an earlier start.');
+  const opts = prepared.options ?? { voiceType: ARTIST_VOICE_TYPE, a4Hz: 440 };
+  const isolated = await guardedSplit(deps, { fileName: prepared.file.name, seconds: section.length / prepared.sampleRate }, () =>
+    isolateAndRead(deps, { samples: section, sampleRate: prepared.sampleRate, consume: false }, opts, report, options.signal),
+  );
+  report('segmenting', 1);
+  return {
+    ...prepared,
+    ...(isolated.modelKept ? {} : { notices: [...prepared.notices, MODEL_NOT_KEPT_NOTICE] }),
+    samples: isolated.samples,
+    sampleRate: isolated.sampleRate,
+    durationSec: isolated.samples.length / isolated.sampleRate,
+    analysis: isolated.view.analysis,
+    suggestedKind: 'solo',
+    warnings: isolated.view.warnings,
+    blockers: isolated.view.blockers,
+    phrases: isolated.view.phrases,
+    kind: 'solo',
+    options: opts,
+    views: { solo: isolated.view },
+    stem: undefined,
+    isolation: { model: isolated.model.name, version: isolated.model.version, sourceStartSec: part.startSec },
+  };
+}
+
 /**
  * Decode, analyse and segment one file. Nothing is stored. Rejects with a message that names the fix (unreadable, protected,
  * too big, too long...); a readable file that cannot be used (no singing) resolves with `blockers`.
@@ -326,9 +488,30 @@ export async function prepareClip(
   onProgress?: (p: ImportProgress) => void,
   options: PrepareOptions = {},
 ): Promise<PreparedClip> {
+  if (!options.isolate) return prepareClipRun(file, settings, onProgress, options);
   const deps: ImportDeps = { ...DEFAULT_DEPS, ...options.deps };
-  const report = (phase: ImportProgress['phase'], fraction: number) =>
-    onProgress?.({ fileIndex: options.index ?? 0, fileCount: options.count ?? 1, name: file.name, phase, fraction: Math.max(0, Math.min(1, fraction)) });
+  return guardedSplit(deps, { fileName: file.name, seconds: isolatePart(options.isolate).lengthSec }, () => prepareClipRun(file, settings, onProgress, options));
+}
+
+async function prepareClipRun(
+  file: File,
+  settings: AppSettings,
+  onProgress: ((p: ImportProgress) => void) | undefined,
+  options: PrepareOptions,
+): Promise<PreparedClip> {
+  const deps: ImportDeps = { ...DEFAULT_DEPS, ...options.deps };
+  const part = options.isolate ? isolatePart(options.isolate) : null;
+  // The phases of a file that is being isolated carry a flag, so the screen can show the plan that has room for the extra steps.
+  const report: Reporter = (phase, fraction, etaSec) =>
+    onProgress?.({
+      fileIndex: options.index ?? 0,
+      fileCount: options.count ?? 1,
+      name: file.name,
+      phase,
+      fraction: Math.max(0, Math.min(1, fraction)),
+      ...(part ? { isolating: true } : {}),
+      ...(etaSec !== undefined ? { etaSec } : {}),
+    });
   const check = () => {
     if (options.signal?.aborted) throw abortError('The import was cancelled.');
   };
@@ -337,20 +520,40 @@ export async function prepareClip(
   const video = isVideoFile(file);
   report('reading', 0);
   report('decoding', 0);
-  const decoded = await deps.decode(file, { maxSeconds: MAX_ANALYSIS_SEC, maxSourceSec: MAX_IMPORT_SOURCE_SEC });
+  // A song that is to be split is decoded at the separator's own rate, so a compressed file is not resampled 48 -> 44.1 -> 48 kHz.
+  const decoded = await deps.decode(file, {
+    maxSeconds: part ? part.startSec + part.lengthSec : MAX_ANALYSIS_SEC,
+    maxSourceSec: MAX_IMPORT_SOURCE_SEC,
+    ...(part ? { sampleRate: MODEL_SAMPLE_RATE } : {}),
+  });
   check();
   const needsResample = decoded.sampleRate > MAX_STORE_RATE;
   report('decoding', needsResample ? 0.5 : 1);
 
   const notices = [...decoded.notices];
   if (video) notices.unshift('Used the sound of the video.');
-  if (decoded.sourceDurationSec > MAX_ANALYSIS_SEC + 1) {
+  const decodedDurationSec = decoded.durationSec;
+  let samples = decoded.samples;
+  let sampleRate = decoded.sampleRate;
+  if (part) {
+    // Only the chosen part is kept: the rest of the song is let go now, not when the page next collects garbage.
+    const from = Math.round(part.startSec * sampleRate);
+    if (from >= samples.length) {
+      throw new Error(`The start you chose (${formatClock(part.startSec)}) is past the end of this file (${formatClock(samples.length / sampleRate)}). Choose an earlier start.`);
+    }
+    samples = samples.slice(from, Math.min(samples.length, from + Math.round(part.lengthSec * sampleRate)));
+    (decoded as { samples: Float32Array }).samples = new Float32Array(0);
+    const total = decoded.sourceDurationSec;
+    if (part.startSec > 0 || total > part.startSec + part.lengthSec + 1) {
+      notices.push(
+        `Only ${formatClock(part.startSec)} to ${formatClock(part.startSec + samples.length / sampleRate)} of ${file.name} (${(total / 60).toFixed(1)} minutes long) was split into a vocal. The rest was left out.`,
+      );
+    }
+  } else if (decoded.sourceDurationSec > MAX_ANALYSIS_SEC + 1) {
     notices.push(
       `Only the first ${MAX_ANALYSIS_SEC / 60} minutes of ${file.name} (${(decoded.sourceDurationSec / 60).toFixed(1)} minutes long) were used. Trim long files to the part you want to practise.`,
     );
   }
-  let samples = decoded.samples;
-  let sampleRate = decoded.sampleRate;
   if (needsResample) {
     // A 96 kHz file would freeze the page for seconds in one call: convert it in slices, with progress.
     samples = await resampleAsync(samples, sampleRate, MAX_STORE_RATE, { signal: options.signal, onProgress: (f) => report('decoding', 0.5 + 0.5 * f) });
@@ -358,8 +561,36 @@ export async function prepareClip(
     check();
     report('decoding', 1);
   }
-  const durationSec = samples.length / sampleRate;
+  let durationSec = samples.length / sampleRate;
   const opts: AnalysisOptions = { voiceType: ARTIST_VOICE_TYPE, a4Hz: settings.a4Hz };
+
+  if (part) {
+    // Split the song, then read the vocal on its own as a solo: tone and singer measurement are allowed, with the isolation caveat.
+    const isolated = await isolateAndRead(deps, { samples, sampleRate, consume: true }, opts, report, options.signal);
+    check();
+    report('segmenting', 1);
+    const fingerprint = await readFingerprint(file, decodedDurationSec);
+    check();
+    durationSec = isolated.samples.length / isolated.sampleRate;
+    return {
+      file: { name: file.name, size: file.size },
+      samples: isolated.samples,
+      sampleRate: isolated.sampleRate,
+      durationSec,
+      analysis: isolated.view.analysis,
+      suggestedKind: 'solo',
+      warnings: isolated.view.warnings,
+      blockers: isolated.view.blockers,
+      phrases: isolated.view.phrases,
+      fingerprint,
+      notices: isolated.modelKept ? notices : [...notices, MODEL_NOT_KEPT_NOTICE],
+      kind: 'solo',
+      options: opts,
+      sourceKind: video ? 'video' : 'audio',
+      views: { solo: isolated.view },
+      isolation: { model: isolated.model.name, version: isolated.model.version, sourceStartSec: part.startSec },
+    };
+  }
 
   // Solo first (it is what finds out whether this is a song). When it raises the band issue the same audio is read again as a
   // full song, through the same analyzer (the worker in the app), with one progress stream.
@@ -387,7 +618,7 @@ export async function prepareClip(
   report('analysing', 1);
   report('segmenting', 1);
 
-  const fingerprint = await readFingerprint(file, decoded.durationSec);
+  const fingerprint = await readFingerprint(file, decodedDurationSec);
   check();
 
   return {
@@ -420,6 +651,7 @@ export async function reanalyzeClip(
   options: PrepareOptions = {},
 ): Promise<PreparedClip> {
   if (preparedKind(prepared) === kind) return prepared;
+  if (prepared.isolation && kind === 'mix') throw new Error(ISOLATE_NOT_FOR_MIX);
   const deps: ImportDeps = { ...DEFAULT_DEPS, ...options.deps };
   const views: Views = { ...prepared.views, [preparedKind(prepared)]: viewOf(prepared) };
   let view = views[kind];
@@ -570,6 +802,7 @@ export async function commitClip(
 
   let current = prepared;
   if (edits.kind !== preparedKind(current)) current = await reanalyzeClip(current, edits.kind, onProgress, options);
+  if (current.isolation && edits.kind === 'mix') throw new Error(ISOLATE_NOT_FOR_MIX);
   const wantedStem = edits.kind === 'mix' ? (edits.vocalStem ?? current.stem ?? null) : null;
   if (wantedStem) {
     const problem = stemProblem(current, wantedStem);
@@ -635,6 +868,7 @@ export async function commitClip(
     difficulty: clipDifficulty(levels),
     contributesToSinger: measured,
     ownedConfirmedAt: now,
+    ...(current.isolation ? { isolation: { ...current.isolation } } : {}),
   };
   try {
     await store.putClip(pending);
@@ -663,7 +897,22 @@ export async function commitClip(
 
 /** Clips whose audio is missing that this file could be the source of (same fingerprint, or same name and source length). */
 export function findRelinkMatches(clips: ClipRecord[], prepared: PreparedClip): ClipRecord[] {
-  return findRelinkCandidates(clips, { fingerprint: prepared.fingerprint, fileName: prepared.file.name, durationSec: prepared.durationSec });
+  return findRelinkCandidates(clips, {
+    fingerprint: prepared.fingerprint,
+    fileName: prepared.file.name,
+    durationSec: prepared.durationSec,
+    ...(prepared.isolation ? { isolated: true } : {}),
+  });
+}
+
+/**
+ * The part of the song to split again to give an isolated clip its audio back: the same start as the first time, and just enough
+ * length to cover the kept excerpt (its trim offset, its length and two seconds of margin), which can be much shorter than the
+ * part that was split originally. Null for a clip that is not an isolated one.
+ */
+export function relinkIsolateRequest(clip: Pick<ClipRecord, 'isolation' | 'fingerprint' | 'durationSec'>): IsolateRequest | null {
+  if (!clip.isolation) return null;
+  return { startSec: clip.isolation.sourceStartSec, maxSec: Math.min(MAX_ISOLATE_SEC, Math.ceil(trimStartOf(clip.fingerprint) + clip.durationSec + 2)) };
 }
 
 /**
@@ -675,6 +924,12 @@ export async function relinkAudio(clip: ClipRecord, prepared: PreparedClip, stor
   if (!clip.audioMissing) throw new Error(`"${clip.title}" already has its audio on this device.`);
   if (findRelinkMatches([clip], prepared).length === 0) {
     throw new Error(`This does not look like the file for "${clip.title}" (${clip.sourceFileName}). Pick the file you originally added, or add this one as a new clip.`);
+  }
+  if (clip.isolation && !prepared.isolation) {
+    throw new Error(`"${clip.title}" is an isolated vocal, and this is the whole song, so its phrases would not line up. Add the song again with "Isolate the vocal first" switched on, starting at the same place (${formatClock(clip.isolation.sourceStartSec)}), or add it as a new clip.`);
+  }
+  if (clip.isolation && prepared.isolation && Math.abs(prepared.isolation.sourceStartSec - clip.isolation.sourceStartSec) > 0.5) {
+    throw new Error(`"${clip.title}" was isolated from ${formatClock(clip.isolation.sourceStartSec)} in the song, but this one starts at ${formatClock(prepared.isolation.sourceStartSec)}. Isolate it again from ${formatClock(clip.isolation.sourceStartSec)}.`);
   }
   const startSec = trimStartOf(clip.fingerprint);
   const sr = prepared.sampleRate;

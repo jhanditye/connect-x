@@ -4,6 +4,7 @@ import { makeFakeAttempts, makeFakeClip, FAKE_CLIP_ID, FAKE_NOW } from '../testi
 import { makeFakeAnalysis } from '../testing/fixtures';
 import type { AttemptRecord, ClipRecord, PhraseRecord } from '../types';
 import { createMemoryClipStore } from './clips';
+import { parseMeasuredClip } from './measurements';
 import {
   applyAttempt,
   attemptLite,
@@ -447,6 +448,17 @@ describe('contribution to a singer\'s targets', () => {
       },
     });
     expect(measuredFromClip(c)).toEqual(clipFromAnalysis(analysis, c.title, c.id, c.addedAt));
+  });
+
+  it('carries the AI-isolation mark into the measured numbers, so the targets can say where they came from', () => {
+    const plain = makeFakeClip();
+    expect('isolated' in measuredFromClip(plain)).toBe(false);
+    const iso = makeFakeClip({ isolation: { model: 'M', version: '1', sourceStartSec: 0 } });
+    expect(measuredFromClip(iso).isolated).toBe(true);
+    // and it survives being saved and loaded
+    expect(parseMeasuredClip(JSON.parse(JSON.stringify(measuredFromClip(iso))))?.isolated).toBe(true);
+    expect(parseMeasuredClip(JSON.parse(JSON.stringify(measuredFromClip(plain))))).not.toHaveProperty('isolated');
+    expect(parseMeasuredClip({ ...measuredFromClip(plain), isolated: 'yes' })).not.toHaveProperty('isolated');
   });
 
   it('says why a clip cannot be used, with the next step', () => {

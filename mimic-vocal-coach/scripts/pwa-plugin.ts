@@ -24,6 +24,11 @@ export interface PrecacheEntry {
 }
 
 const SKIP = /(^|\/)(sw\.js|\.DS_Store|.*\.map)$/;
+// Vocal isolation (src/audio/separation) is opt-in and big: the model (models/), the runtime's WebAssembly file and loader (assets/ort-*)
+// and the worker that runs them (assets/separator.worker-*) are NOT in the offline precache, so an install stays small and an app
+// update does not re-download them. The page keeps the model in its own Cache Storage cache; the service worker keeps the other
+// three in a cache of their own (sw.template.js, "opt-in"), fetched the first time the feature is used.
+export const OPT_IN_FILE = /^(models\/|assets\/(ort-[^/]*\.(wasm|mjs)|separator\.worker-[^/]*\.js)$)/;
 // Vite names hashed assets like name-Cxh-_oUg.js; the hash is 8 chars of base64url.
 const HASHED_ASSET = /^assets\/.+-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/;
 
@@ -39,11 +44,18 @@ function walk(dir: string, out: string[] = []): string[] {
 export function buildPrecacheList(outDir: string): PrecacheEntry[] {
   return walk(outDir)
     .map((file) => ({ file, url: relative(outDir, file).split(sep).join('/') }))
-    .filter(({ url }) => !SKIP.test(url))
+    .filter(({ url }) => !SKIP.test(url) && !OPT_IN_FILE.test(url))
     .map(({ file, url }) => ({
       url,
       revision: HASHED_ASSET.test(url) ? null : createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 12),
     }));
+}
+
+/** The opt-in files the build emitted (not precached; the service worker keeps them in their own cache). The model is not among them. */
+export function buildOptInList(outDir: string): string[] {
+  return walk(outDir)
+    .map((file) => relative(outDir, file).split(sep).join('/'))
+    .filter((url) => !SKIP.test(url) && OPT_IN_FILE.test(url) && !url.startsWith('models/'));
 }
 
 export function versionOf(entries: PrecacheEntry[]): string {
@@ -53,10 +65,13 @@ export function versionOf(entries: PrecacheEntry[]): string {
   return h.digest('hex').slice(0, 12);
 }
 
-export function renderServiceWorker(template: string, entries: PrecacheEntry[]): string {
+export function renderServiceWorker(template: string, entries: PrecacheEntry[], optIn: string[] = []): string {
   const version = versionOf(entries);
   // Function replacers: the JSON must be inserted literally ($ sequences in a string replacement are special).
-  return template.replace('__MIMIC_VERSION__', () => version).replace('__MIMIC_PRECACHE__', () => JSON.stringify(entries));
+  return template
+    .replace('__MIMIC_VERSION__', () => version)
+    .replace('__MIMIC_PRECACHE__', () => JSON.stringify(entries))
+    .replace('__MIMIC_OPTIN__', () => JSON.stringify(optIn));
 }
 
 export function pwaPrecache(options: { template?: string } = {}): Plugin {
@@ -73,8 +88,9 @@ export function pwaPrecache(options: { template?: string } = {}): Plugin {
       const templatePath = options.template ?? join(config.root, 'scripts', 'sw.template.js');
       const entries = buildPrecacheList(outDir);
       if (!entries.some((e) => e.url === 'index.html')) throw new Error('pwa-precache: index.html missing from the build output');
-      writeFileSync(join(outDir, 'sw.js'), renderServiceWorker(readFileSync(templatePath, 'utf8'), entries));
-      config.logger.info(`pwa-precache: sw.js written, ${entries.length} files, version ${versionOf(entries)}`);
+      const optIn = buildOptInList(outDir);
+      writeFileSync(join(outDir, 'sw.js'), renderServiceWorker(readFileSync(templatePath, 'utf8'), entries, optIn));
+      config.logger.info(`pwa-precache: sw.js written, ${entries.length} files, version ${versionOf(entries)}, ${optIn.length} opt-in files kept out of the precache`);
     },
   };
 }

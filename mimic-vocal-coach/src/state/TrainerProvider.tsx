@@ -678,8 +678,9 @@ export function TrainerProvider(props: TrainerProviderProps) {
           }),
         ),
 
-      prepareClip: async (file: File, onProgress?: (p: ImportProgress) => void, signal?: AbortSignal): Promise<PreparedClip> => {
-        const prepared = await importer().prepareClip(file, settings(), onProgress, signal ? { signal } : undefined);
+      prepareClip: async (file: File, onProgress?: (p: ImportProgress) => void, signal?: AbortSignal, prepareOptions?: { isolate?: importModule.IsolateRequest }): Promise<PreparedClip> => {
+        const extra = { ...(signal ? { signal } : {}), ...(prepareOptions?.isolate ? { isolate: prepareOptions.isolate } : {}) };
+        const prepared = await importer().prepareClip(file, settings(), onProgress, Object.keys(extra).length > 0 ? extra : undefined);
         const check = checkImportSpace(estimateImportBytes(prepared.samples.length * (Math.min(prepared.sampleRate, MAX_STORE_RATE) / prepared.sampleRate)), stateRef.current.storage);
         return check.message ? { ...prepared, warnings: [...prepared.warnings, check.message] } : prepared;
       },

@@ -24,13 +24,26 @@ import {
   type ImportProgress,
   type PreparedClip,
 } from '../../trainer/import';
-import { OWNERSHIP_LABEL, PRIVACY_NOTE, STEM_PROMPT } from '../../trainer/importCopy';
+import {
+  ISOLATE_LABEL,
+  ISOLATE_LIMIT_TEXT,
+  ISOLATE_UNDO_NOTE,
+  ISOLATED_KIND_LABEL,
+  ISOLATED_TARGETS_NOTE,
+  ISOLATED_TONE_NOTE,
+  isolateCostText,
+  OWNERSHIP_LABEL,
+  PRIVACY_NOTE,
+  STEM_PROMPT,
+} from '../../trainer/importCopy';
+import { isAbortError } from '../../analysis/abort';
 import { applyTrim, clampTrim, defaultTrim, isHidden, singingSec, visiblePhrases, type SegPhrase, type Trim } from '../../trainer/segment';
 import { MEDIA_ACCEPT } from '../../audio/decode';
 import type { ClipKind, SingerProfile } from '../../types';
 import { formatBytes } from '../../pwa/storage';
 import { Icon } from './Icon';
 import { formatDuration } from './format';
+import { etaWords } from './IsolateOptions';
 import { Notice } from './Notice';
 import { PhraseEditor, formatEdgeTime } from './PhraseEditor';
 import { createSamplePlayer, type SamplePlayer } from './samplePlayer';
@@ -68,6 +81,17 @@ export interface ClipReviewProps {
   prepareStem?: (file: File, onProgress?: (p: ImportProgress) => void) => Promise<PreparedClip>;
   /** Test seam for the audio player. */
   createPlayer?: () => SamplePlayer;
+  /**
+   * Pulling the vocal out of the song (optional, needs the on-device model). Omit to hide it. `run` splits the song in `prepared` and
+   * reads the vocal as a solo; it rejects with an AbortError when `signal` aborts, and leaves `prepared` untouched if it fails.
+   */
+  isolation?: {
+    /** Size of the model download in MB, when known. */
+    sizeMb: number | null;
+    /** The model is already on the device (no download). */
+    modelKept: boolean;
+    run(prepared: PreparedClip, onProgress: (p: ImportProgress) => void, signal: AbortSignal): Promise<PreparedClip>;
+  };
 }
 
 function messageOf(err: unknown, fallback: string): string {
@@ -92,7 +116,7 @@ export function ClipReview(props: ClipReviewProps) {
   const [contribute, setContribute] = useState(false);
   const [owned, setOwned] = useState(props.ownedDefault ?? false);
   const [trimChoice, setTrimChoice] = useState<Trim | null>(null);
-  const [busy, setBusy] = useState<{ label: string; fraction: number | null } | null>(null);
+  const [busy, setBusy] = useState<{ label: string; fraction: number | null; detail?: string; cancellable?: boolean } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [melody, setMelody] = useState<'unknown' | 'yes' | 'no'>('unknown');
   const [pendingKind, setPendingKind] = useState<ClipKind | null>(null);
@@ -104,6 +128,8 @@ export function ClipReview(props: ClipReviewProps) {
   const ownedRef = useRef<HTMLInputElement>(null);
   const whyRef = useRef<HTMLParagraphElement>(null);
   const stemHeadingRef = useRef<HTMLHeadingElement>(null);
+  const isolatedHeadingRef = useRef<HTMLHeadingElement>(null);
+  const isolateAbort = useRef<AbortController | null>(null);
 
   // A new clip to review: start at its heading so a screen reader hears where it is.
   useEffect(() => {
@@ -114,6 +140,7 @@ export function ClipReview(props: ClipReviewProps) {
   useEffect(
     () => () => {
       runRef.current++;
+      isolateAbort.current?.abort(); // leaving the review must not leave a split running for a result nobody will see
       playerRef.current?.dispose();
       playerRef.current = null;
     },
@@ -197,6 +224,41 @@ export function ClipReview(props: ClipReviewProps) {
     } catch (err) {
       if (runRef.current === run) setProblem(messageOf(err, 'Mimic could not read that file. Pick the vocal-only version of this song.'));
     } finally {
+      if (runRef.current === run) setBusy(null);
+    }
+  };
+
+  const isolated = !!prep.isolation;
+
+  /** Split the song into its vocal and read that as a solo. Takes minutes; cancellable. */
+  const isolate = async () => {
+    const offer = props.isolation;
+    if (!offer || busy || prep.isolation) return;
+    stopAudio();
+    setProblem(null);
+    const run = ++runRef.current;
+    const controller = new AbortController();
+    isolateAbort.current = controller;
+    setBusy({ label: 'Getting ready to split the song', fraction: 0, cancellable: true });
+    try {
+      const out = await offer.run(
+        prep,
+        (p) => {
+          if (runRef.current !== run) return;
+          if (p.phase === 'downloading-model') setBusy({ label: 'Downloading the vocal model (one time)', fraction: 0.1 * p.fraction, cancellable: true });
+          else if (p.phase === 'isolating') setBusy({ label: 'Splitting the song into voice and band', fraction: 0.1 + 0.8 * p.fraction, detail: etaWords(p.etaSec), cancellable: true });
+          else if (p.phase === 'analysing') setBusy({ label: 'Listening to the isolated vocal', fraction: 0.9 + 0.1 * p.fraction, cancellable: false });
+        },
+        controller.signal,
+      );
+      if (runRef.current !== run) return;
+      resetFor(out);
+      setStatus('The vocal was pulled out of the song and read as a solo vocal.');
+      requestAnimationFrame(() => isolatedHeadingRef.current?.focus({ preventScroll: true }));
+    } catch (err) {
+      if (runRef.current === run && !isAbortError(err)) setProblem(messageOf(err, 'The vocal could not be pulled out. Try again, or add the vocal-only version of the song.'));
+    } finally {
+      if (isolateAbort.current === controller) isolateAbort.current = null;
       if (runRef.current === run) setBusy(null);
     }
   };
@@ -366,9 +428,15 @@ export function ClipReview(props: ClipReviewProps) {
       {busy && (
         <div className="rev-busy" role="status">
           <p>{busy.label}</p>
+          {busy.detail && <p className="field-hint num">{busy.detail}</p>}
           <div className="progress-track" role="progressbar" aria-label={busy.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={busy.fraction === null ? undefined : Math.round(busy.fraction * 100)}>
             <div className="progress-fill" style={{ width: `${Math.round((busy.fraction ?? 0.3) * 100)}%` }} />
           </div>
+          {busy.cancellable && (
+            <button type="button" className="button button--ghost" onClick={() => isolateAbort.current?.abort()}>
+              Cancel
+            </button>
+          )}
         </div>
       )}
       <p className="visually-hidden" role="status" aria-live="polite">
@@ -379,22 +447,34 @@ export function ClipReview(props: ClipReviewProps) {
         <h4 className="subhead" id={`${ids}-kind`}>
           What is in this clip
         </h4>
-        <label className="rev-switch">
-          <input type="checkbox" role="switch" checked={kind === 'mix'} aria-disabled={busy ? true : undefined} onChange={(e) => void chooseKind(e.target.checked ? 'mix' : 'solo')} />
-          <span className="rev-switch-track" aria-hidden="true" />
-          <span className="rev-switch-text">
-            <span className="rev-switch-title">This is a full song</span>
-            <span className="rev-switch-hint">
-              {kind === 'mix'
-                ? prep.suggestedKind === 'mix'
-                  ? 'Mimic found a band and followed the lead vocal. It judges pitch and timing only.'
-                  : 'Singing with a band. Mimic follows the lead vocal and judges pitch and timing only.'
-                : prep.suggestedKind === 'mix'
-                  ? 'Mimic thinks this has a band in it. Switch on to follow the lead vocal.'
-                  : 'Switch on if there are instruments with the voice.'}
+        {isolated ? (
+          <div className="rev-isolated" data-testid="isolated-block">
+            <h5 className="rev-isolated-title" ref={isolatedHeadingRef} tabIndex={-1}>
+              <span className="chip">{ISOLATED_KIND_LABEL}</span>
+            </h5>
+            <p className="field-hint">{ISOLATED_TONE_NOTE}</p>
+            <p className="field-hint">
+              Made on this device by {prep.isolation?.model} ({prep.isolation?.version}). {ISOLATE_UNDO_NOTE}
+            </p>
+          </div>
+        ) : (
+          <label className="rev-switch">
+            <input type="checkbox" role="switch" checked={kind === 'mix'} aria-disabled={busy ? true : undefined} onChange={(e) => void chooseKind(e.target.checked ? 'mix' : 'solo')} />
+            <span className="rev-switch-track" aria-hidden="true" />
+            <span className="rev-switch-text">
+              <span className="rev-switch-title">This is a full song</span>
+              <span className="rev-switch-hint">
+                {kind === 'mix'
+                  ? prep.suggestedKind === 'mix'
+                    ? 'Mimic found a band and followed the lead vocal. It judges pitch and timing only.'
+                    : 'Singing with a band. Mimic follows the lead vocal and judges pitch and timing only.'
+                  : prep.suggestedKind === 'mix'
+                    ? 'Mimic thinks this has a band in it. Switch on to follow the lead vocal.'
+                    : 'Switch on if there are instruments with the voice.'}
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        )}
         {lead && (
           <p className={`rev-lead rev-lead--${lead.band}`} data-band={lead.band}>
             <span className="chip rev-lead-badge">Lead vocal: {LEAD_WORDS[lead.band]}</span>
@@ -416,6 +496,15 @@ export function ClipReview(props: ClipReviewProps) {
               </button>
             </div>
           </div>
+        )}
+        {props.isolation && !isolated && (
+          <IsolateOffer
+            strong={kind === 'mix'}
+            sizeMb={props.isolation.sizeMb}
+            modelKept={props.isolation.modelKept}
+            busy={!!busy}
+            onRun={() => void isolate()}
+          />
         )}
       </section>
 
@@ -489,7 +578,7 @@ export function ClipReview(props: ClipReviewProps) {
                 aria-pressed={melody === 'no'}
                 onClick={() => {
                   setMelody('no');
-                  if (kind === 'solo') void chooseKind('mix');
+                  if (kind === 'solo' && !isolated) void chooseKind('mix');
                 }}
               >
                 No
@@ -497,6 +586,9 @@ export function ClipReview(props: ClipReviewProps) {
             </div>
           </fieldset>
           {melody === 'yes' && <p className="rev-ok">Good. The phrases below follow this line.</p>}
+          {melody === 'no' && isolated && (
+            <p className="field-hint">The vocal pulled out of the song may have kept parts of the band, or lost parts of the voice. Add the vocal-only version of the song if you have it, or pick another part of the song.</p>
+          )}
           {melody === 'no' && kind === 'mix' && (
             <p className="field-hint">
               Mimic could not follow the singing in this song.{' '}
@@ -610,6 +702,7 @@ export function ClipReview(props: ClipReviewProps) {
                   {eligibility.eligible
                     ? `Measures this clip and uses it to tune ${shortName(singerProfile)}'s targets in the Studio. Only numbers are kept, not audio.`
                     : (eligibility.reason ?? 'This clip cannot count toward targets.')}
+                  {isolated ? ` ${ISOLATED_TARGETS_NOTE}` : ''}
                 </span>
               </span>
             </label>
@@ -657,6 +750,38 @@ export function ClipReview(props: ClipReviewProps) {
         </div>
       </footer>
     </div>
+  );
+}
+
+/** The offer to pull the vocal out of the song: prominent for a clip found to be a full song, folded away for any other file. */
+function IsolateOffer(props: { strong: boolean; sizeMb: number | null; modelKept: boolean; busy: boolean; onRun(): void }) {
+  const body = (
+    <>
+      <p className="field-hint">
+        {props.strong
+          ? 'Mimic followed the lead vocal of this song, which judges pitch and timing only. It can instead pull the voice out of the song on this phone and read that on its own, so tone can be compared too.'
+          : 'If this is a song with a band, Mimic can pull the voice out on this phone and read that on its own.'}
+      </p>
+      <p className="field-hint">{isolateCostText(props.sizeMb, props.modelKept)}</p>
+      <p className="field-hint">{ISOLATE_LIMIT_TEXT}</p>
+      <div className="button-row">
+        <button type="button" className="button button--accent" aria-disabled={props.busy || undefined} onClick={() => !props.busy && props.onRun()}>
+          <Icon name="mic" size={18} />
+          <span>{ISOLATE_LABEL.replace(' first', '')}</span>
+        </button>
+      </div>
+    </>
+  );
+  return props.strong ? (
+    <div className="rev-isolate-offer" role="group" aria-label="Pull the vocal out of the song">
+      <h5 className="subhead">Pull the vocal out of the song?</h5>
+      {body}
+    </div>
+  ) : (
+    <details className="imp-more rev-isolate-offer">
+      <summary>Is this a song? Pull the vocal out</summary>
+      {body}
+    </details>
   );
 }
 

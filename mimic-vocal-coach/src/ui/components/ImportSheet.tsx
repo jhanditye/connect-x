@@ -6,15 +6,17 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { looksLikeMedia, MEDIA_ACCEPT } from '../../audio/decode';
+import { checkSeparation, type SeparationAvailability } from '../../audio/separation/client';
 import { useTrainer } from '../../state/trainerContext';
 import { QuotaError, StoreUnavailableError } from '../../storage/clips';
 import { isAbortError } from '../../analysis/abort';
-import { findRelinkMatches, reanalyzeClip, sameSource, type CommitEdits, type ImportProgress, type PreparedClip } from '../../trainer/import';
+import { findRelinkMatches, isolatePrepared, reanalyzeClip, relinkIsolateRequest, sameSource, type CommitEdits, type ImportProgress, type IsolateRequest, type PreparedClip } from '../../trainer/import';
 import { IMPORT_FORMATS, IMPORT_LEDE, IMPORT_STEPS, PRIVACY_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
 import type { ClipKind, ClipRecord } from '../../types';
 import { ClipReview } from './ClipReview';
 import { BrowserTabNote } from './InstallCard';
 import { Icon } from './Icon';
+import { DEFAULT_ISOLATE_CHOICE, etaWords, IsolateChoiceCard, parseClock, progressWords, requestFromChoice, type IsolateChoice } from './IsolateOptions';
 import { Notice } from './Notice';
 import type { SamplePlayer } from './samplePlayer';
 import './clipImport.css';
@@ -35,6 +37,8 @@ interface Item {
   clip: ClipRecord | null;
   /** Set when the audio of an existing clip was re-attached instead of adding a new one. */
   relinked: boolean;
+  /** Pull the vocal out of the song first (chosen when the file was added), or null for a normal import. */
+  isolate: IsolateRequest | null;
 }
 
 interface State {
@@ -45,7 +49,8 @@ interface State {
 }
 
 type Action =
-  | { type: 'add'; files: File[] }
+  | { type: 'add'; files: File[]; isolate?: IsolateRequest | null }
+  | { type: 'retry'; id: number; isolate: IsolateRequest | null }
   | { type: 'preparing'; id: number }
   | { type: 'progress'; id: number; progress: ImportProgress }
   | { type: 'prepared'; id: number; prepared: PreparedClip }
@@ -74,12 +79,14 @@ function advance(state: State): State {
 function reducer(state: State, action: Action): State {
   switch (action.type) {
     case 'add': {
-      const fresh: Item[] = action.files.map((file) => ({ id: nextItemId++, file, status: 'queued', progress: null, prepared: null, error: null, saveError: null, clip: null, relinked: false }));
+      const fresh: Item[] = action.files.map((file) => ({ id: nextItemId++, file, status: 'queued', progress: null, prepared: null, error: null, saveError: null, clip: null, relinked: false, isolate: action.isolate ?? null }));
       const keep = state.step === 'work' ? state.items : [];
       return { step: 'work', items: [...keep, ...fresh], current: state.step === 'work' ? state.current : 0 };
     }
     case 'preparing':
       return patch(state, action.id, { status: 'preparing' });
+    case 'retry':
+      return patch(state, action.id, { status: 'queued', error: null, progress: null, prepared: null, isolate: action.isolate });
     case 'progress':
       return patch(state, action.id, { progress: action.progress });
     case 'prepared': {
@@ -146,6 +153,8 @@ export function saveErrorMessage(err: unknown): string {
 const PHASE_WORDS: Record<ImportProgress['phase'], string> = {
   reading: 'Opening the file',
   decoding: 'Reading the sound',
+  'downloading-model': 'Downloading the vocal model (one time)',
+  isolating: 'Splitting the song into voice and band',
   analysing: 'Listening for the melody',
   segmenting: 'Finding the phrases',
   storing: 'Saving',
@@ -153,15 +162,27 @@ const PHASE_WORDS: Record<ImportProgress['phase'], string> = {
 const PHASE_SPAN: Record<ImportProgress['phase'], [number, number]> = {
   reading: [0, 0.02],
   decoding: [0.02, 0.3],
+  'downloading-model': [0.3, 0.3],
+  isolating: [0.3, 0.3],
   analysing: [0.3, 0.92],
   segmenting: [0.92, 1],
+  storing: [0, 1],
+};
+/** A file that is split into its vocal first: the splitting is most of the wait, so it gets most of the bar. */
+const ISOLATE_SPAN: Record<ImportProgress['phase'], [number, number]> = {
+  reading: [0, 0.01],
+  decoding: [0.01, 0.06],
+  'downloading-model': [0.06, 0.14],
+  isolating: [0.14, 0.85],
+  analysing: [0.85, 0.97],
+  segmenting: [0.97, 1],
   storing: [0, 1],
 };
 
 /** One 0..1 number for the whole preparation of a file. */
 export function overallProgress(p: ImportProgress | null): number {
   if (!p) return 0;
-  const [from, to] = PHASE_SPAN[p.phase];
+  const [from, to] = (p.isolating ? ISOLATE_SPAN : PHASE_SPAN)[p.phase];
   return from + (to - from) * Math.max(0, Math.min(1, p.fraction));
 }
 
@@ -188,6 +209,11 @@ export interface ImportSheetProps {
   /** Test seams. */
   reanalyze?: (prepared: PreparedClip, kind: ClipKind, onProgress?: (p: ImportProgress) => void) => Promise<PreparedClip>;
   createPlayer?: () => SamplePlayer;
+  /** Test seam for vocal isolation: whether it is offered, and the review's "Isolate the vocal" step. Defaults to the real thing. */
+  separation?: {
+    check(): Promise<SeparationAvailability>;
+    isolate?(prepared: PreparedClip, onProgress: (p: ImportProgress) => void, signal: AbortSignal): Promise<PreparedClip>;
+  };
 }
 
 export function ImportSheet(props: ImportSheetProps) {
@@ -200,12 +226,16 @@ export function ImportSheet(props: ImportSheetProps) {
   const [confirmClose, setConfirmClose] = useState(false);
   const [over, setOver] = useState(false);
   const [announce, setAnnounce] = useState('');
+  // Vocal isolation (optional, off by default): offered only when the app can really do it. Asked once when the sheet opens.
+  const [sep, setSep] = useState<SeparationAvailability | null>(null);
+  const [choice, setChoice] = useState<IsolateChoice>(DEFAULT_ISOLATE_CHOICE);
   const started = useRef(new Set<number>());
   /** One AbortController per file being read: skipping a file, closing the sheet or leaving stops its analysis worker. */
   const controllers = useRef(new Map<number, AbortController>());
   /** Cancels what is not tied to one file in the queue (reading a vocal-only file in the review). */
   const sheetAbort = useRef<AbortController | null>(null);
   const announcedAnalysing = useRef(new Set<number>());
+  const announcedSteps = useRef(new Set<string>());
   const alive = useRef(true);
   const sheetRef = useRef<HTMLDivElement>(null);
   const [host] = useState(() => {
@@ -253,6 +283,15 @@ export function ImportSheet(props: ImportSheetProps) {
     };
   }, []);
 
+  const checkSep = props.separation?.check;
+  useEffect(() => {
+    const controller = new AbortController();
+    void (checkSep ? checkSep() : checkSeparation({ signal: controller.signal }))
+      .then((a) => !controller.signal.aborted && setSep(a))
+      .catch(() => undefined); // not offered
+    return () => controller.abort();
+  }, [checkSep]);
+
   const abortAll = useCallback(() => {
     for (const c of controllers.current.values()) c.abort();
     controllers.current.clear();
@@ -288,10 +327,18 @@ export function ImportSheet(props: ImportSheetProps) {
       const take = relinkMode ? media.slice(0, 1) : media;
       if (take.length > 0) {
         setConfirmClose(false);
-        dispatch({ type: 'add', files: take });
+        // Giving an isolated clip its audio back means isolating the same part of the song again.
+        const isolate: IsolateRequest | null = relinkMode
+          ? relinkClip
+            ? relinkIsolateRequest(relinkClip)
+            : null
+          : sep?.available
+            ? requestFromChoice(choice)
+            : null;
+        dispatch({ type: 'add', files: take, isolate });
       }
     },
-    [relinkMode],
+    [relinkMode, relinkClip, sep, choice],
   );
 
   const initialDone = useRef(false);
@@ -327,8 +374,13 @@ export function ImportSheet(props: ImportSheetProps) {
               announcedAnalysing.current.add(item.id);
               setAnnounce(`Listening for the melody in ${item.file.name}.`);
             }
+            if ((p.phase === 'downloading-model' || p.phase === 'isolating') && item.id === currentIdRef.current && !announcedSteps.current.has(`${item.id}:${p.phase}`)) {
+              announcedSteps.current.add(`${item.id}:${p.phase}`);
+              setAnnounce(p.phase === 'isolating' ? `Splitting ${item.file.name} into voice and band. This takes a few minutes.` : 'Downloading the vocal model, one time.');
+            }
           },
           controller.signal,
+          ...(item.isolate ? [{ isolate: item.isolate }] : []),
         )
         .then((prepared) => alive.current && !controller.signal.aborted && dispatch({ type: 'prepared', id: item.id, prepared }))
         .catch((err: unknown) => {
@@ -339,8 +391,9 @@ export function ImportSheet(props: ImportSheetProps) {
     };
     if (cur && cur.status === 'queued' && !started.current.has(cur.id)) start(cur);
     else if (next && cur && cur.status !== 'queued' && cur.status !== 'preparing' && next.status === 'queued' && !started.current.has(next.id)) {
-      // The look-ahead starts once the file on screen has been read, and only if nothing else is being read.
-      if (!state.items.some((it) => it.status === 'preparing')) start(next);
+      // The look-ahead starts once the file on screen has been read, and only if nothing else is being read. A file that is to be split
+      // into its vocal waits for its turn instead: it runs the phone hard for minutes, which would make listening to the clip on screen stutter.
+      if (!next.isolate && !state.items.some((it) => it.status === 'preparing')) start(next);
     }
   }, [state.step, state.items, state.current, relinkMode]);
 
@@ -392,6 +445,14 @@ export function ImportSheet(props: ImportSheetProps) {
     } catch (err) {
       if (alive.current) dispatch({ type: 'saveFailed', id: item.id, error: saveErrorMessage(err) });
     }
+  };
+
+  /** Try the same file again, with or without pulling the vocal out first. */
+  const retry = (item: Item, keepIsolation: boolean) => {
+    started.current.delete(item.id);
+    announcedSteps.current.delete(`${item.id}:downloading-model`);
+    announcedSteps.current.delete(`${item.id}:isolating`);
+    dispatch({ type: 'retry', id: item.id, isolate: keepIsolation ? item.isolate : null });
   };
 
   const reattach = async (item: Item, existing: ClipRecord) => {
@@ -531,6 +592,7 @@ export function ImportSheet(props: ImportSheetProps) {
               setOver={setOver}
               rejected={rejected}
               onFiles={addFiles}
+              isolate={sep?.available && !relinkMode ? { availability: sep, value: choice, onChange: setChoice } : null}
             />
           )}
 
@@ -543,6 +605,8 @@ export function ImportSheet(props: ImportSheetProps) {
               trainer={trainer}
               sheet={props}
               onSave={save}
+              onRetry={retry}
+              separation={sep}
               onReattach={reattach}
               onSkip={(id) => {
                 abortItem(id);
@@ -591,9 +655,13 @@ function PickStep(props: {
   setOver(on: boolean): void;
   rejected: string | null;
   onFiles(files: File[]): void;
+  /** The vocal-isolation choice; null when the app cannot do it here (then nothing about it is shown). */
+  isolate: { availability: SeparationAvailability; value: IsolateChoice; onChange(next: IsolateChoice): void } | null;
 }) {
   const inputId = useId();
   const relink = props.relinkTitle !== null;
+  const startError = props.isolate?.value.on && parseClock(props.isolate.value.start) === null ? 'Type the start as minutes and seconds, like 1:30, or leave it at 0:00.' : null;
+  const blockedByChoice = startError !== null;
   const take = (list: FileList | null | undefined) => {
     const files = Array.from(list ?? []);
     if (files.length > 0) props.onFiles(files);
@@ -601,7 +669,7 @@ function PickStep(props: {
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     props.setOver(false);
-    if (!props.disabled) take(e.dataTransfer?.files);
+    if (!props.disabled && !blockedByChoice) take(e.dataTransfer?.files);
   };
   return (
     <div>
@@ -612,6 +680,10 @@ function PickStep(props: {
         </p>
       ) : (
         <p className="lede">{IMPORT_LEDE}</p>
+      )}
+
+      {props.isolate && (
+        <IsolateChoiceCard manifest={props.isolate.availability.manifest} modelKept={props.isolate.availability.modelKept} value={props.isolate.value} onChange={props.isolate.onChange} startError={startError} />
       )}
 
       <div
@@ -629,7 +701,7 @@ function PickStep(props: {
           type="file"
           accept={MEDIA_ACCEPT}
           multiple={!relink}
-          disabled={props.disabled}
+          disabled={props.disabled || blockedByChoice}
           onChange={(e) => {
             take(e.currentTarget.files);
             e.currentTarget.value = '';
@@ -639,7 +711,9 @@ function PickStep(props: {
           <Icon name="upload" size={20} />
           <span className="filedrop-text">
             <span className="filedrop-title">{relink ? 'Choose the file' : 'Choose files'}</span>
-            <span className="filedrop-hint">{props.disabled ? 'Waiting for the library to open.' : `${IMPORT_FORMATS} You can drop files here too.`}</span>
+            <span className="filedrop-hint">
+              {props.disabled ? 'Waiting for the library to open.' : blockedByChoice ? 'Fix the start time below to choose files.' : `${IMPORT_FORMATS} You can drop files here too.`}
+            </span>
           </span>
         </label>
       </div>
@@ -685,6 +759,9 @@ function WorkStep(props: {
   trainer: ReturnType<typeof useTrainer>;
   sheet: ImportSheetProps;
   onSave(item: Item, edits: CommitEdits, prepared: PreparedClip): void;
+  onRetry(item: Item, keepIsolation: boolean): void;
+  /** Whether the app can pull a vocal out of a song here (null until asked). */
+  separation: SeparationAvailability | null;
   onReattach(item: Item, existing: ClipRecord): void;
   onSkip(id: number): void;
   onNext(): void;
@@ -708,6 +785,16 @@ function WorkStep(props: {
             {item.error}
           </Notice>
           <div className="button-row">
+            {item.isolate && !props.relinkMode && (
+              <>
+                <button type="button" className="button button--accent" onClick={() => props.onRetry(item, true)}>
+                  Try again
+                </button>
+                <button type="button" className="button" onClick={() => props.onRetry(item, false)}>
+                  Add it without isolating
+                </button>
+              </>
+            )}
             {!props.relinkMode && count > 1 && state.items.some((it, i) => i > state.current && it.status !== 'saved' && it.status !== 'skipped') && (
               <button type="button" className="button button--accent" onClick={props.onNext}>
                 Continue with the next file
@@ -739,6 +826,11 @@ function WorkStep(props: {
           onChooseOther={props.onPickOthers}
           reanalyze={props.sheet.reanalyze ?? reanalyzeClip}
           prepareStem={(file, onProgress) => trainer.prepareClip(file, onProgress, props.streamSignal())}
+          isolation={
+            props.separation?.available
+              ? { sizeMb: props.separation.manifest ? props.separation.manifest.bytes / (1024 * 1024) : null, modelKept: props.separation.modelKept, run: props.sheet.separation?.isolate ?? ((prepared, onProgress, signal) => isolatePrepared(prepared, onProgress, { signal })) }
+              : undefined
+          }
           createPlayer={props.sheet.createPlayer}
           banner={
             duplicate ? (
@@ -774,6 +866,8 @@ function PreparingCard(props: { item: Item; onSkip?: () => void }) {
   const p = props.item.progress;
   const pct = Math.round(overallProgress(p) * 100);
   const phase = p ? PHASE_WORDS[p.phase] : 'Opening the file';
+  const isolating = !!props.item.isolate;
+  const splitting = p?.phase === 'isolating';
   const label = `${phase}: ${props.item.file.name}`;
   return (
     <div className="imp-preparing">
@@ -787,10 +881,20 @@ function PreparingCard(props: { item: Item; onSkip?: () => void }) {
       <div className="progress-track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
         <div className="progress-fill" style={{ width: `${pct}%` }} />
       </div>
-      <p className="field-hint">A long song takes a little longer. You can leave this open.</p>
+      {splitting && (
+        <p className="field-hint num" aria-live="off">
+          {etaWords(p?.etaSec)}
+        </p>
+      )}
+      {p?.phase === 'downloading-model' && <p className="field-hint">{progressWords(p)}: it is kept on this phone, so this happens once.</p>}
+      <p className="field-hint">
+        {isolating
+          ? 'Splitting a song takes minutes and uses a lot of battery. Keep this screen open and the phone plugged in; locking the phone can pause it.'
+          : 'A long song takes a little longer. You can leave this open.'}
+      </p>
       {props.onSkip && (
         <button type="button" className="button button--ghost" onClick={props.onSkip}>
-          Skip this file
+          {isolating ? 'Cancel and leave this file out' : 'Skip this file'}
         </button>
       )}
     </div>

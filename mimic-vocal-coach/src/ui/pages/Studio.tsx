@@ -12,7 +12,7 @@ import { useApp } from '../../state/context';
 import { REFERENCE_ID } from '../../state/reducer';
 import { parseRoute } from '../../state/routing';
 import { TrainerContext } from '../../state/trainerContext';
-import type { SingerProfile, VoiceType } from '../../types';
+import type { MeasuredClip, SingerProfile, VoiceType } from '../../types';
 import { AnalysisProgress } from '../components/AnalysisProgress';
 import { FileDrop } from '../components/FileDrop';
 import { InstallCard } from '../components/InstallCard';
@@ -54,8 +54,12 @@ function scrollBehavior(): ScrollBehavior {
   }
 }
 
-function measuredFooter(clips: number): ReactNode {
-  return clips > 0 ? `Measured from ${clips} clip${clips === 1 ? '' : 's'}` : undefined;
+function measuredFooter(list: readonly MeasuredClip[]): ReactNode {
+  const clips = list.length;
+  if (clips === 0) return undefined;
+  const isolated = list.filter((c) => c.isolated).length;
+  const base = `Measured from ${clips} clip${clips === 1 ? '' : 's'}`;
+  return isolated > 0 ? `${base} (${isolated} AI-isolated, tone approximate)` : base;
 }
 
 function recordingName(): string {
@@ -376,7 +380,7 @@ export function StudioPage() {
               profile={p}
               selected={state.selectedProfileId === p.id}
               onSelect={() => app.selectProfile(p.id)}
-              footer={measuredFooter(state.measurements[p.id]?.length ?? 0)}
+              footer={measuredFooter(state.measurements[p.id] ?? [])}
             />
           ))}
           <ReferenceCard

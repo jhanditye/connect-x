@@ -4,12 +4,14 @@
 //
 //   npm run verify              everything, including the web bundle copied into ios/App/App/public
 //   npm run verify -- --no-bundle   skip the bundle checks (right after unzipping, before the first sync)
+//   npm run verify -- --require-isolation   also fail when the vocal-isolation model, engine or worker is missing from the app bundle
 //
 // What it proves is that the files are present and consistent. It does NOT prove the project compiles or runs: only
 // Xcode can do that (README, "What is verified").
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspectIsolation } from './lib/isolation.mjs';
 import { parsePlist } from './lib/plist.mjs';
 import { pngInfo } from './lib/png.mjs';
 
@@ -19,6 +21,7 @@ const iosApp = path.join(nativeDir, 'ios', 'App');
 const appDir = path.join(iosApp, 'App');
 const catalog = path.join(appDir, 'Assets.xcassets');
 const checkBundle = !process.argv.includes('--no-bundle');
+const requireIsolation = process.argv.includes('--require-isolation');
 
 let failed = 0;
 let passed = 0;
@@ -159,6 +162,11 @@ if (checkBundle) {
       })(dir);
       return out.sort();
     };
+    // Vocal isolation (optional) is loaded at run time and the 20 MB model is not committed: say so when the app would ship without it.
+    const iso = inspectIsolation(pub);
+    if (requireIsolation) check('web bundle: vocal isolation is complete (model, manifest, engine, worker)', iso.included, iso.summary);
+    else if (iso.hasManifest && !iso.included) console.log(`WARN  web bundle: vocal isolation will NOT work in this app (${iso.summary}). Add --require-isolation to make this a failure.`);
+    else console.log(`INFO  web bundle: vocal isolation: ${iso.summary}`);
     if (fs.existsSync(www)) {
       const a = list(www);
       const b = list(pub);

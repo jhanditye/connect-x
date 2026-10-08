@@ -6,3 +6,6 @@ dist-single
 coverage
 test-results
 playwright-report
+
+# The vocal-isolation model is too big to commit: scripts/prepare-separator-model.mjs puts it here (the manifest next to it is committed).
+public/models/*.onnx

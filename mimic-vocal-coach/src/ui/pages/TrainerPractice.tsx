@@ -412,6 +412,7 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
           reference={snap?.reference ?? null}
           phrase={phrase}
           clipKind={clip.kind}
+          isolatedReference={!!clip.isolation}
           rate={o.rate}
           triesThisVisit={tries}
           history={history}

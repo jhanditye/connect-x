@@ -172,6 +172,25 @@ describe('decodeAudioFile (browser decoder path)', () => {
     expect(out.durationSec).toBeCloseTo(0.01, 6);
   });
 
+  it('decodes compressed audio at the rate the caller asks for (48 kHz by default, 44.1 kHz for the vocal separator)', async () => {
+    const rates: number[] = [];
+    const decoded = { sampleRate: 44100, numberOfChannels: 1, getChannelData: () => new Float32Array(441).fill(0.1) };
+    vi.stubGlobal(
+      'OfflineAudioContext',
+      class {
+        constructor(_ch: number, _len: number, rate: number) {
+          rates.push(rate);
+        }
+        decodeAudioData = async () => decoded;
+      },
+    );
+    const mp3 = () => new File([new Uint8Array(64)], 'song.mp3', { type: 'audio/mpeg' });
+    await decodeAudioFile(mp3());
+    await decodeAudioFile(mp3(), { sampleRate: 44100 });
+    await decodeAudioFile(mp3(), { sampleRate: 1 }); // nonsense falls back to the default
+    expect(rates).toEqual([48000, 44100, 48000]);
+  });
+
   it('supports the old callback form of decodeAudioData', async () => {
     const decoded = { sampleRate: 22050, numberOfChannels: 1, getChannelData: () => new Float32Array(100).fill(0.5) };
     vi.stubGlobal(

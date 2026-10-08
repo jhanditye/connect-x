@@ -5,6 +5,7 @@
 //   npm run build:web -- --from /path/to/site       do not build anything: copy an already built site (for example the
 //                                                   unzipped mimic-pwa.zip) into www
 //   npm run build:web -- --out check-www            write to another folder inside ios-native/ (used for dry runs)
+//   npm run build:web -- --require-isolation        fail (instead of warning) when the vocal-isolation model, engine or worker is missing
 //
 // Nothing here ever writes to ../dist. After the build or copy, the PWA service worker (sw.js) is removed from the
 // copy that goes into the app: iOS only allows service workers in a WKWebView for "app-bound domains", so it can
@@ -14,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspectIsolation } from './lib/isolation.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const nativeDir = path.resolve(here, '..');
@@ -33,6 +35,7 @@ function option(name) {
 }
 
 const skipTypecheck = process.argv.includes('--no-typecheck');
+const requireIsolation = process.argv.includes('--require-isolation');
 const from = option('--from');
 const outDir = path.resolve(nativeDir, option('--out') ?? 'www');
 
@@ -117,5 +120,15 @@ fs.writeFileSync(
   JSON.stringify({ app: webPkg.name ?? null, version: webPkg.version ?? null, source: from ? 'prebuilt site (--from)' : 'vite build', builtAt: new Date().toISOString(), files, bytes, removed }, null, 2) + '\n',
 );
 
+// Vocal isolation (optional) is loaded at run time, so the check above cannot see it missing. The manifest is committed but the 20 MB
+// model is not: a build made where the model was never prepared would ship an app that silently never offers the feature.
+const iso = inspectIsolation(outDir);
+if (iso.hasManifest && !iso.included) {
+  const lines = iso.problems.map((p) => `  - ${p}`).join('\n');
+  if (requireIsolation) fail(`vocal isolation is not complete in this build:\n${lines}`);
+  console.warn(`\nbuild-web: WARNING  vocal isolation will NOT work in this app. The build is missing:\n${lines}\n  (add --require-isolation to make this an error)\n`);
+}
+
 console.log(`\nbuild-web: ${files} files, ${(bytes / 1024 / 1024).toFixed(2)} MB in ${path.relative(nativeDir, outDir)}/` + (removed.length ? ` (removed ${removed.join(', ')})` : ''));
 console.log(`build-web: index.html references ${refs.length} local files, all present, none root-absolute.`);
+console.log(`build-web: vocal isolation: ${iso.included ? 'included (' + iso.summary + ')' : 'NOT included (' + iso.summary + ')'}.`);

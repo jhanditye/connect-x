@@ -23,6 +23,15 @@ afterEach(() => {
 const render = (node: React.ReactNode) => act(() => root.render(node));
 const shawn = makeFakeProfile({ id: 'shawn-mendes', name: 'Shawn Mendes', color: '#b97a12' });
 
+describe('ClipCard and an isolated clip', () => {
+  it('is badged "Isolated vocal (AI)" so it is never mistaken for a studio vocal', () => {
+    render(<ClipCard clip={makeFakeClip({ isolation: { model: 'M', version: '1', sourceStartSec: 0 } })} singer={shawn} now={FAKE_NOW} />);
+    expect(container.querySelector('.cc-badge')?.textContent).toBe('Isolated vocal (AI)');
+    render(<ClipCard clip={makeFakeClip()} singer={shawn} now={FAKE_NOW} />);
+    expect(container.textContent).not.toContain('Isolated vocal');
+  });
+});
+
 describe('ClipCard', () => {
   it('is one link to the clip, with title, length, phrase count and what is mastered', () => {
     render(<ClipCard clip={makeFakeClip({ id: 'a b', title: 'Treat You Better, verse' })} singer={shawn} now={FAKE_NOW} />);

@@ -6,10 +6,14 @@
          (your own key, numbers only), api.anthropic.com. No forms, no <base>, no plug-ins, no frames. Workers and the audio worklet
          come from this origin or blob:/data: (the single-file build inlines its worker as data:). Scripts need 'unsafe-inline' because
          the single-file build inlines its module and the start-up check below is inline; the privacy guarantee is connect-src,
-         img-src, media-src, font-src, form-action and base-uri, not script-src. Keep this in step with docs/IPHONE_CHECKLIST.md. -->
+         img-src, media-src, font-src, form-action and base-uri, not script-src. 'wasm-unsafe-eval' is kept as a precaution for the optional
+         on-device vocal isolation (the runtime and the model come from this origin, never from a CDN). It was NOT needed in Chromium: the
+         engine runs in a same-origin worker, which the page's meta policy does not govern. Whether Safari / the iPhone app need it has not
+         been tested; if the check in docs/IPHONE_CHECKLIST.md shows they do not, remove it here and in scripts/index-csp.test.ts. It does
+         not allow eval() or new Function(), which still need 'unsafe-eval'. Keep this in step with docs/IPHONE_CHECKLIST.md. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self' 'unsafe-inline' blob:; worker-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob: data:; manifest-src 'self'; connect-src 'self' blob: data: https://api.anthropic.com; base-uri 'none'; form-action 'none'"
+      content="default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob:; media-src 'self' blob: data:; manifest-src 'self'; connect-src 'self' blob: data: https://api.anthropic.com; base-uri 'none'; form-action 'none'"
     />
     <!-- viewport-fit=cover makes env(safe-area-inset-*) real (notch, Dynamic Island, home indicator). Do NOT add
          maximum-scale=1 or user-scalable=no: inputs are already 16px so iOS never zooms on focus, and blocking

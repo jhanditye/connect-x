@@ -47,6 +47,7 @@ function NumbersOnlyPanel(props: NumbersOnlyProps) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const busy = progress !== null;
   const singingSec = Math.round(clips.reduce((s, c) => s + c.voicedSec, 0));
+  const isolatedCount = clips.filter((c) => c.isolated).length;
 
   const measure = async (files: File[]) => {
     setResult(null);
@@ -89,10 +90,17 @@ function NumbersOnlyPanel(props: NumbersOnlyProps) {
             {clips.length === 1 ? '' : 's'} you added (<span className="num">{singingSec} s</span> of singing). Add clips from other
             songs to steady them.
           </p>
+          {isolatedCount > 0 && (
+            <p className="measure-intro">
+              {isolatedCount === 1 ? '1 of them is a vocal' : `${isolatedCount} of them are vocals`} pulled out of a song by AI, so {isolatedCount === 1 ? 'its' : 'their'} tone
+              numbers are approximate. A real isolated vocal gives steadier targets.
+            </p>
+          )}
           <ul className="measure-clips">
             {clips.map((c) => (
               <li key={c.id}>
                 <span className="measure-clip-name">{c.name}</span>
+                {c.isolated && <span className="muted">AI-isolated</span>}
                 <span className="num muted">{Math.round(c.voicedSec)} s sung</span>
                 <button
                   type="button"

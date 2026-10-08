@@ -55,6 +55,23 @@ describe('index.html Content-Security-Policy', () => {
     expect(d.get('img-src')).toEqual(expect.arrayContaining(['data:', 'blob:']));
   });
 
+  it('lets on-device vocal isolation compile WebAssembly and load its worker and files from this origin, and nothing more', () => {
+    const d = directives();
+    const script = d.get('script-src') ?? [];
+    expect(script).toContain("'wasm-unsafe-eval'");
+    // WebAssembly only: eval() and new Function() stay blocked.
+    expect(script).not.toContain("'unsafe-eval'");
+    expect(script).not.toContain("'strict-dynamic'");
+    // The module worker, the runtime's loader and the model all come from the page's own origin.
+    expect(d.get('worker-src')).toContain("'self'");
+    expect(script).toContain("'self'");
+    expect(d.get('connect-src')).toContain("'self'");
+    // Nothing else was opened up to make room for it.
+    expect(d.get('script-src')?.filter((v) => /^(https?|wss?):|^\*$/.test(v))).toEqual([]);
+    expect(d.get('default-src')).toEqual(["'none'"]);
+    expect(d.get('object-src')).toBeUndefined(); // default-src 'none' covers plug-ins
+  });
+
   it('forbids a <base> change and form posts', () => {
     const d = directives();
     expect(d.get('base-uri')).toEqual(["'none'"]);

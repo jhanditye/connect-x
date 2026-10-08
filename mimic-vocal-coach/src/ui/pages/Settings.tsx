@@ -3,12 +3,14 @@
 import { useContext, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { passaggioFor, VOICE_TYPE_LABELS, VOICE_TYPE_NAMES } from '../../analysis/passaggio';
 import { DEFAULT_AI_MODEL } from '../../coach/ai';
+import { defaultModelDeps, removeIsolationFiles } from '../../audio/separation/modelCache';
 import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
 import { TrainerContext } from '../../state/trainerContext';
 import { A4_MAX, A4_MIN, parseA4 } from '../components/format';
 import type { ThemePref } from '../../state/theme';
 import type { VoiceType } from '../../types';
+import { IsolationSettings } from '../components/IsolationSettings';
 import { MicrophoneSetting, StoragePanel } from '../components/StoragePanel';
 import { TrainerSettings } from '../components/TrainerSettings';
 
@@ -271,6 +273,7 @@ export function SettingsPage() {
       <TrainerSettings />
 
       <StoragePanel />
+      <IsolationSettings />
 
       <section className="settings-section" aria-labelledby="data-heading">
         <h2 id="data-heading" className="section-title">
@@ -320,6 +323,8 @@ export function SettingsPage() {
                   // "Cleared" is said only when every place that holds data confirmed it: the Trainer's library is its own store and
                   // can refuse (a locked or failing IndexedDB), in which case the person is told what is still there and may try again.
                   const library = trainer ? trainer.clearAll().then(() => null, () => 'your clips and practice scores') : Promise.resolve(null);
+                  // The downloaded vocal-isolation model and engine are stored data too; clearing them is best effort and never blocks "cleared".
+                  void removeIsolationFiles(defaultModelDeps()).catch(() => false);
                   void Promise.all([Promise.resolve(app.clearAllData()).then((r) => r?.failed ?? [], () => ['some saved data']), library]).then(([failed, libraryFailed]) => {
                     const left = [...new Set([...failed, ...(libraryFailed ? [libraryFailed] : [])])];
                     if (left.length === 0) {
