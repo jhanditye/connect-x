@@ -2,9 +2,10 @@
 // vibrato, relative loudness), never raw measurements, and never as better or worse: they are estimates that move with your
 // microphone and your key. Grit is only ever described, never asked for; softer is never "fixed" by pushing.
 
+import { platformKind } from '../../pwa/platform';
 import type { JSX } from 'react';
 import { toneWords, type ToneWords } from '../../trainer/feedback';
-import { ISOLATED_TONE_NOTE } from '../../trainer/importCopy';
+import { isolatedToneNote } from '../../trainer/importCopy';
 import type { PhraseComparison, ToneFinding } from '../../types';
 import { Notice } from './Notice';
 import { signed } from './format';
@@ -118,7 +119,7 @@ export function TonePanel(props: TonePanelProps): JSX.Element {
       {body}
       {props.isolatedReference && !mix && (
         <p className="tp-foot" data-testid="isolated-tone-note">
-          {ISOLATED_TONE_NOTE}
+          {isolatedToneNote(platformKind())}
         </p>
       )}
       <p className="tp-foot">

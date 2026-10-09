@@ -30,7 +30,7 @@ import {
   ISOLATE_UNDO_NOTE,
   ISOLATED_KIND_LABEL,
   ISOLATED_TARGETS_NOTE,
-  ISOLATED_TONE_NOTE,
+  isolatedToneNote,
   isolateCostText,
   OWNERSHIP_LABEL,
   PRIVACY_NOTE,
@@ -48,6 +48,8 @@ import { Notice } from './Notice';
 import { PhraseEditor, formatEdgeTime } from './PhraseEditor';
 import { createSamplePlayer, type SamplePlayer } from './samplePlayer';
 import './clipImport.css';
+import { platformKind } from '../../pwa/platform';
+import { deviceNoun } from '../../pwa/words';
 
 const OTHER = '__other__';
 /** Sample rate of the detected-melody tone (a sine with overtones does not need more). */
@@ -452,7 +454,7 @@ export function ClipReview(props: ClipReviewProps) {
             <h5 className="rev-isolated-title" ref={isolatedHeadingRef} tabIndex={-1}>
               <span className="chip">{ISOLATED_KIND_LABEL}</span>
             </h5>
-            <p className="field-hint">{ISOLATED_TONE_NOTE}</p>
+            <p className="field-hint">{isolatedToneNote(platformKind())}</p>
             <p className="field-hint">
               Made on this device by {prep.isolation?.model} ({prep.isolation?.version}). {ISOLATE_UNDO_NOTE}
             </p>
@@ -759,10 +761,10 @@ function IsolateOffer(props: { strong: boolean; sizeMb: number | null; modelKept
     <>
       <p className="field-hint">
         {props.strong
-          ? 'Mimic followed the lead vocal of this song, which judges pitch and timing only. It can instead pull the voice out of the song on this phone and read that on its own, so tone can be compared too.'
-          : 'If this is a song with a band, Mimic can pull the voice out on this phone and read that on its own.'}
+          ? `Mimic followed the lead vocal of this song, which judges pitch and timing only. It can instead pull the voice out of the song on this ${deviceNoun(platformKind())} and read that on its own, so tone can be compared too.`
+          : `If this is a song with a band, Mimic can pull the voice out on this ${deviceNoun(platformKind())} and read that on its own.`}
       </p>
-      <p className="field-hint">{isolateCostText(props.sizeMb, props.modelKept)}</p>
+      <p className="field-hint">{isolateCostText(props.sizeMb, props.modelKept, platformKind())}</p>
       <p className="field-hint">{ISOLATE_LIMIT_TEXT}</p>
       <div className="button-row">
         <button type="button" className="button button--accent" aria-disabled={props.busy || undefined} onClick={() => !props.busy && props.onRun()}>

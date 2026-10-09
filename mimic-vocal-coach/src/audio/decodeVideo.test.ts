@@ -90,6 +90,9 @@ describe('picking phone videos', () => {
     expect(looksLikeMedia({ name: 'IMG_0042.MOV', type: '' })).toBe(true);
     expect(looksLikeMedia({ name: 'take.m4v', type: '' })).toBe(true);
     expect(looksLikeMedia({ name: 'memo.qta', type: '' })).toBe(true);
+    // a copy-protected iTunes purchase is let through so the person gets the copy-protection message, not "not audio"
+    expect(looksLikeMedia({ name: 'Protected-Song.m4p', type: '' })).toBe(true);
+    expect(MEDIA_ACCEPT.split(',')).toContain('.m4p');
     expect(looksLikeMedia({ name: 'notes.txt', type: 'text/plain' })).toBe(false);
     expect(isVideoFile({ name: 'IMG_0042.MOV', type: '' })).toBe(true);
     expect(isVideoFile({ name: 'clip.mp4', type: 'video/mp4' })).toBe(true);

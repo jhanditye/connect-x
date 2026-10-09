@@ -12,6 +12,8 @@ import { wrongNoteCount } from './compare';
 import { inOriginalTerms, type TrainerFix } from './feedback';
 import type { ClickProbe } from './latency';
 import { TRAINER_ANALYSIS_VERSION } from './phraseAnalysis';
+import { isDesktopKind, platformKind } from '../pwa/platform';
+import { handSpanAdvice, onThisDevice } from '../pwa/words';
 
 // ---------------------------------------------------------------------------------------------
 // The take
@@ -81,10 +83,20 @@ export function medianOfRecent(values: (number | null)[]): number | null {
 const semis = (n: number): string => (n === 0 ? 'the original key' : `${Math.abs(n)} semitone${Math.abs(n) === 1 ? '' : 's'} ${n < 0 ? 'below' : 'above'} the original`);
 
 /** What to do when the microphone barely heard the singer. Never "louder": the fix is the distance and a normal comfortable volume. */
-export const MIC_ADVICE = 'Hold the phone about a hand-span from your mouth, sing at your normal comfortable volume, and sing the whole phrase.';
+export const MIC_ADVICE = `${handSpanAdvice(platformKind())}, sing at your normal comfortable volume, and sing the whole phrase.`;
 
-export const COPY = {
-  noMatch: 'That take did not match this phrase closely enough to score, so it was not counted. Check you are singing the phrase shown, hold the phone about a hand-span from your mouth, and try again.',
+type Say = string | ((...args: never[]) => string);
+/** The fixed messages in the words of this device (read once at load, like MIC_ADVICE): a computer clicks, a phone taps. */
+function forThisDevice<T extends Record<string, Say>>(copy: T): T {
+  const out: Record<string, Say> = {};
+  for (const [key, say] of Object.entries(copy)) {
+    out[key] = typeof say === 'string' ? onThisDevice(say) : (...args: unknown[]) => onThisDevice((say as (...a: unknown[]) => string)(...args));
+  }
+  return out as T;
+}
+
+export const COPY = forThisDevice({
+  noMatch: `That take did not match this phrase closely enough to score, so it was not counted. Check you are singing the phrase shown, ${handSpanAdvice(platformKind(), false)}, and try again.`,
   referenceTooShort: 'This phrase has too little singing in it to score against (it needs at least two notes and a second of voice), so the take was not counted. Edit the clip\'s phrases to take in more of the singing, or pick another phrase.',
   lowEvidence: `There was not enough clear singing in that take to score it, so it was not counted. ${MIC_ADVICE} Then try again.`,
   nothingHeard: `I could not hear any singing in that take, so it was not scored. Check the microphone is not covered. ${MIC_ADVICE} Then try again.`,
@@ -104,11 +116,17 @@ export const COPY = {
   openFailed: (why: string): string => `This phrase could not be prepared (${why}). Go back to the clip and open the phrase again.`,
   analysisFailed: (why: string): string => `That take could not be analysed (${why}). Tap Sing to try again.`,
   playbackFailed: (why: string): string => `Playback did not start (${why}). Tap Listen to try again.`,
-  noAudioApi: 'This browser cannot play audio here. Open Mimic in Safari or add it to your Home Screen, then try again.',
-} as const;
+  noAudioApi: isDesktopKind(platformKind())
+    ? 'This browser cannot play audio here. Open Mimic in a current Safari or Chrome, then try again.'
+    : 'This browser cannot play audio here. Open Mimic in Safari or add it to your Home Screen, then try again.',
+} as const);
 
 /** The message for an interruption, in the words of what was interrupted. Always says what to tap next. */
 export function interruptionMessage(reason: InterruptReason | null | undefined, what: 'take' | 'playback'): string {
+  return onThisDevice(interruptionText(reason, what));
+}
+
+function interruptionText(reason: InterruptReason | null | undefined, what: 'take' | 'playback'): string {
   const take = what === 'take';
   const stopped = take ? 'this take was stopped and not scored' : 'the playback stopped';
   const again = take ? 'tap Sing to try again' : 'tap Listen to hear it again';
@@ -120,7 +138,9 @@ export function interruptionMessage(reason: InterruptReason | null | undefined, 
     case 'device-change':
       return `Your headphones or microphone changed, so ${stopped}. Check the input shown above, then ${again}.`;
     case 'no-audio':
-      return `No sound came from the microphone, so ${stopped}. Check that Mimic is allowed to use it (Settings, then Mimic or Safari, then Microphone), then ${again}.`;
+      return isDesktopKind(platformKind())
+        ? `No sound came from the microphone, so ${stopped}. Check that your browser is allowed to use it and that the right one is chosen (the Mac's System Settings, then Sound, then Input), then ${again}.`
+        : `No sound came from the microphone, so ${stopped}. Check that Mimic is allowed to use it (Settings, then Mimic or Safari, then Microphone), then ${again}.`;
     case 'audio-session':
     default:
       return `A call, alarm or another app interrupted the audio, so ${stopped}. When you are ready, ${again}.`;
@@ -130,10 +150,10 @@ export function interruptionMessage(reason: InterruptReason | null | undefined, 
 /** A microphone failure in plain words; permission and device problems say that Listen still works. */
 export function microphoneMessage(err: unknown): string {
   if (err instanceof RecorderError) {
-    return err.kind === 'unsupported' ? err.message : `${err.message} You can still tap Listen to hear the phrase.`;
+    return err.kind === 'unsupported' ? err.message : onThisDevice(`${err.message} You can still tap Listen to hear the phrase.`);
   }
   const why = err instanceof Error && err.message ? err.message : 'unknown reason';
-  return `The microphone could not be started (${why}). Check it in Settings, then tap Sing to try again. You can still tap Listen.`;
+  return onThisDevice(`The microphone could not be started (${why}). Check it in Settings, then tap Sing to try again. You can still tap Listen.`);
 }
 
 export function reasonOf(err: unknown): string {

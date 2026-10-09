@@ -8,6 +8,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type PointerEvent } from 'react';
 import { midiToNoteName } from '../../dsp/music';
+import { platformKind } from '../../pwa/platform';
+import { tapVerb } from '../../pwa/words';
 import type { VoiceAnalysis } from '../../types';
 import { clamp, formatTick, linear, r1, timeTicks, useContainerWidth, useSvgId } from '../charts/chartKit';
 import { contourSegments, pitchYDomain } from '../charts/PitchPlot';
@@ -243,7 +245,7 @@ export function PhraseStrip(props: PhraseStripProps): JSX.Element {
         width={containerW}
         height={height}
         role="img"
-        aria-label={`${wholeLabel}${loop ? ` Looping ${loopText(loop, duration)}.` : ''} Tap a note to loop it, or drag across the strip.`}
+        aria-label={`${wholeLabel}${loop ? ` Looping ${loopText(loop, duration)}.` : ''} ${tapVerb(platformKind()) === 'click' ? 'Click' : 'Tap'} a note to loop it, or drag across the strip.`}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={(e) => finish(e, false)}

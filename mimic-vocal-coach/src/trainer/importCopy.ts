@@ -2,6 +2,9 @@
 // means. Plain strings and small data so the Trainer's empty state, the import sheet and the Guide say the same thing.
 // No imports from the app: safe to load anywhere.
 
+import { isDesktopKind, type PlatformKind } from '../pwa/platform';
+import { onLocalServer } from '../pwa/words';
+
 export { PROTECTED_FILE_TIP, VIDEO_SHORTCUT_TIP } from '../audio/decode';
 
 /** What the picker accepts, in words. */
@@ -143,15 +146,21 @@ export const ISOLATED_KIND_LABEL = 'Isolated vocal (AI)';
 export const ISOLATE_ENGINE_MB = 11;
 
 /** What it costs, said before anything is downloaded or run. `size` is the model's size in MB, from its manifest when known. */
-export function isolateCostText(sizeMb: number | null, kept = false): string {
+export function isolateCostText(sizeMb: number | null, kept = false, kind: PlatformKind = 'other'): string {
   const model = sizeMb && sizeMb > 0 ? Math.round(sizeMb) : 20;
+  const desk = isDesktopKind(kind);
+  const where = desk ? (kind === 'mac' ? 'this Mac' : 'this computer') : 'this phone';
+  // The Mac download serves everything from its own folder: nothing comes from the internet, the files are copied into the browser.
+  const fromFolder = desk && onLocalServer();
   const download = kept
-    ? 'The model is already on this phone, so there is no download.'
-    : `The first time, Mimic downloads about ${model + ISOLATE_ENGINE_MB} MB from this site (the model, about ${model} MB, and the engine that runs it, about ${ISOLATE_ENGINE_MB} MB) and keeps them on the phone (Settings shows them, and can remove them).`;
-  return (
-    `${download} Splitting a song takes minutes, not seconds (longer on an older phone), uses a lot of battery and makes the phone warm, so plug it in and keep this screen open: locking the phone can pause it. ` +
-    'It all happens on this device; nothing is uploaded.'
-  );
+    ? `The model is already on ${where}, so there is no download.`
+    : fromFolder
+      ? `The first time, Mimic copies about ${model + ISOLATE_ENGINE_MB} MB (the model, about ${model} MB, and the engine that runs it, about ${ISOLATE_ENGINE_MB} MB) from the Mimic folder on ${where} and keeps them in this browser (Settings shows them, and can remove them).`
+      : `The first time, Mimic downloads about ${model + ISOLATE_ENGINE_MB} MB from this site (the model, about ${model} MB, and the engine that runs it, about ${ISOLATE_ENGINE_MB} MB) and keeps them ${desk ? 'in this browser' : 'on the phone'} (Settings shows them, and can remove them).`;
+  const work = desk
+    ? 'Splitting a song takes minutes, not seconds (longer on an older computer) and works the processor hard, so the fans may spin up. Keep this tab in front and the computer awake, and plug a laptop in: a locked screen or sleep can pause it. '
+    : 'Splitting a song takes minutes, not seconds (longer on an older phone), uses a lot of battery and makes the phone warm, so plug it in and keep this screen open: locking the phone can pause it. ';
+  return `${download} ${work}It all happens on this device; nothing is uploaded.`;
 }
 
 /** The honest limit, shown wherever the option is offered. */
@@ -170,6 +179,11 @@ export const ISOLATED_BAND_LEFT_WARNING =
 export const ISOLATED_TONE_NOTE =
   'This vocal was pulled out of a song by AI on this phone, so it carries small artefacts and traces of the band. Treat the tone numbers (breathiness, brightness, strain) as rough estimates; pitch and timing are less affected.';
 
+/** ISOLATED_TONE_NOTE in the words of the device ("on this Mac"). */
+export function isolatedToneNote(kind: PlatformKind = 'other'): string {
+  return isDesktopKind(kind) ? ISOLATED_TONE_NOTE.replace('on this phone', kind === 'mac' ? 'on this Mac' : 'on this computer') : ISOLATED_TONE_NOTE;
+}
+
 /** Counting an isolated clip toward a singer's measured targets. */
 export const ISOLATED_TARGETS_NOTE = 'This clip is an AI-isolated vocal, so its tone numbers are estimates. Counting it adds them to the singer\'s targets as they are.';
 
@@ -181,11 +195,114 @@ export function isolateCapText(maxMinutes: number): string {
 }
 
 /** Shown on the Add clips screen when an earlier split was cut off (the page ended mid-split: memory, or a locked screen). */
-export function interruptedSplitText(fileName: string, seconds: number): string {
+export function interruptedSplitText(fileName: string, seconds: number, kind: PlatformKind = 'other'): string {
   const part = seconds >= 90 ? `${Math.round(seconds / 60)} minutes` : `${Math.max(1, Math.round(seconds))} seconds`;
+  if (isDesktopKind(kind)) {
+    return `The last split ("${fileName}", ${part} of it) did not finish. The browser may have run out of memory, or the tab went to the background or the computer went to sleep and paused it. Try a shorter part (one minute is a good start), keep this tab in front and, on a laptop, plug it in.`;
+  }
   return `The last split ("${fileName}", ${part} of it) did not finish. The phone may have run out of memory, or the screen locked and paused it. Try a shorter part (one minute is a good start), keep this screen open and plug the phone in.`;
 }
 
 export const ISOLATE_MODEL_MISSING = 'This copy of Mimic does not include the vocal-isolation model. Add the vocal-only version of the song instead.';
 
 export const ISOLATE_NOT_FOR_MIX = 'An isolated vocal is read as a single voice. To read this clip as a full song again, add the file again without isolating it.';
+
+// ---------------------------------------------------------------------------------------------
+// The words of the import flow for a Mac or another computer. A phone (and anything unrecognised) keeps the constants above.
+
+export interface ImportWays {
+  title: string;
+  body: string;
+}
+
+export interface ImportWords {
+  formats: string;
+  lede: string;
+  steps: readonly ImportStep[];
+  /** The same steps inside the Add clips sheet, where the "Add clips" button of the page is not on screen. */
+  sheetSteps: readonly ImportStep[];
+  videoHelp: string;
+  videoSummary: string;
+  protectedHelp: string;
+  stemHelp: string;
+  /** The Trainer empty state: every way to get a file. */
+  ways: readonly ImportWays[];
+  waysSummary: string;
+  /** The Guide's section title. */
+  guideTitle: string;
+}
+
+const DESKTOP_FORMATS = 'WAV, MP3, M4A, AAC, FLAC, AIFF, CAF and OGG files, and the sound of videos (.mov, .mp4, .m4v).';
+
+/** Apple Music subscription downloads and very old iTunes purchases are copy-protected; purchases since 2009, CD rips and plain files are not. */
+export const DESKTOP_PROTECTED_HELP =
+  'Songs downloaded with an Apple Music subscription are copy-protected, and so are very old iTunes purchases (.m4p files): a web app cannot read them. ' +
+  'Songs you bought from the iTunes Store since 2009 are normally plain M4A files and work, and so do CD rips and any file without copy protection. ' +
+  'In the Music app, right-click a song you bought and choose Show in Finder to find its file.';
+
+export const DESKTOP_VIDEO_HELP =
+  'Videos (.mov, .mp4, .m4v) work: only the sound is read. A video over 150 MB or 15 minutes is too big to open in a browser. ' +
+  'Make an audio-only copy first: in QuickTime Player choose File, then Export As, then Audio Only, or trim the video so it is shorter, and add that file here.';
+
+export const DESKTOP_STEM_HELP =
+  'No isolated vocal? Switch on "Isolate the vocal first (AI)" when you add a song you own, or use a vocal-splitter app to pull the voice out first. A whole song can also be added as it is: Mimic follows the lead vocal and judges pitch and timing only.';
+
+export function importWords(kind: PlatformKind = 'other'): ImportWords {
+  if (!isDesktopKind(kind)) {
+    return {
+      formats: IMPORT_FORMATS,
+      lede: IMPORT_LEDE,
+      steps: IMPORT_STEPS,
+      sheetSteps: IMPORT_STEPS,
+      videoHelp: VIDEO_HELP,
+      videoSummary: 'Videos from your phone',
+      protectedHelp: PROTECTED_HELP,
+      stemHelp: STEM_HELP,
+      ways: [
+        {
+          title: 'From the Files app',
+          body: 'Anything in On My iPhone or iCloud Drive can be picked, and so can files from Dropbox or Google Drive that show up in Files. AirDrop a file from a Mac and save it to Files.',
+        },
+        { title: 'From Voice Memos', body: 'Open the memo, tap Share, then Save to Files. Then add it here.' },
+        { title: 'Music you bought without copy protection', body: `Downloads from stores that sell DRM-free files, CD rips and files from your computer all work. ${PROTECTED_HELP}` },
+        { title: 'Vocal stems', body: STEM_HELP },
+        { title: 'Sound from a phone video', body: VIDEO_HELP },
+      ],
+      waysSummary: 'Ways to get a vocal onto your phone',
+      guideTitle: 'Getting a vocal onto your phone',
+    };
+  }
+  const where = kind === 'mac' ? 'your Mac' : 'your computer';
+  const desktopSteps: readonly ImportStep[] = [
+    {
+      title: 'Find the file',
+      body: `Songs and recordings you own are ordinary files on ${where}: in Finder, your Music or Downloads folder, or iCloud Drive. A Voice Memo can be dragged out of the Voice Memos app onto the desktop first.`,
+    },
+    { title: 'Add it here', body: 'Click Add clips and pick one or more files, or drag them onto this window. A video works too: only its sound is used.' },
+    IMPORT_STEPS[2],
+  ];
+  return {
+    formats: DESKTOP_FORMATS,
+    lede: 'Add clips from music you own. Isolated vocals work best, and a whole song works too. Everything stays in this browser on this computer.',
+    steps: desktopSteps,
+    sheetSteps: desktopSteps.map((st) =>
+      st.title === 'Add it here' ? { ...st, body: 'Choose files above, or drag them onto this window. A video works too: only its sound is used.' } : st,
+    ),
+    videoHelp: DESKTOP_VIDEO_HELP,
+    videoSummary: 'Videos',
+    protectedHelp: DESKTOP_PROTECTED_HELP,
+    stemHelp: DESKTOP_STEM_HELP,
+    ways: [
+      {
+        title: kind === 'mac' ? 'From Finder' : 'From a folder',
+        body: `Anything in Downloads, Music, Documents or iCloud Drive can be picked, and so can files in Dropbox or Google Drive folders on ${where}. You can also drag files onto this window.`,
+      },
+      { title: 'From Voice Memos', body: 'Drag the recording out of Voice Memos onto the desktop or into a folder, then add it here.' },
+      { title: 'Music you bought without copy protection', body: DESKTOP_PROTECTED_HELP },
+      { title: 'Vocal stems', body: DESKTOP_STEM_HELP },
+      { title: 'Sound from a video', body: DESKTOP_VIDEO_HELP },
+    ],
+    waysSummary: `Ways to get a vocal onto ${where}`,
+    guideTitle: `Getting a vocal onto ${where}`,
+  };
+}

@@ -1,8 +1,11 @@
 // "Install on iPhone": shown on iOS when the app runs in a browser tab instead of from the Home Screen.
 // The Home Screen version has its own storage (separate from Safari), no browser bars, and works offline.
+// On a Mac or another computer the same place says where the data lives and, for Safari, Chrome and Edge, how to give Mimic a window
+// of its own (DesktopInstallCard, Settings only: it is a convenience, not something the app needs).
 
 import { useRef, useState } from 'react';
-import { installHelp, type PlatformEnv } from '../../pwa/platform';
+import { desktopBrowser, installHelp, isStandalone, platformKind, isDesktopKind, type PlatformEnv, type PlatformKind } from '../../pwa/platform';
+import { currentAddress, dataStaysHereText, dockHelp } from '../../pwa/words';
 import { getStorage } from '../../storage/local';
 import { Icon } from './Icon';
 
@@ -105,6 +108,37 @@ export function InstallCard(props: { env?: PlatformEnv; /** Always show (Setting
         The installed app has its own storage: clips you add in a Safari tab are not carried over, so do the setup after installing.
         {help.browser !== 'safari' && !help.needsSafari ? ' Chrome, Edge and Firefox on iPhone can also add to the Home Screen from their Share menu (iOS 16.4 or later).' : ''}
       </p>
+    </section>
+  );
+}
+
+/**
+ * A Mac or another desktop: where the data lives (this browser, this address) and how to give Mimic a window of its own. Renders
+ * nothing on a phone, or when Mimic is already running in a window of its own.
+ */
+export function DesktopInstallCard(props: { env?: PlatformEnv; address?: string; /** The device the words are for, when the caller already knows it (the Guide). */ platform?: PlatformKind }) {
+  const kind = props.platform ?? platformKind(props.env);
+  if (!isDesktopKind(kind)) return null;
+  const standalone = isStandalone(props.env);
+  const help = standalone ? null : dockHelp(kind, desktopBrowser(props.env));
+  return (
+    <section className="install-card install-card--desktop" aria-labelledby="dock-title" data-testid="desktop-install-card">
+      <div className="install-card-head">
+        <h2 id="dock-title" className="install-card-title">
+          {standalone ? 'Mimic is running in its own window' : help ? help.title : 'Where your clips are kept'}
+        </h2>
+      </div>
+      <p className="install-card-lede">{dataStaysHereText(props.address ?? currentAddress())}</p>
+      {help && (
+        <>
+          <ol className="install-steps">
+            {help.steps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+          <p className="install-note">{help.note}</p>
+        </>
+      )}
     </section>
   );
 }

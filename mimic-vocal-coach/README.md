@@ -77,28 +77,39 @@ npm run build:single # one self-contained HTML file in dist-single/
 ```
 
 Microphone access needs `https://` or `localhost`. On a phone, open the deployed site (see below) or
-record a voice memo and upload it.
+record a voice memo and upload it. On a Mac, `http://localhost` is enough (see below).
 
 Everything was tested in a desktop Chromium pretending to be an iPhone; nothing has run on a real iPhone yet.
 `docs/IPHONE_CHECKLIST.md` is the plain-English list to run on the phone (and what each check protects against).
 
-## Deploy to GitHub Pages
+### On a Mac
 
-`.github/workflows/pages.yml` builds and deploys on every push to `main`, and `ci.yml` runs the
-typecheck, tests and build on every push. Both assume this folder is the root of its repository.
-Enable Pages once under **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-GitHub Pages on a private repository needs a paid plan; on a free plan, make the repository public
-first.
+The app works in a normal Safari or Chrome window on a Mac, with wording for it (Safari and Chrome microphone settings, Finder and
+the Music app instead of the Files app, headphones advice for laptop speakers and AirPods, and Add to Dock in Safari for a window of
+its own). The device is read from the browser's user agent (`src/pwa/platform.ts`, `platformKind()`); the words live in
+`src/pwa/words.ts` and `src/trainer/importCopy.ts`. An iPhone, an Android phone and anything unrecognised keep the phone wording.
 
-If this folder is sitting inside another repository (for example `connect-x/mimic-vocal-coach`),
-GitHub won't see the workflows. Move it into its own repository with its history:
+For someone who is not a developer, `mac/` holds a double-click launcher (`Start Mimic.command`, see `mac/README.txt`) that serves
+the built app on `http://localhost:47321/`, which is a secure context for the microphone in Safari and Chrome. Clips are kept by the
+browser for that address, so the launcher always uses the same port.
+
+Nothing has run on a real Mac: it was checked in Linux Chromium with a Mac user agent, and by reading for macOS differences.
+`docs/MAC_CHECKLIST.md` is the plain-English list to run on the Mac (and what each check protects against).
+
+### Build the Mac download
 
 ```bash
-# from the parent repository
-git subtree split --prefix mimic-vocal-coach -b mimic-vocal-coach
-# create an empty repository called mimic-vocal-coach on GitHub, then:
-git push git@github.com:<you>/mimic-vocal-coach.git mimic-vocal-coach:main
+npm run build:mac    # typecheck, build, then dist-mac/Mimic-for-Mac.zip (about 20 MB with the vocal-isolation model)
 ```
+
+The zip is `Start Mimic.command`, `server.pl`, `README.txt` and the built app. The vocal-isolation model is not in git (see
+`public/models/README.md`); `npm run build:mac` includes it when it is in `public/models/`, and says so when it is not.
+
+## Hosting (optional)
+
+Nothing needs a web host: on a Mac the launcher above is enough. If you do put `dist/` on a static HTTPS host (for the phone), keep
+the address private or leave `models/` out, because the model's licence is not clear enough to publish. `ci.yml` runs the typecheck,
+tests and build on every push (the tests take about 17 minutes on GitHub's runners).
 
 ## Privacy
 

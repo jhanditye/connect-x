@@ -2,12 +2,13 @@
 
 import { useCallback, useContext, useEffect, useState } from 'react';
 import { listMicrophones, loadMicChoice, saveMicChoice, type MicOption } from '../../audio/micChoice';
-import { installHelp, isIos, isNativeApp, isStandalone } from '../../pwa/platform';
+import { installHelp, isDesktopKind, isIos, isNativeApp, isStandalone, platformKind } from '../../pwa/platform';
+import { ownMicrophoneName } from '../../pwa/words';
 import { checkForUpdate, usePwa } from '../../pwa/register';
 import { formatBytes, readStorageStatus, requestPersistence, type StorageStatus } from '../../pwa/storage';
 import { useTrainerExtras } from '../../state/TrainerProvider';
 import { TrainerContext } from '../../state/trainerContext';
-import { InstallCard } from './InstallCard';
+import { DesktopInstallCard, InstallCard } from './InstallCard';
 import { phraseCount } from './phraseStatus';
 
 function Pill(props: { tone?: 'good' | 'warn'; children: string }) {
@@ -25,6 +26,8 @@ export function StoragePanel() {
   const native = isNativeApp();
   const installed = isStandalone();
   const ios = isIos();
+  const kind = platformKind();
+  const desktop = isDesktopKind(kind);
 
   const refresh = useCallback(() => {
     void readStorageStatus().then(setStatus);
@@ -54,7 +57,7 @@ export function StoragePanel() {
         <div className="status-row">
           <dt>Installed app</dt>
           <dd>
-            {native ? <Pill tone="good">Yes, this is the Mimic app</Pill> : installed ? <Pill tone="good">Yes, running from the Home Screen</Pill> : <Pill tone={ios ? 'warn' : undefined}>{ios ? 'No, running in a browser tab' : 'Running in a browser tab'}</Pill>}
+            {native ? <Pill tone="good">Yes, this is the Mimic app</Pill> : installed ? <Pill tone="good">{desktop ? 'Yes, running in a window of its own' : 'Yes, running from the Home Screen'}</Pill> : <Pill tone={ios ? 'warn' : undefined}>{ios ? 'No, running in a browser tab' : desktop ? 'Running in a browser window' : 'Running in a browser tab'}</Pill>}
           </dd>
         </div>
         <div className="status-row">
@@ -109,6 +112,7 @@ export function StoragePanel() {
           <InstallCard persistent />
         </>
       )}
+      {desktop && <DesktopInstallCard />}
       <div className="button-row">
         {persisted === false && (
           <button type="button" className="button button--ghost button--small" onClick={() => void persist()}>
@@ -123,7 +127,9 @@ export function StoragePanel() {
       </div>
       {asked === false && (
         <p className="field-hint" role="status">
-          The browser declined. Safari decides without asking you; it is more likely to agree once Mimic is installed on the Home Screen and used regularly.
+          {desktop
+            ? 'The browser declined. It decides without asking you; keep a backup (Settings, then Trainer, then Export my library) and it is more likely to agree once you use Mimic regularly.'
+            : 'The browser declined. Safari decides without asking you; it is more likely to agree once Mimic is installed on the Home Screen and used regularly.'}
         </p>
       )}
       {asked === true && (
@@ -139,6 +145,9 @@ export function StoragePanel() {
 export function MicrophoneSetting() {
   const [options, setOptions] = useState<MicOption[] | null>(null);
   const [choice, setChoice] = useState<string>(() => loadMicChoice() ?? '');
+  const kind = platformKind();
+  const desk = isDesktopKind(kind);
+  const tap = kind === 'ios' || !desk ? 'Tap' : 'Click';
 
   useEffect(() => {
     let live = true;
@@ -169,7 +178,7 @@ export function MicrophoneSetting() {
           saveMicChoice(e.currentTarget.value || null);
         }}
       >
-        <option value="">Automatic (whatever the phone is using)</option>
+        <option value="">{`Automatic (whatever the ${desk ? 'computer' : 'phone'} is using)`}</option>
         {options.map((o, i) => (
           <option key={o.deviceId} value={o.deviceId}>
             {o.label || `Microphone ${i + 1}`}
@@ -178,12 +187,12 @@ export function MicrophoneSetting() {
         ))}
       </select>
       <p className="field-hint">
-        {empty ? 'No microphones are listed yet. Tap Record in the Studio, or Sing in the Trainer, and allow the microphone once; they are listed here after that. Until then Mimic uses whatever the phone is using. ' : ''}
+        {empty ? `No microphones are listed yet. ${tap} Record in the Studio, or Sing in the Trainer, and allow the microphone once; they are listed here after that. Until then Mimic uses whatever the ${desk ? 'computer' : 'phone'} is using. ` : ''}
         {!empty && unlabelled ? 'Record once and the microphones will be listed by name here. ' : ''}
         {empty
           ? ''
           : anyBluetooth
-          ? 'While recording, Bluetooth earbuds switch to a phone-call voice mode (8-24 kHz) that makes your tone measurements less reliable. Choose the iPhone’s own microphone for takes you want to compare.'
+          ? `While recording, Bluetooth earbuds switch to a phone-call voice mode (8-24 kHz) that makes your tone measurements less reliable. Choose ${ownMicrophoneName(kind)} for takes you want to compare.`
           : 'Pick the microphone you want to compare takes with and keep using the same one.'}
       </p>
     </div>

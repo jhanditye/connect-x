@@ -530,9 +530,32 @@ a.button {
 .te-ways summary {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   min-height: 44px;
   font-weight: 600;
   cursor: pointer;
+}
+/* display:flex removes the browser's disclosure triangle, so the summary draws its own: nothing else says it can be opened. */
+.te-ways summary::-webkit-details-marker {
+  display: none;
+}
+.te-ways summary::before {
+  content: '';
+  flex: none;
+  width: 0.5em;
+  height: 0.5em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.te-ways[open] > summary::before {
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .te-ways summary::before {
+    transition: none;
+  }
 }
 .te-ways-list {
   margin: var(--space-2) 0 0;

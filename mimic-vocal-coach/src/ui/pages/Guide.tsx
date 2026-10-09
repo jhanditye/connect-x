@@ -7,7 +7,10 @@ import { midiToNoteName } from '../../dsp/music';
 import { useApp } from '../../state/context';
 import { parseSection } from '../../state/routing';
 import { SPLEETER_MIT_NOTICE, SPLEETER_SUMMARY, SPLEETER_URL } from '../../audio/separation/licence';
-import { IMPORT_FORMATS, ISOLATE_LIMIT_TEXT, ISOLATED_TONE_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
+import { importWords, ISOLATE_LIMIT_TEXT, isolatedToneNote } from '../../trainer/importCopy';
+import { isDesktopKind, platformKind, type PlatformKind } from '../../pwa/platform';
+import { currentAddress, dataStaysHereText, deviceNoun, headphoneAdvice, interruptionText, micDistanceText, onGithubPages, onLocalServer, tapVerb } from '../../pwa/words';
+import { DesktopInstallCard } from '../components/InstallCard';
 import type { VoiceType } from '../../types';
 
 const SECTIONS = [
@@ -49,12 +52,12 @@ const MEASURES: Measure[] = [
   {
     name: 'Brightness',
     what: 'How forward or ringing the tone is versus dark and warm, from the balance of high to low frequencies (alpha ratio, spectral centroid and slope).',
-    limits: 'The vowel and the microphone colour this strongly. Compare takes made with the same phone, distance and lyric.',
+    limits: 'The vowel and the microphone colour this strongly. Compare takes made with the same microphone, distance and lyric.',
   },
   {
     name: 'Rasp',
     what: 'Grit or roughness: irregular cycles and energy between the harmonics, mostly on louder notes.',
-    limits: 'Clipping, a noisy room or a rattling phone case can look like rasp.',
+    limits: 'Clipping, a noisy room or something rattling near the microphone can look like rasp.',
   },
   {
     name: 'Vibrato',
@@ -98,8 +101,14 @@ function jump(id: string) {
   section.querySelector<HTMLElement>('h2')?.focus({ preventScroll: true });
 }
 
-export function GuidePage() {
+export function GuidePage(props: { /** Which device the words are for; the real device by default (tests inject one). */ platform?: PlatformKind } = {}) {
   const app = useApp();
+  const kind = props.platform ?? platformKind();
+  const desk = isDesktopKind(kind);
+  const noun = deviceNoun(kind);
+  const words = importWords(kind);
+  const tap = tapVerb(kind);
+  const sections = SECTIONS.map((sec) => (sec.id === 'guide-vocal' ? { ...sec, title: words.guideTitle } : sec.id === 'guide-headphones' && desk ? { ...sec, title: 'Headphones, speakers and AirPods' } : sec));
   const voiceType = app.state.settings.voiceType;
 
   // A link such as #guide/guide-vocal opens the guide at that section.
@@ -129,7 +138,7 @@ export function GuidePage() {
 
       <nav className="guide-toc" aria-label="On this page">
         <ol>
-          {SECTIONS.map((s) => (
+          {sections.map((s) => (
             <li key={s.id}>
               <button type="button" className="link-button" onClick={() => jump(s.id)}>
                 {s.title}
@@ -238,45 +247,63 @@ export function GuidePage() {
           <h2 id="guide-recording-h" tabIndex={-1}>Recording a good take</h2>
           <ul>
             <li>Use a quiet room. Soft furnishings help; fans, fridges and traffic hurt.</li>
-            <li>Hold the phone or microphone 20–30 cm from your mouth and keep the distance steady.</li>
+            <li>{desk ? micDistanceText(kind) : 'Hold the phone or microphone 20–30 cm from your mouth and keep the distance steady.'}</li>
             <li>Sing without backing music. Headphones for a guide track are fine.</li>
             <li>Record 15–60 seconds: a phrase or a verse that climbs through your passaggio, so there is mix to measure.</li>
             <li>Watch the level meter: aim for “Good level”. If it says too loud, move back rather than singing softer than you mean to.</li>
-            <li>To compare takes fairly, keep the same song, key, vowels, phone and distance.</li>
-            <li>If the microphone is not available in your browser, record a voice memo on your phone and upload it.</li>
+            <li>To compare takes fairly, keep the same song, key, vowels, {desk ? 'microphone' : 'phone'} and distance.</li>
+            <li>{desk ? 'If the microphone is not available in your browser, record in Voice Memos or QuickTime Player on this computer and upload the file.' : 'If the microphone is not available in your browser, record a voice memo on your phone and upload it.'}</li>
           </ul>
         </section>
 
         <section id="guide-vocal" aria-labelledby="guide-vocal-h">
-          <h2 id="guide-vocal-h" tabIndex={-1}>Getting a vocal onto your phone</h2>
+          <h2 id="guide-vocal-h" tabIndex={-1}>{words.guideTitle}</h2>
           <p>
             The Trainer works on audio files you already have. Mimic never downloads music, never searches for it and never uploads it:
-            you choose a file from your own phone, it is read here, and it is stored only on this device. Use music you own or have the
+            you choose a file from your own {noun}, it is read here, and it is stored only on this device. Use music you own or have the
             right to practise with.
           </p>
-          <ul>
-            <li>
-              <strong>The Files app.</strong> Anything in On My iPhone or iCloud Drive can be picked, and so can files from Dropbox or
-              Google Drive that appear in Files. AirDrop a file from a Mac and save it to Files. In Mimic, open the Trainer, tap{' '}
-              <em>Add clips</em> and choose one or several files.
-            </li>
-            <li>
-              <strong>Voice Memos.</strong> Open the memo, tap Share, then Save to Files. Then add it from Files.
-            </li>
-            <li>
-              <strong>Purchased music without copy protection.</strong> Downloads from stores that sell DRM-free files, CD rips and files
-              from your computer all work. {PROTECTED_HELP}
-            </li>
-            <li>
-              <strong>Vocal stems.</strong> {STEM_HELP}
-            </li>
-            <li>
-              <strong>Sound from a phone video.</strong> {VIDEO_HELP}
-            </li>
-          </ul>
+          {desk ? (
+            <ul>
+              {words.ways.map((w) => (
+                <li key={w.title}>
+                  <strong>{w.title}.</strong> {w.body}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul>
+              <li>
+                <strong>The Files app.</strong> Anything in On My iPhone or iCloud Drive can be picked, and so can files from Dropbox or
+                Google Drive that appear in Files. AirDrop a file from a Mac and save it to Files. In Mimic, open the Trainer, tap{' '}
+                <em>Add clips</em> and choose one or several files.
+              </li>
+              <li>
+                <strong>Voice Memos.</strong> Open the memo, tap Share, then Save to Files. Then add it from Files.
+              </li>
+              <li>
+                <strong>Purchased music without copy protection.</strong> Downloads from stores that sell DRM-free files, CD rips and files
+                from your computer all work. {words.protectedHelp}
+              </li>
+              <li>
+                <strong>Vocal stems.</strong> {words.stemHelp}
+              </li>
+              <li>
+                <strong>Sound from a phone video.</strong> {words.videoHelp}
+              </li>
+            </ul>
+          )}
           <p>
-            Mimic cannot appear in the iPhone Share sheet (a web app cannot), which is why the route is always Files, then <em>Add clips</em>.
-            It reads {IMPORT_FORMATS} Shorter is better: pick the part you want to learn, a verse and a chorus rather than the whole
+            {desk ? (
+              <>
+                In Mimic, open the Trainer, {tap} <em>Add clips</em> and choose one or several files, or drag them onto the window.
+              </>
+            ) : (
+              <>
+                Mimic cannot appear in the iPhone Share sheet (a web app cannot), which is why the route is always Files, then <em>Add clips</em>.
+              </>
+            )}{' '}
+            It reads {words.formats} Shorter is better: pick the part you want to learn, a verse and a chorus rather than the whole
             track, and trim the clip when you add it.
           </p>
         </section>
@@ -313,19 +340,21 @@ export function GuidePage() {
           <h2 id="guide-isolate-h" tabIndex={-1}>Pulling the vocal out of a song (AI)</h2>
           <p>
             No isolated vocal? Where this copy of Mimic includes the model, <em>Add clips</em> offers <strong>Isolate the vocal first (AI)</strong>, and the review of a
-            song offers <strong>Pull the vocal out of the song</strong>. Mimic then separates the voice from the band on your phone and reads that voice on its own, so tone
+            song offers <strong>Pull the vocal out of the song</strong>. Mimic then separates the voice from the band on your {noun} and reads that voice on its own, so tone
             can be compared and the clip can count toward a singer’s targets, with the caveats below: it is an approximation of an isolated vocal, not the real thing.
             It is off unless you choose it.
           </p>
           <ul>
             <li>
-              <strong>What it costs.</strong> The first time, Mimic downloads about 31 MB from this site (the model, about 19 MB, and the engine that runs it, about 11 MB) and keeps
-              them on the phone (Settings shows them and can remove them). Splitting takes minutes, not seconds, and longer on an older phone. It uses a lot of battery and
-              warms the phone, so plug it in and keep the screen open; locking the phone can pause it. Mimic starts with 1 minute of the song; you can choose up to 5 minutes at
-              a time, and for a longer song, choose where to start.
+              <strong>What it costs.</strong> The first time, Mimic {desk && onLocalServer() ? 'copies' : 'downloads'} about 31 MB {desk && onLocalServer() ? 'from the Mimic folder into this browser' : 'from this site'} (the model, about 19 MB, and the engine that runs it, about 11 MB) and keeps
+              them {desk ? 'in this browser' : 'on the phone'} (Settings shows them and can remove them). Splitting takes minutes, not seconds, and longer on an older {noun}.{' '}
+              {desk
+                ? 'It works the processor hard, so the fans may spin up: plug a laptop in and keep this tab in front and the computer awake, because sleep or a locked screen can pause it.'
+                : 'It uses a lot of battery and warms the phone, so plug it in and keep the screen open; locking the phone can pause it.'}{' '}
+              Mimic starts with 1 minute of the song; you can choose up to 5 minutes at a time, and for a longer song, choose where to start.
             </li>
             <li>
-              <strong>What you get.</strong> {ISOLATE_LIMIT_TEXT} {ISOLATED_TONE_NOTE} Listen to the isolated vocal in the review before you trust the phrases, and use a
+              <strong>What you get.</strong> {ISOLATE_LIMIT_TEXT} {isolatedToneNote(kind)} Listen to the isolated vocal in the review before you trust the phrases, and use a
               real isolated vocal file when you have one.
             </li>
             <li>
@@ -333,7 +362,7 @@ export function GuidePage() {
               <em>Isolated vocal (AI)</em>, with the model’s name and version. To go back to the whole song, add the file again without this option.
             </li>
             <li>
-              <strong>Privacy.</strong> The model and the engine come from this site only, and the song never leaves the phone.
+              <strong>Privacy.</strong> The model and the engine come from this site only, and the song never leaves the {noun}.
             </li>
           </ul>
           <details className="imp-more">
@@ -363,38 +392,62 @@ export function GuidePage() {
           </p>
           <p>
             You can slow the phrase to 90, 75 or 60 percent (50 percent sounds rough, because stretching sound that much leaves artefacts)
-            and loop one note or a stretch by tapping it. <em>My key</em> plays the guide in the key you sang last time; the formants move
+            and loop one note or a stretch by {tap === 'click' ? 'clicking' : 'tapping'} it. <em>My key</em> plays the guide in the key you sang last time; the formants move
             with it, so it sounds like a different singer, which is fine for a guide. Slow and half-sung takes build skill but do not count
             toward mastering a phrase: that takes three good tries at full speed.
           </p>
+          {desk && (
+            <p>
+              <strong>From the keyboard:</strong> on the phrase screen, {kind === 'mac' ? 'Command' : 'Control'}-Return starts a take and, while you sing, ends it (Done); Escape cancels
+              one. The <em>Skip to the practice buttons</em> link, reached early with Tab on that screen, jumps to the two big buttons. Safari
+              only Tabs to buttons and links if you hold Option while you press Tab, or switch on <em>Press Tab to highlight each item on a
+              webpage</em> in Safari&apos;s Advanced settings.
+            </p>
+          )}
         </section>
 
         <section id="guide-headphones" aria-labelledby="guide-headphones-h">
-          <h2 id="guide-headphones-h" tabIndex={-1}>Headphones and AirPods</h2>
+          <h2 id="guide-headphones-h" tabIndex={-1}>{desk ? 'Headphones, speakers and AirPods' : 'Headphones and AirPods'}</h2>
           <ul>
-            <li>
-              Wired headphones or earbuds are the most dependable: no delay to speak of, and the iPhone&apos;s own microphone stays in use.
-            </li>
-            <li>
-              <strong>AirPods and other Bluetooth headphones</strong> change mode the moment an app opens their microphone: they drop to
-              phone-call quality (mono, 8 to 24 kHz) and add delay. Choose the iPhone&apos;s own microphone (Settings, under Your voice, or the
-              button the practice screen offers) so the headphones only play the guide.
-            </li>
-            <li>
-              iPhone does not say where sound is going, so Mimic guesses from the name of the microphone it is given. When it cannot tell,
-              it says so and asks before you sing along.
-            </li>
+            {desk ? (
+              <>
+                {headphoneAdvice(kind).map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+                <li>
+                  A browser cannot see where sound is going, so Mimic guesses from the name of the microphone it is given. Headphones with a microphone
+                  (a headset, AirPods) are recognised; wired headphones without one look like no headphones at all. When Mimic cannot tell, it says so and asks
+                  before you sing along: if you are wearing headphones and it says none were found, press <em>I have headphones on</em> on the practice screen.
+                </li>
+                <li>
+                  With no headphones, <strong>Listen, then sing</strong> still works well on a Mac: the guide plays, then it is your turn, and the speaker never
+                  overlaps your voice.
+                </li>
+              </>
+            ) : (
+              <>
+                <li>
+                  Wired headphones or earbuds are the most dependable: no delay to speak of, and the iPhone&apos;s own microphone stays in use.
+                </li>
+                <li>
+                  <strong>AirPods and other Bluetooth headphones</strong> change mode the moment an app opens their microphone: they drop to
+                  phone-call quality (mono, 8 to 24 kHz) and add delay. Choose the iPhone&apos;s own microphone (Settings, under Your voice, or the
+                  button the practice screen offers) so the headphones only play the guide.
+                </li>
+                <li>
+                  iPhone does not say where sound is going, so Mimic guesses from the name of the microphone it is given. When it cannot tell,
+                  it says so and asks before you sing along.
+                </li>
+              </>
+            )}
             <li>
               Every device adds some delay between the guide and what the microphone hears. Mimic measures it from your singing and shows it
               as the <em>sync offset</em>; it is not counted against you. If it is very large (several hundred milliseconds), switch to wired
-              headphones or to Listen, then sing. These figures have been checked on a computer, not yet on a range of iPhones, so treat
+              headphones or to Listen, then sing. These figures have been checked on a computer, not yet on a range of {desk ? 'Macs' : 'iPhones'}, so treat
               them as a guide.
             </li>
-            <li>
-              If you hear nothing, check the volume and the ring/silent switch: the phone can silence a web page&apos;s sound. A phone call, an
-              alarm or another app using the microphone interrupts a take; an interrupted take is not scored, and you tap Try again.
-            </li>
-            <li>The device checks in Settings (under Trainer) run these tests on your phone and make a report you can copy or save and share with whoever is helping you. It holds no audio.</li>
+            <li>{interruptionText(kind)}</li>
+            <li>The device checks in Settings (under Trainer) run these tests on your {noun} and make a report you can copy or save and share with whoever is helping you. It holds no audio.</li>
           </ul>
         </section>
 
@@ -489,24 +542,32 @@ export function GuidePage() {
               <strong>Clips and attempts stay on this device.</strong> Clips you add to the Trainer are stored in this browser&apos;s storage on
               this device only, with their phrases and your practice scores. A backup file holds phrases and scores, never audio: when you
               restore one, the clips come back without sound, and the Trainer asks you to choose the original files again (it recognises each
-              one by its contents, so your scores stay). Safari can
-              clear a website&apos;s stored data after about a week of not using it, so add Mimic to your Home Screen to keep your clips, and
-              save a backup now and then.
+              one by its contents, so your scores stay).{' '}
+              {desk
+                ? `${dataStaysHereText(currentAddress())} Safari can clear a website’s stored data after about a week of not using it (adding Mimic to the Dock should protect it better), so save a backup now and then.`
+                : 'Safari can clear a website’s stored data after about a week of not using it, so add Mimic to your Home Screen to keep your clips, and save a backup now and then.'}
             </li>
             <li>Saving to Progress keeps only scores and measurements, in this browser’s local storage.</li>
             <li>
               The optional AI coach sends the numeric summary of a take (never audio) to Anthropic, using the API key you enter in Settings.
             </li>
             <li>
-              The API key is kept in this site’s local storage in your browser. On a <span className="num">github.io</span> address that
-              storage is shared with the site owner’s other GitHub Pages sites, so use a key with a spending limit.
+              {onGithubPages() ? (
+                <>
+                  The API key is kept in this site’s local storage in your browser. On a <span className="num">github.io</span> address that
+                  storage is shared with the site owner’s other GitHub Pages sites, so use a key with a spending limit.
+                </>
+              ) : (
+                <>The API key is kept in your browser, for this address. Use a key with a spending limit.</>
+              )}
             </li>
             <li>The fonts are bundled with the app, so loading Mimic makes no requests to other sites.</li>
             <li>
-              Pulling a vocal out of a song (if you use it) downloads a model file and the engine that runs it from this site, once, and runs on your phone. The song is not sent anywhere.
+              Pulling a vocal out of a song (if you use it) downloads a model file and the engine that runs it from this site, once, and runs on your {noun}. The song is not sent anywhere.
             </li>
             <li>“Delete everything, including settings” in Settings removes everything Mimic has stored, including the Trainer’s clips and scores and the downloaded vocal-isolation model and engine. “Delete clips and scores” in the Trainer section removes only those.</li>
           </ul>
+          {desk && <DesktopInstallCard platform={kind} />}
         </section>
       </article>
     </div>

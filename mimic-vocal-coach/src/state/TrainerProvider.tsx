@@ -63,6 +63,7 @@ import {
   trainerReducer,
   type TrainerAction,
 } from './trainerReducer';
+import { desktopNoteWords } from '../pwa/words';
 
 export { useTrainer, type TrainerController } from './trainerContext';
 
@@ -1053,7 +1054,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
       canRetryOpen: memoryOnly && state.memoryRetryable,
       warnings: state.warnings,
       exportReminder: computeExportReminder({ clipCount: state.clips.length, attemptsSinceExport: state.attemptsSinceExport, lastExportAt: state.lastExportAt, oldestClipAt: oldest }, state.now),
-      storageNote: state.status === 'loading' ? null : storageNote(state.storage, { memoryOnly, installed: isInstalledPwa() }),
+      storageNote: state.status === 'loading' ? null : storageNote(state.storage, { memoryOnly, installed: isInstalledPwa(), desktop: desktopNoteWords() }),
       reload: async () => {
         // A recovery has just read the library it opened; otherwise read the one that is open again.
         if (!(await recoverRef.current?.())) await actions.loadOnce();

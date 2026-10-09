@@ -1184,7 +1184,7 @@ const ISSUE_CUES: [AnalysisIssue, string][] = [
     'Lower the input level, or back off a little from the mic, so your loudest note does not clip (distort). Then keep that distance for every take.',
   ],
   ['noisy', 'Record in a quiet, soft-furnished room (curtains and a sofa help), away from fans, fridges and traffic.'],
-  ['too-quiet', 'Keep the mic or phone 20 to 30 cm from your mouth and raise the input level if you can, then use the same distance for every take.'],
+  ['too-quiet', 'Keep the microphone 20 to 30 cm from your mouth and raise the input level if you can, then use the same distance for every take.'],
   ['trimmed', 'Keep takes under 5 minutes: only the first 5 minutes are analysed.'],
 ];
 
@@ -1204,7 +1204,7 @@ const ISSUE_SUMMARY: Record<AnalysisIssue, string> = {
 
 const RECORDING_FALLBACK_CUES = [
   'Make sure the take is mostly one voice singing: no speech, long silences, backing vocals or instruments.',
-  'Keep the phone or mic in the same spot each time, about 20 to 30 cm away, so takes can be compared fairly.',
+  'Keep the microphone in the same spot each time, about 20 to 30 cm away, so takes can be compared fairly.',
   'Turn off noise suppression, auto-gain or effects in your recording app if you can.',
   'Record a new take of the same section and compare the numbers.',
 ];

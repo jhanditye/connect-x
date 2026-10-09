@@ -26,6 +26,8 @@ import { clearPendingImport, peekPendingImport, setPendingImport } from '../trai
 import { ClipView } from './TrainerClip';
 import { PracticeView } from './TrainerPractice';
 import { downloadLibraryBackup, groupClips, useFocusOnMount } from './trainerKit';
+import { isDesktopKind, platformKind } from '../../pwa/platform';
+import { desktopMemoryOnlyAdvice } from '../../pwa/words';
 
 const TODAY_SHOWN = 3;
 
@@ -237,7 +239,11 @@ function LibraryView(props: { now: number; adding: boolean; focusHeading: boolea
           {extras.canRetryOpen ? (
             <p>Clips you add now are kept only until you close the app, unless the library opens again: then they are copied into it. Mimic tries again when you come back to the app.</p>
           ) : (
-            <p>Add Mimic to your Home Screen to keep them, or save a backup after adding clips. A backup holds your phrases and scores; the audio itself would need to be added again.</p>
+            <p>
+              {isDesktopKind(platformKind())
+                ? desktopMemoryOnlyAdvice()
+                : 'Add Mimic to your Home Screen to keep them, or save a backup after adding clips. A backup holds your phrases and scores; the audio itself would need to be added again.'}
+            </p>
           )}
           {(extras.canRetryOpen || trainer.clips.length > 0) && (
             <div className="button-row">

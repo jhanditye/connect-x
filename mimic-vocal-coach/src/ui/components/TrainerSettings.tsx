@@ -9,6 +9,8 @@ import { Notice } from './Notice';
 import { TrainerDiagnostics } from '../pages/TrainerDiagnostics';
 import { downloadLibraryBackup } from '../pages/trainerKit';
 import { COUNT_IN_CHOICES, SPEEDS, useTrainerPrefs, type StartMode } from '../trainerPrefs';
+import { isDesktopKind, platformKind } from '../../pwa/platform';
+import { deviceChecksLead, SPEAKER_ECHO_NOTE, tapVerb } from '../../pwa/words';
 
 const START_MODES: { value: StartMode; label: string }[] = [
   { value: 'auto', label: 'Automatic' },
@@ -54,7 +56,7 @@ function Inner(props: { trainer: TrainerController }) {
         ok: true,
         message:
           bits.length > 0
-            ? `Backup restored: ${bits.join(', ')}. A backup holds no audio, so open the Trainer and tap "Choose the files" to add the original audio files again. Mimic recognises each file by its contents and keeps your phrases and scores.`
+            ? `Backup restored: ${bits.join(', ')}. A backup holds no audio, so open the Trainer and ${tapVerb(platformKind())} "Choose the files" to add the original audio files again. Mimic recognises each file by its contents and keeps your phrases and scores.`
             : 'That backup holds nothing new, so nothing changed.',
         warnings: r.warnings,
       });
@@ -137,7 +139,7 @@ function Inner(props: { trainer: TrainerController }) {
             </option>
           ))}
         </select>
-        <p className="field-hint">Singing along with the guide through the speaker makes the microphone hear it too, so Automatic only sings along when headphones look connected. The microphone you record with is chosen above, under Your voice.</p>
+        <p className="field-hint">Singing along with the guide through the speaker makes the microphone hear it too, so Automatic only sings along when headphones look connected. The microphone you record with is chosen above, under Your voice.{isDesktopKind(platformKind()) ? ` ${SPEAKER_ECHO_NOTE}` : ''}</p>
       </div>
       <div className="field">
         <label className="tr-switch">
@@ -219,7 +221,7 @@ function Inner(props: { trainer: TrainerController }) {
       )}
 
       <h3 className="subhead">Device checks</h3>
-      <p className="settings-text">If listening, recording or timing misbehaves on your phone, these checks say what the device does and make a report you can copy or save. It holds no audio.</p>
+      <p className="settings-text">{deviceChecksLead(platformKind())}</p>
       <div className="button-row">
         <button type="button" className="button button--ghost" aria-expanded={showDiag} onClick={() => setShowDiag((v) => !v)}>
           {showDiag ? 'Hide the device checks' : 'Open the device checks'}

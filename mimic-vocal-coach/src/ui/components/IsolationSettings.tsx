@@ -6,6 +6,8 @@ import { checkSeparation, type SeparationAvailability } from '../../audio/separa
 import { SPLEETER_MIT_NOTICE, SPLEETER_SUMMARY, SPLEETER_URL } from '../../audio/separation/licence';
 import { defaultModelDeps, keptModelInfo, removeIsolationFiles, type ModelCacheDeps } from '../../audio/separation/modelCache';
 import { formatBytes } from '../../pwa/storage';
+import { platformKind } from '../../pwa/platform';
+import { deviceNoun } from '../../pwa/words';
 
 export function IsolationSettings(props: { check?: () => Promise<SeparationAvailability>; deps?: ModelCacheDeps }) {
   const [availability, setAvailability] = useState<SeparationAvailability | null>(null);
@@ -29,7 +31,7 @@ export function IsolationSettings(props: { check?: () => Promise<SeparationAvail
 
   const remove = async () => {
     const ok = await removeIsolationFiles(props.deps ?? defaultModelDeps());
-    setMessage(ok ? 'The model and the engine were removed from this phone.' : 'There was nothing to remove.');
+    setMessage(ok ? `The model and the engine were removed from this ${deviceNoun(platformKind())}.` : 'There was nothing to remove.');
     await look();
   };
 
@@ -44,7 +46,7 @@ export function IsolationSettings(props: { check?: () => Promise<SeparationAvail
       </h2>
       <dl className="status-list">
         <div className="status-row">
-          <dt>Model on this phone</dt>
+          <dt>Model on this {deviceNoun(platformKind())}</dt>
           <dd>
             {native ? (
               <>
@@ -63,7 +65,7 @@ export function IsolationSettings(props: { check?: () => Promise<SeparationAvail
         </div>
       </dl>
       <p className="field-hint">
-        Pulls the voice out of a whole song on this phone, so tone can be compared. Everything runs on the device; nothing is uploaded. The model and the engine that runs it are stored in this
+        Pulls the voice out of a whole song on this {deviceNoun(platformKind())}, so tone can be compared. Everything runs on the device; nothing is uploaded. The model and the engine that runs it are stored in this
         browser and count toward the space used above.
       </p>
       {kept && !native && (

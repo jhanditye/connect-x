@@ -2,6 +2,7 @@
 // (exact samples, no browser resampling, works without an AudioContext); everything else goes to
 // the browser's decoder.
 
+import { isDesktopKind, platformKind } from '../pwa/platform';
 import { probeContainerDurationSec, probeWav, wavBytesForSeconds } from './probe';
 import { decodeWav } from './wav';
 
@@ -42,11 +43,13 @@ export type DecodeFailure = 'empty' | 'unreadable' | 'too-large' | 'too-long' | 
  * What the upload inputs advertise (browsers vary; the decoder is the final judge).
  * iOS Safari does not honour the "audio/*" wildcard (WebKit bug 242110: MDN notes "does not support audio/*") and
  * has greyed out .m4a files (UTI com.apple.m4a-audio) under a bare wildcard, so every extension and the common
- * MIME types are listed explicitly. .qta is the "Editable" export of a Voice Memo on iOS 18+ (QuickTime audio).
+ * MIME types are listed explicitly. .qta is the "Editable" export of a Voice Memo on iOS 18+ (QuickTime audio). .m4p (an old iTunes
+ * purchase with copy protection) is listed so the file can be chosen and answered with the plain "copy-protected" message, instead of
+ * being greyed out in the picker or refused as "not audio" with no reason.
  */
 export const AUDIO_ACCEPT = [
   'audio/*',
-  '.m4a', '.mp3', '.wav', '.wave', '.aac', '.caf', '.aif', '.aiff', '.flac', '.ogg', '.oga', '.opus', '.webm', '.mp4', '.qta',
+  '.m4a', '.mp3', '.wav', '.wave', '.aac', '.caf', '.aif', '.aiff', '.flac', '.ogg', '.oga', '.opus', '.webm', '.mp4', '.qta', '.m4p',
   'audio/mp4', 'audio/x-m4a', 'audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/aac', 'audio/flac', 'audio/ogg', 'audio/webm', 'audio/x-caf', 'audio/aiff',
 ].join(',');
 
@@ -56,7 +59,7 @@ export const AUDIO_ACCEPT = [
  */
 export const MEDIA_ACCEPT = [AUDIO_ACCEPT, 'video/*', '.mov', '.m4v', 'video/mp4', 'video/quicktime', 'video/x-m4v'].join(',');
 
-const MEDIA_EXT = /\.(wav|wave|mp3|m4a|m4b|aac|ogg|oga|opus|webm|flac|caf|mp4|m4v|mov|qta|aiff?)$/i;
+const MEDIA_EXT = /\.(wav|wave|mp3|m4a|m4b|m4p|aac|ogg|oga|opus|webm|flac|caf|mp4|m4v|mov|qta|aiff?)$/i;
 
 /** True for audio or video files by MIME type or extension (the decoder is still the final judge). */
 export function looksLikeMedia(file: { name?: string; type?: string }): boolean {
@@ -77,6 +80,13 @@ export const MAX_VIDEO_SOURCE_SEC = 15 * 60;
 export const VIDEO_SHORTCUT_TIP =
   'Make an audio-only copy first: in the Shortcuts app use the "Encode Media" action with Audio Only switched on, ' +
   'or trim the video in Photos so it is shorter, share it to Files, and add that file here.';
+
+/** VIDEO_SHORTCUT_TIP in the words of a Mac or another computer (QuickTime Player instead of the Shortcuts app); the phone words elsewhere. */
+export function videoShortcutTip(): string {
+  return isDesktopKind(platformKind())
+    ? 'Make an audio-only copy first: in QuickTime Player choose File, then Export As, then Audio Only, or trim the video so it is shorter, and add that file here.'
+    : VIDEO_SHORTCUT_TIP;
+}
 
 export const PROTECTED_FILE_TIP = 'Use a DRM-free copy of a song you own, for example a purchased download, a CD rip or a file from your computer.';
 
@@ -253,7 +263,7 @@ function tooLarge(file: Blob): DecodeError {
 
 function videoTooLarge(file: Blob): DecodeError {
   return new DecodeError(
-    `${fileLabel(file)} is a ${Math.round(file.size / 1048576)} MB video, more than this app can open at once (the limit is ${Math.round(MAX_VIDEO_BYTES / 1048576)} MB). ${VIDEO_SHORTCUT_TIP}`,
+    `${fileLabel(file)} is a ${Math.round(file.size / 1048576)} MB video, more than this app can open at once (the limit is ${Math.round(MAX_VIDEO_BYTES / 1048576)} MB). ${videoShortcutTip()}`,
     'too-large',
   );
 }
@@ -262,7 +272,7 @@ function tooLong(file: Blob, durationSec: number, limitSec: number, video: boole
   const min = (s: number) => Math.round(s / 60);
   return new DecodeError(
     `${fileLabel(file)} is about ${min(durationSec)} minutes long, more than this app can open at once (the limit is ${min(limitSec)} minutes). ` +
-      (video ? VIDEO_SHORTCUT_TIP : 'Cut it down to the part with the singing and add it again.'),
+      (video ? videoShortcutTip() : 'Cut it down to the part with the singing and add it again.'),
     'too-long',
   );
 }
@@ -430,7 +440,7 @@ export async function decodeAudioFile(file: Blob, opts: DecodeOptions = {}): Pro
     const type = file.type ? ` (${file.type})` : '';
     if (video) {
       throw new DecodeError(
-        `${fileLabel(file)}${type} is a video and its sound could not be read in this browser. It may have no audio track or use a format Safari cannot open. ${VIDEO_SHORTCUT_TIP}`,
+        `${fileLabel(file)}${type} is a video and its sound could not be read in this browser. It may have no audio track or use a format ${isDesktopKind(platformKind()) ? 'this browser' : 'Safari'} cannot open. ${videoShortcutTip()}`,
         'unsupported',
       );
     }

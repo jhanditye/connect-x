@@ -7,6 +7,8 @@ import type { ImportProgress, IsolateRequest } from '../../trainer/import';
 import { MAX_ISOLATE_SEC } from '../../trainer/import';
 import { interruptedSplitText, ISOLATE_LABEL, ISOLATE_LIMIT_TEXT, isolateCapText, isolateCostText } from '../../trainer/importCopy';
 import { interruptedSplit } from '../../trainer/splitMarker';
+import { platformKind } from '../../pwa/platform';
+import { deviceNoun } from '../../pwa/words';
 
 export interface IsolateChoice {
   on: boolean;
@@ -80,7 +82,7 @@ export function IsolateChoiceCard(props: {
     <section className="imp-isolate" aria-labelledby={`${id}-t`}>
       {cutOff && (
         <p className="field-hint" role="status">
-          {interruptedSplitText(cutOff.fileName, cutOff.seconds)}
+          {interruptedSplitText(cutOff.fileName, cutOff.seconds, platformKind())}
         </p>
       )}
       <label className="rev-check">
@@ -89,12 +91,12 @@ export function IsolateChoiceCard(props: {
           <span className="rev-check-title" id={`${id}-t`}>
             {ISOLATE_LABEL}
           </span>
-          <span className="rev-check-hint">For a whole song you own: Mimic pulls the voice out on this phone and practises with that. Takes minutes.</span>
+          <span className="rev-check-hint">For a whole song you own: Mimic pulls the voice out on this {deviceNoun(platformKind())} and practises with that. Takes minutes.</span>
         </span>
       </label>
       {value.on && (
         <div className="imp-isolate-more">
-          <p className="field-hint">{isolateCostText(sizeMb, props.modelKept)}</p>
+          <p className="field-hint">{isolateCostText(sizeMb, props.modelKept, platformKind())}</p>
           <p className="field-hint">{ISOLATE_LIMIT_TEXT}</p>
           <p className="field-hint">{isolateCapText(MAX_MINUTES)}</p>
           <div className="field">

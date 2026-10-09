@@ -13,6 +13,7 @@ import { COUNT_IN_CHOICES, SPEEDS } from '../trainerPrefs';
 import { Icon } from './Icon';
 import { Notice } from './Notice';
 import { loopText, type Loop } from './PhraseStrip';
+import { isDesktopKind, platformKind } from '../../pwa/platform';
 
 export interface PracticeControlsProps {
   options: PracticeOptions;
@@ -49,11 +50,12 @@ export function speedLabel(rate: number): string {
 
 export function PracticeControls(props: PracticeControlsProps): JSX.Element {
   const { options, state, route, keyHint, durationSec } = props;
+  const kind = platformKind();
   const ids = { key: useId(), speed: useId(), mode: useId(), count: useId(), loop: useId() };
   const [otherKey, setOtherKey] = useState(false);
   const off = locked(state) || inTake(state);
 
-  const notes: RouteNote[] = route ? routeNotes(route, options.mode) : [];
+  const notes: RouteNote[] = route ? routeNotes(route, options.mode, kind) : [];
   const hintShift = keyHint !== null && Math.round(keyHint) !== 0 ? Math.round(keyHint) : null;
   const shift = Math.round(options.guideShift);
   const customShift = shift !== 0 && shift !== hintShift;
@@ -187,7 +189,7 @@ export function PracticeControls(props: PracticeControlsProps): JSX.Element {
               </>
             )}
           </div>
-          {options.loop === null && <p className="pc-hint">Tap a note or drag across the strip to loop just that part.</p>}
+          {options.loop === null && <p className="pc-hint">{isDesktopKind(kind) ? 'Click a note or drag across the strip to loop just that part.' : 'Tap a note or drag across the strip to loop just that part.'}</p>}
         </div>
       </div>
     </div>
@@ -315,6 +317,30 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
   }, [running, listening, onStop]);
 
   const singInert = preparing || countIn || processing || closed;
+  const pressSing = (): void => {
+    if (singing) props.onFinish();
+    else if (!singInert) sing();
+  };
+
+  // Command-Return (Control-Return elsewhere) is Sing, and Done while singing, from anywhere on the screen: there are two dozen Tab
+  // stops before the dock, and Safari does not Tab to buttons unless the person has switched that on. A modifier is needed so that
+  // an ordinary key press (Space to scroll, a letter) never starts a recording.
+  const sendSing = useRef(pressSing);
+  sendSing.current = pressSing;
+  const askingNow = useRef(asking);
+  askingNow.current = asking;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Enter' || e.defaultPrevented || e.repeat || e.altKey || e.shiftKey || !(e.metaKey || e.ctrlKey)) return;
+      if (askingNow.current || document.querySelector('[aria-modal="true"], dialog[open]')) return;
+      const target = e.target instanceof Element ? e.target : null;
+      if (target?.closest('textarea, [contenteditable="true"]')) return;
+      e.preventDefault();
+      sendSing.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
   const singLabel = singing ? 'Done' : countIn ? 'Get ready…' : processing ? 'Analysing…' : preparing ? 'Getting ready…' : props.hasResult ? 'Try again' : 'Sing';
   const cancelling = countIn || singing;
   const leftInert = !listening && !cancelling && (preparing || processing || closed);
@@ -335,7 +361,10 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
           }}
         >
           <p id={askId} className="pc-ask-text">
-            <Icon name="headphones" size={18} /> No headphones detected. If the guide plays from the speaker, the microphone hears it too and your score can be wrong.
+            <Icon name="headphones" size={18} />{' '}
+            {isDesktopKind(platformKind())
+              ? 'No headphones detected. A laptop or desktop speaker sits right next to its microphone, so the microphone hears the guide too and your score can be wrong.'
+              : 'No headphones detected. If the guide plays from the speaker, the microphone hears it too and your score can be wrong.'}
           </p>
           <div className="button-row">
             <button
@@ -411,7 +440,8 @@ export function PracticeDock(props: PracticeDockProps): JSX.Element {
           className={`pc-sing${singing ? ' pc-sing--live' : ''}`}
           aria-disabled={singInert || undefined}
           style={singInert ? dimmed : undefined}
-          onClick={singing ? props.onFinish : singInert ? undefined : sing}
+          aria-keyshortcuts="Meta+Enter Control+Enter"
+          onClick={pressSing}
         >
           {singing ? <Icon name="check" size={20} /> : <span className="pc-sing-dot" aria-hidden="true" />} {singLabel}
         </button>

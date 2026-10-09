@@ -490,7 +490,7 @@ const DANIEL: SingerProfile = {
       name: 'Hushed close-mic delivery',
       description: 'Sing at or below speaking volume with air in the tone, as if singing to one person in a quiet room.',
       howTo: [
-        'Keep your usual 20–30 cm from the mic or phone and sing at speaking volume or softer; the intimacy comes from the low volume, not from moving closer.',
+        'Keep your usual 20–30 cm from the microphone and sing at speaking volume or softer; the intimacy comes from the low volume, not from moving closer.',
         'Start each phrase on a quiet "h" so the air arrives just before the tone.',
         'Keep the jaw loose and the vowels rounded and warm.',
         'Let phrase ends fade out on air instead of cutting them off.',

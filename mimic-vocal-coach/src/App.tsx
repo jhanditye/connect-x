@@ -3,9 +3,10 @@ import { AppProvider } from './state/AppProvider';
 import { useApp } from './state/context';
 import { practiceFocusIds } from './state/reducer';
 import { TrainerProvider, type TrainerProviderProps } from './state/TrainerProvider';
-import { TrainerContext, type TrainerController } from './state/trainerContext';
+import { TrainerContext, useTrainer, type TrainerController } from './state/trainerContext';
 import { ROUTE_LABELS, routeHash } from './state/routing';
 import { shouldBlockLeave } from './ui/leaveGuard';
+import { installWindowFileDrop } from './ui/windowFileDrop';
 import { useMarkBusy } from './pwa/register';
 import { openPractice } from './trainer/practiceEngine';
 import { ErrorBoundary } from './ui/components/ErrorBoundary';
@@ -74,6 +75,12 @@ function Shell() {
     }
     mainRef.current?.focus({ preventScroll: true });
   }, [app.route]);
+
+  // A file dropped where nothing takes it must not open in the browser in place of the app (see windowFileDrop.ts).
+  const trainerStatus = useTrainer().status;
+  const libraryReady = useRef(false);
+  libraryReady.current = trainerStatus === 'ready' || trainerStatus === 'memory-only';
+  useEffect(() => installWindowFileDrop(() => libraryReady.current), []);
 
   // A screen holding something that would be lost (a recording) can hold a link back and ask first.
   useEffect(() => {

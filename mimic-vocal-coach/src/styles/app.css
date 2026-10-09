@@ -72,6 +72,11 @@ button,
 .skip-link:focus {
   top: var(--space-2);
 }
+button.skip-link {
+  border: 1px solid var(--line);
+  font: inherit;
+  cursor: pointer;
+}
 
 .topbar {
   position: sticky;
@@ -232,6 +237,10 @@ button,
   border-top: 1px solid var(--line);
   font-size: var(--fs-xs);
   color: var(--ink-3);
+}
+/* The small print runs a whole window wide on a computer (170 characters a line): keep it to a readable measure. A phone is narrower than this already. */
+.footer p {
+  max-width: 75ch;
 }
 
 @media (min-width: 721px) {
@@ -1985,6 +1994,9 @@ button,
 
 /* ---------------------------------------------------------------- install and storage (iPhone / PWA) */
 
+.install-card.install-card--desktop {
+  margin-top: var(--space-4);
+}
 .install-card {
   margin: 0 0 var(--space-5);
   padding: var(--space-4);

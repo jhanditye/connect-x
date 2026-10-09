@@ -13,6 +13,7 @@ import type { VoiceType } from '../../types';
 import { IsolationSettings } from '../components/IsolationSettings';
 import { MicrophoneSetting, StoragePanel } from '../components/StoragePanel';
 import { TrainerSettings } from '../components/TrainerSettings';
+import { clearSiteDataWhere, onGithubPages } from '../../pwa/words';
 
 const VOICE_TYPES = Object.keys(VOICE_TYPE_LABELS) as VoiceType[];
 const THEMES: { value: ThemePref; label: string }[] = [
@@ -169,9 +170,18 @@ export function SettingsPage() {
           account.
         </p>
         <p className="settings-text">
-          The key is saved in this site’s local storage in this browser, as plain text. On a <span className="num">github.io</span> address
-          that storage is shared with the site owner’s other GitHub Pages sites, so use a key with a monthly spending limit (set one in the
-          Anthropic Console) and remove it here when you no longer need it.
+          {onGithubPages() ? (
+            <>
+              The key is saved in this site’s local storage in this browser, as plain text. On a <span className="num">github.io</span> address
+              that storage is shared with the site owner’s other GitHub Pages sites, so use a key with a monthly spending limit (set one in the
+              Anthropic Console) and remove it here when you no longer need it.
+            </>
+          ) : (
+            <>
+              The key is saved in this browser, for this address, as plain text. Use a key with a monthly spending limit (set one in the
+              Anthropic Console) and remove it here when you no longer need it.
+            </>
+          )}
         </p>
         <form className="field" onSubmit={saveKey}>
           <label htmlFor={ids.key} className="field-label">
@@ -331,7 +341,7 @@ export function SettingsPage() {
                       setConfirmClear(false);
                       setCleared(true);
                     } else {
-                      setClearError(`Not everything was deleted: ${left.join(' and ')} could not be removed. Tap Yes, delete everything to try again, or clear this site's data in the browser settings (on an iPhone: Settings, Safari, Advanced, Website Data).`);
+                      setClearError(`Not everything was deleted: ${left.join(' and ')} could not be removed. Tap Yes, delete everything to try again, or clear this site's data in the browser settings (${clearSiteDataWhere()}).`);
                     }
                   });
                 }}

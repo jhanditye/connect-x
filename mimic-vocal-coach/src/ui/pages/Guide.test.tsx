@@ -51,10 +51,33 @@ describe('GuidePage', () => {
     expect(text).toMatch(/Compare your progress on the same device/);
     expect(text).toMatch(/contemporary pop and R&B singing.*higher\s+than the classical passaggio/);
     expect(text).toMatch(/fonts are bundled/);
-    expect(text).toMatch(/github\.io/);
+    // on localhost (the Mac download, and these tests) there is no shared github.io storage to warn about
+    expect(text).toMatch(/API key is kept in your browser, for this address/);
+    expect(text).not.toMatch(/github\.io/);
     // Plain voice-type names in the table, no nested parentheses.
     expect(text).not.toContain('))');
     expect(text).toContain('Baritone (yours)');
+  });
+
+  it('on a github.io address it warns that the API key storage is shared with the owner\'s other sites', () => {
+    vi.stubGlobal('location', { hostname: 'singer.github.io', host: 'singer.github.io', hash: '' });
+    try {
+      act(() => root.unmount());
+      root = createRoot(container);
+      const app = {
+        state: createInitialState({ voiceType: 'baritone', a4Hz: 440, anthropicApiKey: null, aiModel: 'claude-opus-5' }, [], []),
+      } as unknown as AppController;
+      act(() =>
+        root.render(
+          <AppContext.Provider value={app}>
+            <GuidePage />
+          </AppContext.Provider>,
+        ),
+      );
+      expect(container.textContent).toMatch(/On a github\.io address that\s+storage is shared with the site owner/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('has a table of contents entry and a heading for each Trainer section', () => {

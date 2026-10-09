@@ -12,6 +12,7 @@ import type { VoiceAnalysis } from '../../types';
 import { formatClock, noteRange } from './format';
 import { Icon } from './Icon';
 import './clipImport.css';
+import { isDesktopKind, platformKind } from '../../pwa/platform';
 
 /** Pixels per second the strip can show; the zoom buttons step through these. */
 export const ZOOM_LEVELS: readonly number[] = [4, 8, 16, 32, 64, 128];
@@ -123,6 +124,7 @@ export interface PhraseEditorProps {
 }
 
 export function PhraseEditor(props: PhraseEditorProps) {
+  const tap = isDesktopKind(platformKind()) ? 'click' : 'tap';
   const { duration, phrases, analysis, samples, trim } = props;
   const [innerSelected, setInnerSelected] = useState<number | null>(phrases.length > 0 ? 0 : null);
   const selectedRaw = props.selected !== undefined ? props.selected : innerSelected;
@@ -347,7 +349,7 @@ export function PhraseEditor(props: PhraseEditorProps) {
         </div>
       </div>
 
-      <div className="pe-scroller" ref={scrollerRef} role="group" aria-label="Clip strip: tap a phrase to select it, tap again where you want to split">
+      <div className="pe-scroller" ref={scrollerRef} role="group" aria-label={`Clip strip: ${tap} a phrase to select it, ${tap} again where you want to split`}>
         <div className="pe-canvas" style={{ width, height: STRIP_HEIGHT }}>
           <svg ref={svgRef} className="pe-svg" width={width} height={STRIP_HEIGHT} viewBox={`0 0 ${width} ${STRIP_HEIGHT}`} onClick={onStripClick} data-testid="phrase-strip">
             {phrases.map((p, i) => (
@@ -431,7 +433,7 @@ export function PhraseEditor(props: PhraseEditorProps) {
 
       <div className="pe-toolbar" role="group" aria-label={selected && sel !== null ? `Edit phrase ${sel + 1}` : 'Edit phrase'}>
         {selected === null || sel === null ? (
-          <p className="pe-hint">Tap a phrase on the strip or in the list to edit it.</p>
+          <p className="pe-hint">{isDesktopKind(platformKind()) ? 'Click' : 'Tap'} a phrase on the strip or in the list to edit it.</p>
         ) : (
           <>
             <div className="pe-row pe-row--nav">
@@ -476,7 +478,7 @@ export function PhraseEditor(props: PhraseEditorProps) {
             <p className="pe-hint">
               {canSplit
                 ? `The cursor is at ${formatEdgeTime(cursor as number)}. Split cuts the phrase there.`
-                : 'To split, tap the strip where the phrase should be cut (play it and press Stop to cut at a breath).'}{' '}
+                : `To split, ${tap} the strip where the phrase should be cut (play it and press Stop to cut at a breath).`}{' '}
               {isHidden(selected) ? 'This phrase is hidden: it will not be practised.' : ''}
             </p>
           </>

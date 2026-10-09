@@ -4,6 +4,8 @@
 // Nothing here records or keeps audio. The microphone checks run only when the person taps their button (iOS starts audio
 // and asks for the microphone only inside a tap), and the report holds numbers and words, never recordings.
 
+import { isDesktopKind, platformKind } from '../../pwa/platform';
+import { deviceNoun } from '../../pwa/words';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
   DEVICE_CHECKLIST,
@@ -177,6 +179,8 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
     setCopyState('saved');
   };
 
+  const kind = platformKind();
+  const desk = isDesktopKind(kind);
   const running = busy !== null;
   const answered = Object.keys(checklist).length;
   const mic = results['mic-level'];
@@ -190,7 +194,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
           Device check
         </h2>
         <p className="lede">
-          These checks show what this phone does with sound, files and storage, so we can tune the Trainer for it. They take a few minutes. Nothing here records or keeps
+          These checks show what this {deviceNoun(kind)} does with sound, files and storage, so we can tune the Trainer for it. They take a few minutes. Nothing here records or keeps
           audio, and nothing is sent anywhere unless you send the report yourself.
         </p>
       </header>
@@ -219,7 +223,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
           )}
         </div>
         {shown.filter((r) => (QUICK_DIAGNOSTICS as readonly string[]).includes(r.id)).length === 0 && !running && (
-          <p className="field-hint">Nothing has run yet. Tap the button above; each result appears here with what to do about it.</p>
+          <p className="field-hint">Nothing has run yet. {isDesktopKind(kind) ? 'Click' : 'Tap'} the button above; each result appears here with what to do about it.</p>
         )}
         <ul className="td-list">
           {shown
@@ -234,7 +238,11 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
         <h3 id={`${ids}-2`} className="td-step">
           <span className="td-num">2</span> Microphone and sound
         </h3>
-        <p className="field-hint">Each test starts the microphone, so iOS asks for permission the first time. Tap the button, then follow the line that appears.</p>
+        <p className="field-hint">
+          {desk
+            ? 'Each test starts the microphone, so the browser asks for permission the first time. Click the button, then follow the line that appears.'
+            : 'Each test starts the microphone, so iOS asks for permission the first time. Tap the button, then follow the line that appears.'}
+        </p>
 
         <div className="td-card">
           <h4 className="td-card-title">{DIAGNOSTIC_LABELS['mic-level']}</h4>
@@ -270,8 +278,8 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
         <div className="td-card">
           <h4 className="td-card-title">{DIAGNOSTIC_LABELS['click-probe']}</h4>
           <p className="field-hint">
-            Plays four clicks and listens for them. With headphones on your head the microphone hears nothing, which is fine. To measure the delay, hold one earbud against the
-            iPhone microphone first, or use the speaker.
+            Plays four clicks and listens for them. With headphones on your head the microphone hears nothing, which is fine. To measure the delay, hold one earbud against the{' '}
+            {desk ? 'microphone (on a laptop, usually by the keyboard or above the screen)' : 'iPhone microphone'} first, or use the speaker.
           </p>
           <div className="button-row">
             <button type="button" className="button button--accent" onClick={() => runOne('click-probe')} aria-disabled={running || undefined}>
@@ -292,6 +300,7 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
         </div>
       </section>
 
+      {!desk && (
       <section className="td-section" aria-labelledby={`${ids}-3`}>
         <h3 id={`${ids}-3`} className="td-step">
           <span className="td-num">3</span> On your iPhone
@@ -342,15 +351,16 @@ export function TrainerDiagnostics({ runner = REAL }: { runner?: DiagnosticsRunn
           ))}
         </ol>
       </section>
+      )}
 
       <section className="td-section" aria-labelledby={`${ids}-4`}>
         <h3 id={`${ids}-4`} className="td-step">
-          <span className="td-num">4</span> Share the report
+          <span className="td-num">{desk ? 3 : 4}</span> Share the report
         </h3>
         <p className="field-hint">Numbers and words only: no audio and no recordings. Read it first if you like.</p>
         <div className="field">
           <label className="field-label" htmlFor={`${ids}-notes`}>
-            Anything else worth noting? (iPhone model, which headphones, what went wrong)
+            {desk ? 'Anything else worth noting? (Mac model, browser, which headphones, what went wrong)' : 'Anything else worth noting? (iPhone model, which headphones, what went wrong)'}
           </label>
           <textarea
             id={`${ids}-notes`}

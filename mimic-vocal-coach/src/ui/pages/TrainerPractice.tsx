@@ -26,6 +26,7 @@ import { neighbours, phraseByNumber, phraseCount, phraseNumber, phraseStatus, vi
 import { clipColor } from '../components/ClipCard';
 import { useTrainerPrefs } from '../trainerPrefs';
 import { singerOf, useFocusOnMount } from './trainerKit';
+import { isDesktopKind, platformKind } from '../../pwa/platform';
 
 const noopSubscribe = () => () => undefined;
 const noSnapshot = (): PracticeSnapshot | null => null;
@@ -52,7 +53,7 @@ function stateAnnouncement(snap: PracticeSnapshot | null, hearing: Hear | null):
     // The message itself is on screen above the dock in its own alert; it is not read out a second time here.
     case 'interrupted':
     case 'error':
-      return snap.message ? '' : 'Something went wrong. Tap Sing or Listen to try again.';
+      return snap.message ? '' : `Something went wrong. ${isDesktopKind(platformKind()) ? 'Click' : 'Tap'} Sing or Listen to try again.`;
     default:
       return '';
   }
@@ -277,6 +278,10 @@ export function PracticeView(props: { clipId: string; phraseNumber: number; now:
 
   const header = (
     <header className="pr-head">
+      {/* The note buttons and options come before Listen and Sing in the Tab order; this gets a keyboard user to them at once. */}
+      <button type="button" className="skip-link" onClick={() => singRef.current?.focus()}>
+        Skip to the practice buttons
+      </button>
       {back}
       <div className="pr-nav">
         {prev ? (

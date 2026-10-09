@@ -6,6 +6,8 @@ import type { AnalysisIssue, AudioQuality, FrameFeatures, VoiceAnalysis, VoiceTy
 import { ROUGH_GUIDE_PURITY } from './leadTrust';
 import { VOICE_TYPE_NAMES } from './passaggio';
 import { PHRASE_MERGE_GAP_SEC } from './phrases';
+import { isDesktopKind, platformKind } from '../pwa/platform';
+import { handSpanAdvice } from '../pwa/words';
 
 export const CLIP_LEVEL = 0.999;
 const MIN_UNVOICED_FOR_FLOOR = 50;
@@ -312,12 +314,12 @@ export function qualityReport(input: QualityInput): { warnings: string[]; issues
   if (!backed && voicedSec >= 0.2 && Number.isFinite(quality.snrDb) && quality.snrDb < WARN_MIN_SNR_DB) {
     flag('noisy');
     w.push(
-      `There is a lot of background noise (singing is only ${fmt(quality.snrDb)} dB above it), so breathiness and tone readings are less reliable. Record in a quieter room, away from fans and traffic, with the phone about a hand-span from your mouth.`,
+      `There is a lot of background noise (singing is only ${fmt(quality.snrDb)} dB above it), so breathiness and tone readings are less reliable. Record in a quieter room, away from fans and traffic, with the ${isDesktopKind(platformKind()) ? 'microphone' : 'phone'} about a hand-span from your mouth.`,
     );
   }
   if (voicedSec >= 0.2 && Number.isFinite(medianVoicedDb) && medianVoicedDb < WARN_MIN_LEVEL_DB) {
     flag('too-quiet');
-    w.push(`The recording is very quiet (typical singing level ${fmt(medianVoicedDb)} dBFS). Hold the phone about a hand-span from your mouth and sing at your normal comfortable volume.`);
+    w.push(`The recording is very quiet (typical singing level ${fmt(medianVoicedDb)} dBFS). ${handSpanAdvice(platformKind())} and sing at your normal comfortable volume.`);
   }
   return { warnings: w, issues };
 }

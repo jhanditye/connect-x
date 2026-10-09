@@ -1,6 +1,7 @@
 // Small pieces the Trainer screens share: moving focus to a page's heading when its sub-view changes, a backup download used by
 // the library banner and by Settings, and grouping clips by singer.
 
+import { isDesktopKind, platformKind } from '../../pwa/platform';
 import { useEffect, useRef, type RefObject } from 'react';
 import { exportFileName } from '../../storage/library';
 import type { ExportReport, TrainerController } from '../../state/trainerContext';
@@ -83,7 +84,8 @@ export async function downloadLibraryBackup(trainer: Pick<TrainerController, 'ex
       return { ok: false, message: `This backup is incomplete.${leftOut(report)} The backup reminder stays on; try again in a moment.` };
     }
     await trainer.markExported?.();
-    return { ok: true, message: `Backup saved. It holds your clips, phrases and scores but no audio; the audio stays on this device.${leftOut(report)}` };
+    const where = isDesktopKind(platformKind()) ? ` Look for ${name} in your Downloads folder (or wherever your browser keeps downloads).` : '';
+    return { ok: true, message: `Backup saved.${where} It holds your clips, phrases and scores but no audio; the audio stays on this device.${leftOut(report)}` };
   } catch (err) {
     const why = err instanceof Error && err.message ? ` ${err.message}` : '';
     return { ok: false, message: `The backup could not be saved.${why} Try again, or reload the app first.` };

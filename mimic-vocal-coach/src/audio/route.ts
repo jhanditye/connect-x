@@ -9,6 +9,8 @@
 import type { PlayMode } from '../types';
 import type { RouteInfo } from './duplex';
 import { keepScreenAwake, wakeLockKnownBroken } from './wakeLock';
+import { isDesktopKind, type PlatformKind } from '../pwa/platform';
+import { ownMicrophoneName } from '../pwa/words';
 
 export type RouteKind = RouteInfo['kind'];
 
@@ -124,7 +126,8 @@ export interface RouteNote {
  * Things worth telling the singer about the route before a take. `mode` is the play mode they picked; sing-along without
  * headphones is the one combination that can give a confident wrong score (the speaker leaks into the microphone).
  */
-export function routeNotes(route: RouteInfo, mode: PlayMode = 'turn-taking'): RouteNote[] {
+export function routeNotes(route: RouteInfo, mode: PlayMode = 'turn-taking', kind: PlatformKind = 'other'): RouteNote[] {
+  const desk = isDesktopKind(kind);
   const notes: RouteNote[] = [];
   const bluetooth = route.kind === 'bluetooth';
   const hasBuiltin = route.inputs.some((i) => classifyRoute(i.label) === 'builtin');
@@ -132,7 +135,7 @@ export function routeNotes(route: RouteInfo, mode: PlayMode = 'turn-taking'): Ro
     notes.push({
       id: 'bluetooth-mic',
       level: 'warn',
-      message: `This looks like a Bluetooth microphone${route.inputLabel ? ` (${route.inputLabel})` : ''}. Bluetooth drops to phone-call quality when its microphone is on, and adds delay.${hasBuiltin ? ' Use the iPhone microphone instead; the headphones still play the guide.' : ''}`,
+      message: `This looks like a Bluetooth microphone${route.inputLabel ? ` (${route.inputLabel})` : ''}. Bluetooth drops to phone-call quality when its microphone is on, and adds delay.${hasBuiltin ? ` Use ${ownMicrophoneName(kind)} instead; the headphones still play the guide.` : ''}`,
       action: hasBuiltin ? 'use-builtin-mic' : undefined,
     });
   }
@@ -155,18 +158,26 @@ export function routeNotes(route: RouteInfo, mode: PlayMode = 'turn-taking'): Ro
     notes.push({
       id: 'labels-hidden',
       level: 'info',
-      message: 'The browser hides the names of the microphones until you allow one. Tap Sing once and allow it; then this can tell headphones from the speaker.',
+      message: `The browser hides the names of the microphones until you allow one. ${desk ? 'Click' : 'Tap'} Sing once and allow it; then this can tell headphones from the speaker.`,
       action: 'allow-microphone',
     });
   } else if (!route.headphonesLikely && mode === 'sing-along') {
     notes.push({
       id: 'speaker-sing-along',
       level: 'warn',
-      message: 'No headphones detected. With the guide playing through the speaker, the microphone hears it too and the score can be wrong. Plug in headphones, or listen first and then sing.',
+      message: desk
+        ? 'No headphones detected. A laptop or desktop speaker sits right next to its microphone, so the microphone hears the guide too and the score can be wrong. Put headphones on (wired, USB or Bluetooth), or listen first and then sing.'
+        : 'No headphones detected. With the guide playing through the speaker, the microphone hears it too and the score can be wrong. Plug in headphones, or listen first and then sing.',
       action: 'listen-then-sing',
     });
   } else if (!route.headphonesLikely) {
-    notes.push({ id: 'no-headphones', level: 'info', message: 'No headphones detected, so you will listen first and then sing. Plug in headphones to sing along with the guide.' });
+    notes.push({
+      id: 'no-headphones',
+      level: 'info',
+      message: desk
+        ? 'No headphones detected, so you will listen first and then sing. Connect headphones to sing along with the guide. (Headphones without a microphone cannot be seen by a browser: if you have them on, choose Sing along and say so when asked.)'
+        : 'No headphones detected, so you will listen first and then sing. Plug in headphones to sing along with the guide.',
+    });
   }
   return notes;
 }

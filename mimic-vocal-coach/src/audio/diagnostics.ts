@@ -10,9 +10,10 @@ import { analyzeInWorker } from '../analysis/client';
 import { makeDemoTake } from '../analysis/demo';
 import { renderGuideOffMainThread } from '../dsp/stretchClient';
 import { renderGuide } from '../dsp/timestretch';
-import { isIos, isStandalone, readEnv } from '../pwa/platform';
+import { isIos, isStandalone, platformKind, readEnv } from '../pwa/platform';
 import { formatBytes, readStorageStatus } from '../pwa/storage';
-import { blockLevel, LEVEL_TEXT, levelState } from '../ui/components/live';
+import { blockLevel, levelState } from '../ui/components/live';
+import { levelWords } from '../pwa/words';
 import { probeClicks } from '../trainer/latency';
 import { encodeWav } from './wav';
 import { createDuplexSession, MAX_DROPPED_SEC } from './duplex';
@@ -722,7 +723,7 @@ async function checkMicLevel(opts: RunOptions): Promise<DiagnosticResult> {
       for (let i = 0; i < buf.length; i++) if (Math.abs(buf[i]) >= 0.99) clipped++;
       total += buf.length;
       const frac = Math.min(1, (now() - start) / (seconds * 1000));
-      opts.onProgress?.({ fraction: frac, level: Math.max(0, Math.min(1, (lv.rmsDb + 60) / 60)), message: LEVEL_TEXT[levelState(lv.rmsDb, lv.peak)] });
+      opts.onProgress?.({ fraction: frac, level: Math.max(0, Math.min(1, (lv.rmsDb + 60) / 60)), message: levelWords(platformKind())[levelState(lv.rmsDb, lv.peak)] });
     }
     const sorted = [...blocksDb].sort((a, b) => a - b);
     const at = (p: number): number => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] : -120);

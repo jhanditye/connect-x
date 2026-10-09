@@ -93,3 +93,41 @@ export function installHelp(env: PlatformEnv = readEnv()): InstallHelp {
   const browser = ios ? iosBrowser(env) : 'other';
   return { show: ios && !standalone, browser, needsSafari: ios && !standalone && (browser === 'in-app' || browser === 'other') };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Which kind of device the words should be written for. Only a positively recognised Mac or desktop switches the wording to
+// computer language; an iPhone, an Android phone, a test DOM and anything unrecognised keep the phone wording the app shipped with.
+
+export type PlatformKind = 'ios' | 'mac' | 'desktop' | 'other';
+
+/** The browser on a desktop (macOS, Windows, Linux, ChromeOS). Safari has no "Chrome" in its user agent; Chrome-based browsers all do. */
+export type DesktopBrowser = 'safari' | 'chrome' | 'edge' | 'firefox' | 'other';
+
+/**
+ * iOS (phone or tablet), a Mac, another desktop, or other (Android, an embedded view, a test environment, no user agent).
+ * A Mac is read from the user agent ("Macintosh"; Chrome and Safari on Apple Silicon still say "Intel Mac OS X"), after the iPadOS
+ * check: iPadOS 13+ also says "Macintosh" but has a touch screen.
+ */
+export function platformKind(env: PlatformEnv = readEnv()): PlatformKind {
+  if (isIos(env)) return 'ios';
+  const ua = env.userAgent;
+  if (!ua || /jsdom|Android|Mobile/i.test(ua)) return 'other';
+  if (/Macintosh|Mac OS X/.test(ua) || /^Mac/.test(env.platform)) return 'mac';
+  if (/Windows NT|X11|CrOS|Linux/.test(ua)) return 'desktop';
+  return 'other';
+}
+
+/** A Mac or another desktop computer: the words talk about "this computer" instead of "this phone". */
+export function isDesktopKind(kind: PlatformKind): boolean {
+  return kind === 'mac' || kind === 'desktop';
+}
+
+export function desktopBrowser(env: PlatformEnv = readEnv()): DesktopBrowser {
+  const ua = env.userAgent;
+  if (/Edg\//.test(ua)) return 'edge';
+  if (/Firefox\//.test(ua)) return 'firefox';
+  if (/OPR\/|Opera/.test(ua)) return 'other';
+  if (/Chrome\/|Chromium\/|CriOS/.test(ua)) return 'chrome';
+  if (/Safari\//.test(ua)) return 'safari';
+  return 'other';
+}

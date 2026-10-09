@@ -32,7 +32,7 @@ export function FileDrop(props: {
       const others = all.filter((f) => !looksLikeAudio(f));
       if (others.length) {
         props.onReject?.(
-          `${others.map((f) => `"${f.name}"`).join(', ')} ${others.length === 1 ? 'does' : 'do'} not look like audio. Use WAV, MP3, M4A, AAC, OGG, WebM or FLAC.`,
+          `${others.map((f) => `"${f.name}"`).join(', ')} ${others.length === 1 ? 'does' : 'do'} not look like audio. Use WAV, MP3, M4A, AAC, AIFF, OGG, WebM or FLAC.`,
         );
       }
       if (audio.length) props.onFiles(audio);
@@ -41,7 +41,7 @@ export function FileDrop(props: {
     const file = files?.[0];
     if (!file) return;
     if (!looksLikeAudio(file)) {
-      props.onReject?.(`"${file.name}" does not look like an audio file. Use WAV, MP3, M4A, AAC, OGG, WebM or FLAC, or the sound of a phone video (.mov, .mp4).`);
+      props.onReject?.(`"${file.name}" does not look like an audio file. Use WAV, MP3, M4A, AAC, AIFF, OGG, WebM or FLAC, or the sound of a video (.mov, .mp4).`);
       return;
     }
     props.onFile(file);

@@ -137,6 +137,11 @@ export function checkImportSpace(needBytes: number, status: StorageStatus): Spac
   return { level: 'ok', needBytes: need, freeBytes: free, message: null, suggestLowerRate: false };
 }
 
+/** The note a Mac or desktop browser shows in place of the Home Screen sentence (worded in src/pwa/words.ts). */
+export interface DesktopNoteWords {
+  note: string;
+}
+
 /** True when the app runs from the Home Screen (iOS standalone or any display-mode: standalone / fullscreen). */
 export function isInstalledPwa(): boolean {
   try {
@@ -154,11 +159,12 @@ export function isInstalledPwa(): boolean {
  * One plain sentence about where the clips live, or null when nothing needs saying. Safari removes a website's data after a
  * week without use, but not an app saved to the Home Screen, so a browser tab is told to install.
  */
-export function storageNote(status: StorageStatus, ctx: { memoryOnly: boolean; installed: boolean }): string | null {
+export function storageNote(status: StorageStatus, ctx: { memoryOnly: boolean; installed: boolean; /** The words for a Mac or another computer; omitted, the phone wording applies. */ desktop?: DesktopNoteWords }): string | null {
   if (ctx.memoryOnly) {
     return 'This browser would not let Mimic store clips, so they will be lost when you close the app. Export a backup of your library to keep your practice history.';
   }
   if (!ctx.installed && status.persisted !== true) {
+    if (ctx.desktop) return ctx.desktop.note;
     return 'Add Mimic to your Home Screen to keep your clips. A browser tab can lose its saved data after a week without use.';
   }
   if (status.quota !== null && status.usage !== null && status.quota > 0 && status.usage / status.quota > 0.9) {

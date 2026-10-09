@@ -99,7 +99,6 @@ html.imp-open body {
   border-top: 1px solid var(--line);
   font-size: var(--fs-sm);
   color: var(--ink-2);
-  max-width: 62ch;
 }
 .imp-more summary {
   display: flex;
@@ -130,6 +129,7 @@ html.imp-open body {
 }
 .imp-more p {
   padding-bottom: var(--space-3);
+  max-width: 62ch;
 }
 
 .imp-preparing {

@@ -6,7 +6,9 @@ import { useEffect, useRef, useState } from 'react';
 import { detectPitch } from '../../dsp/pitch';
 import { midiToNoteName } from '../../dsp/music';
 import { formatCents, tunerReading } from './format';
-import { LEVEL_TEXT, blockLevel, levelState, meterFraction, traceWindow, type LevelState } from './live';
+import { blockLevel, levelState, meterFraction, traceWindow, type LevelState } from './live';
+import { platformKind } from '../../pwa/platform';
+import { levelWords } from '../../pwa/words';
 
 const FRAME_MS = 50;
 const TRACE_SEC = 8;
@@ -158,7 +160,7 @@ export function LiveMonitor(props: { analyser: AnalyserNode; a4Hz: number; centr
             <span className="level-zone" />
             <span className={`level-fill level-fill--${reading.level}`} style={{ width: `${meterFraction(reading.rmsDb) * 100}%` }} />
           </div>
-          <span className={`level-text level-text--${reading.level}`}>{LEVEL_TEXT[reading.level]}</span>
+          <span className={`level-text level-text--${reading.level}`}>{levelWords(platformKind())[reading.level]}</span>
         </div>
       </div>
       <canvas ref={canvasRef} className="live-trace" role="img" aria-label="Scrolling pitch trace of the last eight seconds" />

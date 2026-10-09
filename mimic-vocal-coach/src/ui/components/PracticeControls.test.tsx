@@ -204,6 +204,44 @@ describe('PracticeDock', () => {
     expect(counting.onStop).toHaveBeenCalledOnce();
   });
 
+  it('Command-Return or Control-Return sings, and ends the take while singing, from anywhere on the screen; plain keys never do', () => {
+    const key = (init: KeyboardEventInit) => act(() => void document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init })));
+    const idle = dock();
+    key({});
+    key({ key: ' ' });
+    key({ shiftKey: true, metaKey: true });
+    key({ altKey: true, ctrlKey: true });
+    expect(idle.onSing).not.toHaveBeenCalled();
+    key({ metaKey: true });
+    expect(idle.onSing).toHaveBeenCalledOnce();
+    key({ ctrlKey: true });
+    expect(idle.onSing).toHaveBeenCalledTimes(2);
+    expect(btn(/^\s*Sing/).getAttribute('aria-keyshortcuts')).toMatch(/Meta\+Enter/);
+    const singing = dock({ state: 'singing' });
+    key({ metaKey: true });
+    expect(singing.onFinish).toHaveBeenCalledOnce();
+    expect(singing.onStop).not.toHaveBeenCalled();
+    const counting = dock({ state: 'countin' });
+    key({ metaKey: true });
+    expect(counting.onSing).not.toHaveBeenCalled();
+    expect(counting.onFinish).not.toHaveBeenCalled();
+  });
+
+  it('the Command-Return shortcut is left alone while a sheet is open or a text box has the keyboard', () => {
+    const f = dock();
+    const sheet = document.createElement('div');
+    sheet.setAttribute('aria-modal', 'true');
+    document.body.appendChild(sheet);
+    act(() => void document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true })));
+    expect(f.onSing).not.toHaveBeenCalled();
+    sheet.remove();
+    const area = document.createElement('textarea');
+    document.body.appendChild(area);
+    act(() => void area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true })));
+    expect(f.onSing).not.toHaveBeenCalled();
+    area.remove();
+  });
+
   it('Escape cancels a take (or stops the guide) without Tabbing back to the dock, and does nothing at rest', () => {
     const esc = () => act(() => void document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
     const idle = dock();

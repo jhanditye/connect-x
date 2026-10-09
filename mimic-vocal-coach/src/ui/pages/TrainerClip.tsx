@@ -2,6 +2,7 @@
 // "Edit phrases" opens the phrase editor (merge, split, move edges, hide short bits); phrases that keep their id keep their
 // history, new ones start fresh. Everything goes through the TrainerController.
 
+import { platformKind } from '../../pwa/platform';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ROUGH_GUIDE_PURITY } from '../../analysis/leadTrust';
 import { mixTrustBand } from '../../analysis/quality';
@@ -10,7 +11,7 @@ import { contributionBlocker } from '../../storage/library';
 import { goTrainer, trainerHash } from '../../state/routing';
 import { useTrainer } from '../../state/trainerContext';
 import { newPhraseId } from '../../trainer/import';
-import { ISOLATED_KIND_LABEL, ISOLATED_TARGETS_NOTE, ISOLATED_TONE_NOTE } from '../../trainer/importCopy';
+import { ISOLATED_KIND_LABEL, ISOLATED_TARGETS_NOTE, isolatedToneNote } from '../../trainer/importCopy';
 import { remapPhraseRecords, segmentsFromRecords, validatePhrases, type SegPhrase } from '../../trainer/segment';
 import type { ClipRecord, PhraseRecord } from '../../types';
 import { Icon } from '../components/Icon';
@@ -377,7 +378,7 @@ export function ClipView(props: { clipId: string; now: number; focusHeading: boo
 
       {clip.isolation && (
         <Notice tone="info" title={ISOLATED_KIND_LABEL}>
-          <p>{ISOLATED_TONE_NOTE}</p>
+          <p>{isolatedToneNote(platformKind())}</p>
           <p className="field-hint">
             Made on this device by {clip.isolation.model} ({clip.isolation.version}){clip.isolation.sourceStartSec > 0 ? `, from ${Math.floor(clip.isolation.sourceStartSec / 60)}:${String(Math.round(clip.isolation.sourceStartSec % 60)).padStart(2, '0')} in the song` : ''}.
           </p>

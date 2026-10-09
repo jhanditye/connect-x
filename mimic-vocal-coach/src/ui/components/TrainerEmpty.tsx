@@ -1,34 +1,21 @@
-// The Trainer's empty state: what the Trainer is for, the three steps, and every way to get a vocal onto a phone (Files app,
-// Voice Memos, DRM-free purchases, vocal stems, audio from a phone video). The words come from trainer/importCopy.ts so this
+// The Trainer's empty state: what the Trainer is for, the three steps, and every way to get a vocal onto the device (Files app or
+// Finder, Voice Memos, DRM-free purchases, vocal stems, audio from a video). The words come from trainer/importCopy.ts so this
 // screen, the import sheet and the Guide say the same thing. Never a dead end: two ways forward are always on screen.
 
-import { IMPORT_EMPTY_STATE, IMPORT_FORMATS, IMPORT_STEPS, PRIVACY_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
+import { platformKind, type PlatformKind } from '../../pwa/platform';
+import { IMPORT_EMPTY_STATE, importWords, PRIVACY_NOTE } from '../../trainer/importCopy';
 import { Icon } from './Icon';
 
 export interface TrainerEmptyProps {
   onAdd(): void;
   /** Shown instead of the buttons while the library is not usable (still loading, or storage failed). */
   disabledReason?: string | null;
+  /** Which device the words are for; the real device by default (tests inject one). */
+  platform?: PlatformKind;
 }
 
-const WAYS: readonly { title: string; body: string }[] = [
-  {
-    title: 'From the Files app',
-    body: 'Anything in On My iPhone or iCloud Drive can be picked, and so can files from Dropbox or Google Drive that show up in Files. AirDrop a file from a Mac and save it to Files.',
-  },
-  {
-    title: 'From Voice Memos',
-    body: 'Open the memo, tap Share, then Save to Files. Then add it here.',
-  },
-  {
-    title: 'Music you bought without copy protection',
-    body: `Downloads from stores that sell DRM-free files, CD rips and files from your computer all work. ${PROTECTED_HELP}`,
-  },
-  { title: 'Vocal stems', body: STEM_HELP },
-  { title: 'Sound from a phone video', body: VIDEO_HELP },
-];
-
 export function TrainerEmpty(props: TrainerEmptyProps) {
+  const words = importWords(props.platform ?? platformKind());
   return (
     <section className="te" aria-labelledby="te-title">
       <h2 id="te-title" className="te-title">
@@ -37,7 +24,7 @@ export function TrainerEmpty(props: TrainerEmptyProps) {
       <p className="te-body">{IMPORT_EMPTY_STATE.body}</p>
 
       <ol className="te-steps">
-        {IMPORT_STEPS.map((s, i) => (
+        {words.steps.map((s, i) => (
           <li key={s.title} className="te-step">
             <span className="te-step-n num" aria-hidden="true">
               {i + 1}
@@ -61,15 +48,15 @@ export function TrainerEmpty(props: TrainerEmptyProps) {
       {props.disabledReason && <p className="field-hint te-disabled">{props.disabledReason}</p>}
 
       <details className="te-ways">
-        <summary>Ways to get a vocal onto your phone</summary>
+        <summary>{words.waysSummary}</summary>
         <ul className="te-ways-list">
-          {WAYS.map((w) => (
+          {words.ways.map((w) => (
             <li key={w.title}>
               <strong>{w.title}.</strong> {w.body}
             </li>
           ))}
         </ul>
-        <p className="caveat">Works with {IMPORT_FORMATS}</p>
+        <p className="caveat">Works with {words.formats}</p>
       </details>
 
       <p className="te-alt">

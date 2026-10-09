@@ -6,6 +6,7 @@ import { prepareForCapture } from './audioSession';
 import { loadMicChoice, looksBluetooth } from './micChoice';
 import { isIos, isNativeApp, isStandalone, readEnv } from '../pwa/platform';
 import { keepScreenAwake, type ScreenWakeLock } from './wakeLock';
+import { microphoneBlockedText } from '../pwa/words';
 
 export type RecorderErrorKind = 'denied' | 'unsupported' | 'no-device';
 
@@ -72,6 +73,8 @@ export function deniedMessage(): string {
       return 'Microphone access was blocked. Open Settings, then Safari, then Microphone, and choose Ask or Allow; then open Mimic again. If it still does not ask, remove Mimic from your Home Screen and add it again.';
     }
     if (isIos(env)) return 'Microphone access was blocked. Tap aA in the address bar, then Website Settings, then Microphone, and choose Allow (or open Settings, then Safari, then Microphone). Then try again.';
+    const desktop = microphoneBlockedText(env);
+    if (desktop) return desktop;
   } catch {
     // Not a browser we can read: the general words do.
   }
@@ -107,7 +110,7 @@ export function toRecorderError(err: unknown): RecorderError {
     case 'PermissionDeniedError':
       return new RecorderError('denied', deniedMessage());
     case 'SecurityError':
-      return new RecorderError('denied', `${MSG_FRAME} (or the browser blocked it for security reasons).`);
+      return new RecorderError('denied', `${MSG_FRAME.replace(/\.$/, '')} (or the browser blocked it for security reasons).`);
     case 'NotFoundError':
     case 'DevicesNotFoundError':
     case 'OverconstrainedError':

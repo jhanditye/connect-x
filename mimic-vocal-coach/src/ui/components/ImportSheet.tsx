@@ -11,7 +11,10 @@ import { useTrainer } from '../../state/trainerContext';
 import { QuotaError, StoreUnavailableError } from '../../storage/clips';
 import { isAbortError } from '../../analysis/abort';
 import { findRelinkMatches, isolatePrepared, reanalyzeClip, relinkIsolateRequest, sameSource, type CommitEdits, type ImportProgress, type IsolateRequest, type PreparedClip } from '../../trainer/import';
-import { IMPORT_FORMATS, IMPORT_LEDE, IMPORT_STEPS, PRIVACY_NOTE, PROTECTED_HELP, STEM_HELP, VIDEO_HELP } from '../../trainer/importCopy';
+import { importWords, PRIVACY_NOTE } from '../../trainer/importCopy';
+import { setSheetDropTarget } from '../windowFileDrop';
+import { desktopMemoryOnlyAdvice, deviceNoun } from '../../pwa/words';
+import { isDesktopKind, platformKind } from '../../pwa/platform';
 import type { ClipKind, ClipRecord } from '../../types';
 import { ClipReview } from './ClipReview';
 import { BrowserTabNote } from './InstallCard';
@@ -321,7 +324,7 @@ export function ImportSheet(props: ImportSheetProps) {
       const others = files.filter((f) => !looksLikeMedia(f));
       setRejected(
         others.length
-          ? `${others.map((f) => `"${f.name}"`).join(', ')} ${others.length === 1 ? 'does' : 'do'} not look like audio or video. Pick ${IMPORT_FORMATS}`
+          ? `${others.map((f) => `"${f.name}"`).join(', ')} ${others.length === 1 ? 'does' : 'do'} not look like audio or video. Pick ${importWords(platformKind()).formats}`
           : null,
       );
       const take = relinkMode ? media.slice(0, 1) : media;
@@ -340,6 +343,13 @@ export function ImportSheet(props: ImportSheetProps) {
     },
     [relinkMode, relinkClip, sep, choice],
   );
+
+  // Files dropped on the window outside the drop area (the margin beside the page) are taken wherever the drop area itself would take
+  // them: on the first step, once the library is open, and not while the vocal start time needs fixing. Elsewhere they are ignored.
+  const takesDrops = useRef(false);
+  takesDrops.current =
+    state.step === 'pick' && ready && (relinkClip || !relinkMode) && !(sep?.available && !relinkMode && choice.on && parseClock(choice.start) === null);
+  useEffect(() => setSheetDropTarget((files) => (takesDrops.current ? addFiles(files) : undefined)), [addFiles]);
 
   const initialDone = useRef(false);
   useEffect(() => {
@@ -563,7 +573,9 @@ export function ImportSheet(props: ImportSheetProps) {
           )}
           {trainer.status === 'memory-only' && (
             <Notice tone="warn" title="Clips will be lost when you close the app">
-              This browser would not give Mimic a place to keep them. Add the app to your Home Screen, or export a backup after adding clips.
+              {isDesktopKind(platformKind())
+                ? `This browser would not give Mimic a place to keep them. ${desktopMemoryOnlyAdvice()}`
+                : 'This browser would not give Mimic a place to keep them. Add the app to your Home Screen, or export a backup after adding clips.'}
             </Notice>
           )}
 
@@ -659,6 +671,7 @@ function PickStep(props: {
   isolate: { availability: SeparationAvailability; value: IsolateChoice; onChange(next: IsolateChoice): void } | null;
 }) {
   const inputId = useId();
+  const words = importWords(platformKind());
   const relink = props.relinkTitle !== null;
   const startError = props.isolate?.value.on && parseClock(props.isolate.value.start) === null ? 'Type the start as minutes and seconds, like 1:30, or leave it at 0:00.' : null;
   const blockedByChoice = startError !== null;
@@ -679,7 +692,7 @@ function PickStep(props: {
           {props.relinkFile ? ` (${props.relinkFile})` : ''}. Mimic matches it by its contents, so your phrases and scores stay as they are.
         </p>
       ) : (
-        <p className="lede">{IMPORT_LEDE}</p>
+        <p className="lede">{words.lede}</p>
       )}
 
       {props.isolate && (
@@ -712,7 +725,7 @@ function PickStep(props: {
           <span className="filedrop-text">
             <span className="filedrop-title">{relink ? 'Choose the file' : 'Choose files'}</span>
             <span className="filedrop-hint">
-              {props.disabled ? 'Waiting for the library to open.' : blockedByChoice ? 'Fix the start time below to choose files.' : `${IMPORT_FORMATS} You can drop files here too.`}
+              {props.disabled ? 'Waiting for the library to open.' : blockedByChoice ? 'Fix the start time below to choose files.' : `${words.formats} You can drop files here too.`}
             </span>
           </span>
         </label>
@@ -726,23 +739,23 @@ function PickStep(props: {
       {!relink && (
         <>
           <ol className="imp-steps">
-            {IMPORT_STEPS.map((s) => (
+            {words.sheetSteps.map((s) => (
               <li key={s.title}>
                 <strong>{s.title}.</strong> {s.body}
               </li>
             ))}
           </ol>
           <details className="imp-more">
-            <summary>Videos from your phone</summary>
-            <p>{VIDEO_HELP}</p>
+            <summary>{words.videoSummary}</summary>
+            <p>{words.videoHelp}</p>
           </details>
           <details className="imp-more">
             <summary>Protected songs and Apple Music</summary>
-            <p>{PROTECTED_HELP}</p>
+            <p>{words.protectedHelp}</p>
           </details>
           <details className="imp-more">
             <summary>No isolated vocal?</summary>
-            <p>{STEM_HELP}</p>
+            <p>{words.stemHelp}</p>
           </details>
         </>
       )}
@@ -886,10 +899,12 @@ function PreparingCard(props: { item: Item; onSkip?: () => void }) {
           {etaWords(p?.etaSec)}
         </p>
       )}
-      {p?.phase === 'downloading-model' && <p className="field-hint">{progressWords(p)}: it is kept on this phone, so this happens once.</p>}
+      {p?.phase === 'downloading-model' && <p className="field-hint">{progressWords(p)}: it is kept on this {deviceNoun(platformKind())}, so this happens once.</p>}
       <p className="field-hint">
         {isolating
-          ? 'Splitting a song takes minutes and uses a lot of battery. Keep this screen open and the phone plugged in; locking the phone can pause it.'
+          ? isDesktopKind(platformKind())
+            ? 'Splitting a song takes minutes and works the processor hard. Keep this tab in front and the computer awake (plug a laptop in); sleep or a locked screen can pause it.'
+            : 'Splitting a song takes minutes and uses a lot of battery. Keep this screen open and the phone plugged in; locking the phone can pause it.'
           : 'A long song takes a little longer. You can leave this open.'}
       </p>
       {props.onSkip && (

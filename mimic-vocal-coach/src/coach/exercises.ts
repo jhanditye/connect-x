@@ -340,7 +340,7 @@ export const EXERCISES: Exercise[] = [
       'Start with a quiet "h" and float a falsetto "hoo" a few notes above your passaggio.',
       'Let some air into the tone, but keep a clear pitch centre.',
       'Hold it for about four seconds at a quiet, even level, then glide down into your middle voice.',
-      'Keep the mic or phone at your usual 20–30 cm, so this take compares fairly with your others.',
+      'Keep the microphone at your usual 20–30 cm, so this take compares fairly with your others.',
       'Stop and sip water if your throat feels dry.',
     ],
     durationMin: 3,
