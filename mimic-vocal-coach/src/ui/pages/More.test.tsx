@@ -21,10 +21,10 @@ afterEach(() => {
 });
 
 describe('MorePage', () => {
-  it('lists Practice, Guide and Settings as big links, each with a line saying what is in it', () => {
+  it('lists Results, Practice, Guide and Settings as big links, each with a line saying what is in it', () => {
     const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('a.mo-link'));
     expect(links.map((a) => a.getAttribute('href'))).toEqual(MORE_ROUTES.map((r) => `#${r}`));
-    expect(links.map((a) => a.querySelector('.mo-name')?.textContent)).toEqual(['Practice', 'Guide', 'Settings']);
+    expect(links.map((a) => a.querySelector('.mo-name')?.textContent)).toEqual(['Results', 'Practice', 'Guide', 'Settings']);
     for (const a of links) expect((a.querySelector('.mo-about')?.textContent ?? '').length).toBeGreaterThan(40);
     expect(container.querySelector('h1')?.textContent).toBe('More from Mimic');
   });
@@ -37,6 +37,6 @@ describe('MorePage', () => {
   });
 
   it('draws each icon as decoration', () => {
-    expect(container.querySelectorAll('.mo-icon[aria-hidden="true"] svg')).toHaveLength(3);
+    expect(container.querySelectorAll('.mo-icon[aria-hidden="true"] svg')).toHaveLength(4);
   });
 });

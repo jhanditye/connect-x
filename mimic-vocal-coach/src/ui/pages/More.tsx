@@ -1,4 +1,4 @@
-// More: the pages that do not fit the five phone tabs (Practice, Guide, Settings), each with a line saying what is in it.
+// More: the pages that do not fit the five phone tabs (Results, Practice, Guide, Settings), each with a line saying what is in it.
 // Reached from the last tab on a phone; the desktop bar links to these pages directly.
 
 import { MORE_ROUTES, ROUTE_LABELS, routeHash, type Route } from '../../state/routing';
@@ -8,6 +8,7 @@ import { deviceNoun } from '../../pwa/words';
 
 const about = (r: Route): string | undefined =>
   ({
+  results: 'The analysis of your last Studio take against a singer: the score, the measures and what to work on. Empty until you record one.',
   practice: 'Vocal exercises with a pattern that plays in your key: sirens, straw and lip-trill warm-ups, mix work, onsets and vibrato.',
   guide: `How Mimic listens, what it can and cannot hear, how to get a vocal onto your ${deviceNoun(platformKind())}, and how to look after your voice.`,
   settings: 'Your voice type and tuning, the microphone, storage and backups of your clips, and the optional AI coach.',
@@ -19,7 +20,7 @@ export function MorePage() {
       <header className="page-head">
         <p className="eyebrow">More</p>
         <h1 className="page-title">More from Mimic</h1>
-        <p className="lede">Exercises to warm up with, the guide, and your settings.</p>
+        <p className="lede">Your last Studio result, exercises to warm up with, the guide, and your settings.</p>
       </header>
 
       <ul className="mo-list">

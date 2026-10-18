@@ -51,13 +51,19 @@ function Inner(props: { trainer: TrainerController }) {
     setImportNote(null);
     try {
       const r = await trainer.importLibrary(file);
-      const bits = [r.added > 0 ? `${r.added} ${r.added === 1 ? 'clip' : 'clips'} added` : null, r.updated > 0 ? `${r.updated} updated` : null].filter(Boolean);
+      const skills = r.skillsAdded ?? 0;
+      const bits = [
+        r.added > 0 ? `${r.added} ${r.added === 1 ? 'clip' : 'clips'} added` : null,
+        r.updated > 0 ? `${r.updated} updated` : null,
+        skills > 0 ? `${skills} Skills ${skills === 1 ? 'session' : 'sessions'} added` : null,
+      ].filter(Boolean);
+      const audioNote =
+        r.added > 0 || r.updated > 0
+          ? ` A backup holds no audio, so open the Trainer and ${tapVerb(platformKind())} "Choose the files" to add the original audio files again. Mimic recognises each file by its contents and keeps your phrases and scores.`
+          : '';
       setImportNote({
         ok: true,
-        message:
-          bits.length > 0
-            ? `Backup restored: ${bits.join(', ')}. A backup holds no audio, so open the Trainer and ${tapVerb(platformKind())} "Choose the files" to add the original audio files again. Mimic recognises each file by its contents and keeps your phrases and scores.`
-            : 'That backup holds nothing new, so nothing changed.',
+        message: bits.length > 0 ? `Backup restored: ${bits.join(', ')}.${audioNote}` : 'That backup holds nothing new, so nothing changed.',
         warnings: r.warnings,
       });
     } catch (err) {

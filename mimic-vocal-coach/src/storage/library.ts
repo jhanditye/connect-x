@@ -27,6 +27,8 @@ import type {
   PlayMode,
   VoiceType,
 } from '../types';
+import { parseSkillsStore } from '../skills/progress/store';
+import { SKILLS_STORE_VERSION, type SkillsStore } from '../skills/types';
 import { sanitizeStyle } from './history';
 import { isRecord } from './local';
 
@@ -107,8 +109,14 @@ function cleanCalibration(x: unknown): Record<string, number> {
  * The library as a JSON-ready object. Audio is never part of it (a clip record only describes its audio), and an exported
  * attempt never claims a recording because none travels with it.
  */
-export function buildLibraryExport(clips: ClipRecord[], attempts: AttemptRecord[], calibration: Record<string, number>, now: Date = new Date()): LibraryExport {
-  return {
+export function buildLibraryExport(
+  clips: ClipRecord[],
+  attempts: AttemptRecord[],
+  calibration: Record<string, number>,
+  now: Date = new Date(),
+  skills: SkillsStore | null = null,
+): LibraryExport {
+  const lib: LibraryExport = {
     format: LIBRARY_FORMAT,
     version: LIBRARY_VERSION,
     exportedAt: now.toISOString(),
@@ -116,6 +124,8 @@ export function buildLibraryExport(clips: ClipRecord[], attempts: AttemptRecord[
     attempts: attempts.map((a) => ({ ...jsonClone(a), hasAudio: false })),
     calibration: cleanCalibration(calibration),
   };
+  if (skills) lib.skills = jsonClone(skills);
+  return lib;
 }
 
 /** mimic-library-2026-10-08.json, named for the person's own calendar day (a backup made at 9 pm in California is not "tomorrow"). */
@@ -444,12 +454,24 @@ export function parseLibraryExport(input: unknown): LibraryParse {
   if (badAttempts) warnings.push(`${plural(badAttempts, 'practice attempt')} could not be read and ${badAttempts === 1 ? 'was' : 'were'} skipped.`);
   if (orphans) warnings.push(`${plural(orphans, 'practice attempt')} belonged to clips that are not in the file and ${orphans === 1 ? 'was' : 'were'} skipped.`);
 
+  // Skills practice history (optional): a newer store version is skipped whole, unreadable sessions are dropped.
+  let skills: SkillsStore | undefined;
+  if (json.skills !== undefined && json.skills !== null) {
+    const raw = json.skills;
+    const rawSessions = isRecord(raw) && Array.isArray(raw.sessions) ? raw.sessions.length : 0;
+    if (!isRecord(raw)) warnings.push('The Skills practice history in this file could not be read and was skipped.');
+    else if (finite(raw.version) && raw.version > SKILLS_STORE_VERSION) warnings.push('The Skills practice history in this file was saved by a newer version of Mimic and was skipped. Update the app to import it.');
+    else {
+      skills = parseSkillsStore(raw);
+      const dropped = rawSessions - skills.sessions.length;
+      if (dropped > 0) warnings.push(`${plural(dropped, 'Skills session')} could not be read and ${dropped === 1 ? 'was' : 'were'} skipped.`);
+    }
+  }
+
   const exportedAt = iso(json.exportedAt) ?? new Date(0).toISOString();
-  return {
-    ok: true,
-    value: { format: LIBRARY_FORMAT, version: LIBRARY_VERSION, exportedAt, clips: [...byId.values()], attempts, calibration: cleanCalibration(json.calibration) },
-    warnings,
-  };
+  const value: LibraryExport = { format: LIBRARY_FORMAT, version: LIBRARY_VERSION, exportedAt, clips: [...byId.values()], attempts, calibration: cleanCalibration(json.calibration) };
+  if (skills) value.skills = skills;
+  return { ok: true, value, warnings };
 }
 
 /** Parses the text of a backup file; a file that is not JSON is reported in plain words. */

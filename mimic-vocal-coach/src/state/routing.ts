@@ -2,20 +2,22 @@
 // a GitHub Pages subpath or a single-file build without server rewrites.
 
 import { useCallback, useEffect, useState } from 'react';
+import { SKILLS_VIEWS, type SkillsPath, type SkillsView } from '../skills/types';
 
-export const ROUTES = ['trainer', 'studio', 'results', 'practice', 'progress', 'guide', 'settings', 'more'] as const;
+export const ROUTES = ['trainer', 'skills', 'studio', 'results', 'practice', 'progress', 'guide', 'settings', 'more'] as const;
 export type Route = (typeof ROUTES)[number];
 export const DEFAULT_ROUTE: Route = 'trainer';
 
 /** Phone tab bar: five tabs. Everything else is reached through More. */
-export const TAB_ROUTES: readonly Route[] = ['trainer', 'studio', 'results', 'progress', 'more'];
+export const TAB_ROUTES: readonly Route[] = ['trainer', 'skills', 'studio', 'progress', 'more'];
 /** Desktop top bar: every page except More (which only exists to hold these on a phone). */
-export const TOP_ROUTES: readonly Route[] = ['trainer', 'studio', 'results', 'practice', 'progress', 'guide', 'settings'];
-/** What the More page lists. */
-export const MORE_ROUTES: readonly Route[] = ['practice', 'guide', 'settings'];
+export const TOP_ROUTES: readonly Route[] = ['trainer', 'skills', 'studio', 'results', 'practice', 'progress', 'guide', 'settings'];
+/** What the More page lists (Results sits here on a phone since Skills took its tab). */
+export const MORE_ROUTES: readonly Route[] = ['results', 'practice', 'guide', 'settings'];
 
 export const ROUTE_LABELS: Record<Route, string> = {
   trainer: 'Trainer',
+  skills: 'Skills',
   more: 'More',
   studio: 'Studio',
   results: 'Results',
@@ -113,12 +115,12 @@ export function goTrainer(path: TrainerPath): void {
   if (window.location.hash !== hash) window.location.hash = hash;
 }
 
-/** Practice, Guide and Settings live under the More tab on a phone. */
+/** Results, Practice, Guide and Settings live under the More tab on a phone. */
 export function isMoreRoute(route: Route): boolean {
   return (MORE_ROUTES as readonly string[]).includes(route);
 }
 
-/** The phone tab that should look current while `route` is showing (Practice, Guide and Settings count as More). */
+/** The phone tab that should look current while `route` is showing (Results, Practice, Guide and Settings count as More). */
 export function tabFor(route: Route): Route {
   return isMoreRoute(route) ? 'more' : route;
 }
@@ -135,6 +137,74 @@ export function parseSection(hash: string | null | undefined): string | null {
     .filter((p) => p.length > 0);
   const section = parts[1]?.toLowerCase();
   return section && /^[a-z0-9-]+$/.test(section) ? section : null;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Skills sub-views: #skills, #skills/pitch-test, #skills/sequence?seed=7 ... (src/skills/SPEC.md section 6)
+
+const SKILLS_HUB: SkillsPath = Object.freeze({ view: 'hub', seed: null }) as SkillsPath;
+const MAX_SEED = 0xffffffff;
+
+function isSkillsView(x: string): x is SkillsView {
+  return (SKILLS_VIEWS as readonly string[]).includes(x);
+}
+
+/** "?seed=7" -> 7: a whole number 0..2^32-1, anything else null. */
+function parseSeed(query: string): number | null {
+  for (const pair of query.split('&')) {
+    const [k, v] = pair.split('=');
+    if (k?.trim().toLowerCase() !== 'seed' || v === undefined) continue;
+    const t = v.trim();
+    if (!/^\d{1,10}$/.test(t)) return null;
+    const n = Number(t);
+    return Number.isInteger(n) && n >= 0 && n <= MAX_SEED ? n : null;
+  }
+  return null;
+}
+
+/**
+ * Where the Skills section is, from the hash: "#skills" -> the hub, "#skills/sequence?seed=7" -> { view: 'sequence', seed: 7 }.
+ * An unknown view is the hub; "hub" itself is not written in links. Never throws.
+ */
+export function parseSkillsPath(hash: string | null | undefined): SkillsPath {
+  const raw = (hash ?? '').replace(/^#\/?/, '');
+  const q = raw.indexOf('?');
+  const path = q === -1 ? raw : raw.slice(0, q);
+  const query = q === -1 ? '' : raw.slice(q + 1);
+  const parts = path.split('/').filter((p) => p.length > 0);
+  if (parts[0]?.trim().toLowerCase() !== 'skills') return { ...SKILLS_HUB };
+  const view = (parts[1] ?? '').trim().toLowerCase();
+  return { view: isSkillsView(view) ? view : 'hub', seed: parseSeed(query) };
+}
+
+/** Inverse of parseSkillsPath: "#skills", "#skills/ear", "#skills/sequence?seed=7". */
+export function skillsHash(path: Partial<SkillsPath> & Pick<SkillsPath, 'view'>): string {
+  const base = path.view === 'hub' ? '#skills' : `#skills/${path.view}`;
+  const seed = path.seed;
+  return typeof seed === 'number' && Number.isInteger(seed) && seed >= 0 && seed <= MAX_SEED ? `${base}?seed=${seed}` : base;
+}
+
+/** Opens a Skills sub-view (sets the hash; the page follows on hashchange). */
+export function goSkills(path: Partial<SkillsPath> & Pick<SkillsPath, 'view'>): void {
+  if (typeof window === 'undefined') return;
+  const hash = skillsHash(path);
+  if (window.location.hash !== hash) window.location.hash = hash;
+}
+
+/** The Skills sub-view from location.hash, updated on hashchange. */
+export function useSkillsPath(): SkillsPath {
+  const [path, setPath] = useState<SkillsPath>(() => (typeof window === 'undefined' ? { ...SKILLS_HUB } : parseSkillsPath(window.location.hash)));
+  useEffect(() => {
+    const onChange = () =>
+      setPath((cur) => {
+        const next = parseSkillsPath(window.location.hash);
+        return next.view === cur.view && next.seed === cur.seed ? cur : next;
+      });
+    window.addEventListener('hashchange', onChange);
+    onChange();
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+  return path;
 }
 
 /** The Trainer's sub-view from location.hash, updated on hashchange. */

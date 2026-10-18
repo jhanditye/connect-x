@@ -34,20 +34,20 @@ const top = () => Array.from(container.querySelectorAll('.topnav a.nav-link'));
 const label = (a: Element) => a.textContent?.trim();
 
 describe('Nav', () => {
-  it('the phone bar has five tabs: Trainer, Studio, Results, Progress, More', () => {
+  it('the phone bar has five tabs: Trainer, Skills, Studio, Progress, More', () => {
     render('trainer');
-    expect(tabs().map(label)).toEqual(['Trainer', 'Studio', 'Results', 'Progress', 'More']);
+    expect(tabs().map(label)).toEqual(['Trainer', 'Skills', 'Studio', 'Progress', 'More']);
     expect(tabs().map((a) => a.getAttribute('href'))).toEqual(TAB_ROUTES.map((r) => `#${r}`));
     expect(container.querySelectorAll('.tabbar svg')).toHaveLength(5);
   });
 
   it('the desktop bar keeps every page except More', () => {
     render('studio');
-    expect(top().map(label)).toEqual(['Trainer', 'Studio', 'Results', 'Practice', 'Progress', 'Guide', 'Settings']);
+    expect(top().map(label)).toEqual(['Trainer', 'Skills', 'Studio', 'Results', 'Practice', 'Progress', 'Guide', 'Settings']);
     expect(top().map((a) => a.getAttribute('href'))).toEqual(TOP_ROUTES.map((r) => `#${r}`));
   });
 
-  it('marks the current page, and More stands for Practice, Guide and Settings on the phone bar', () => {
+  it('marks the current page, and More stands for Results, Practice, Guide and Settings on the phone bar', () => {
     render('trainer');
     expect(tabs().find((a) => a.getAttribute('aria-current') === 'page')?.textContent).toMatch(/Trainer/);
     for (const r of MORE_ROUTES) {
@@ -57,10 +57,14 @@ describe('Nav', () => {
     }
     render('more');
     expect(tabs().filter((a) => a.getAttribute('aria-current') === 'page').map(label)).toEqual(['More']);
+    render('skills');
+    expect(tabs().filter((a) => a.getAttribute('aria-current') === 'page').map(label)).toEqual(['Skills']);
+    expect(top().filter((a) => a.getAttribute('aria-current') === 'page').map(label)).toEqual(['Skills']);
   });
 
   it('Results is always a real link; before a take it is only drawn quieter and says so in text, not in a tooltip', () => {
     render('trainer', false);
+    expect(tabs().some((x) => /Results/.test(x.textContent ?? ''))).toBe(false);
     for (const a of [...tabs(), ...top()].filter((x) => /Results/.test(x.textContent ?? ''))) {
       expect(a.getAttribute('href')).toBe('#results');
       expect(a.getAttribute('aria-disabled')).toBeNull();

@@ -93,7 +93,7 @@ describe('App with the Trainer', () => {
     render();
     expect(h1()).toBe('Practise with the voices you love');
     // Results is a real link before the first Studio take (its page explains); screen readers are told there is no take yet.
-    expect(tabs()).toEqual(['Trainer', 'Studio', 'Results (no take yet)', 'Progress', 'More']);
+    expect(tabs()).toEqual(['Trainer', 'Skills', 'Studio', 'Progress', 'More']);
     expect(container.querySelector('.tabbar a[aria-current="page"]')?.textContent).toMatch(/Trainer/);
     expect(container.querySelector('.skip-link')?.getAttribute('href')).toBe('#trainer');
     expect(document.title).toBe('Trainer · Mimic Vocal Coach');
@@ -104,7 +104,7 @@ describe('App with the Trainer', () => {
     await goTo('#more');
     expect(h1()).toBe('More from Mimic');
     const links = Array.from(container.querySelectorAll('a.mo-link')).map((a) => a.getAttribute('href'));
-    expect(links).toEqual(['#practice', '#guide', '#settings']);
+    expect(links).toEqual(['#results', '#practice', '#guide', '#settings']);
     await goTo('#guide');
     expect(h1()).toMatch(/How Mimic listens/);
     expect(container.querySelector('.tabbar a[aria-current="page"]')?.textContent).toMatch(/More/);
@@ -113,7 +113,7 @@ describe('App with the Trainer', () => {
 
   it('the desktop bar lists every page, and the wordmark goes to the Trainer', () => {
     render();
-    expect(Array.from(container.querySelectorAll('.topnav a.nav-link')).map((a) => a.textContent?.trim())).toEqual(['Trainer', 'Studio', 'Results (no take yet)', 'Practice', 'Progress', 'Guide', 'Settings']);
+    expect(Array.from(container.querySelectorAll('.topnav a.nav-link')).map((a) => a.textContent?.trim())).toEqual(['Trainer', 'Skills', 'Studio', 'Results (no take yet)', 'Practice', 'Progress', 'Guide', 'Settings']);
     expect(container.querySelector('.wordmark')?.getAttribute('href')).toBe('#trainer');
   });
 

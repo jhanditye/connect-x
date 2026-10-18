@@ -115,6 +115,17 @@ describe('Settings: Trainer backup', () => {
     expect(screen.text()).toMatch(/1 practice attempt was skipped/);
   });
 
+  it('says when a backup brought back Skills sessions, without the audio note when no clips came back', async () => {
+    const { ctl } = settings();
+    ctl.importLibrary = vi.fn(async () => ({ added: 0, updated: 0, warnings: [], skillsAdded: 12 }));
+    const input = screen.q<HTMLInputElement>('input[type="file"]');
+    Object.defineProperty(input, 'files', { value: [new File(['{}'], 'b.json')], configurable: true });
+    await act(async () => void input.dispatchEvent(new Event('change', { bubbles: true })));
+    await tick();
+    expect(screen.text()).toMatch(/Backup restored: 12 Skills sessions added\./);
+    expect(screen.text()).not.toMatch(/A backup holds no audio/);
+  });
+
   it('a backup with nothing new, and a file that is not a backup, are both said plainly', async () => {
     const { ctl } = settings();
     const pick = async (f: File) => {

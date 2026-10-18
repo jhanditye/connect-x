@@ -43,7 +43,8 @@ export interface TrainerController {
   markExported?(exportedAt?: string): Promise<void>;
   /** What the most recent exportLibrary included and left out (null before the first). Optional. */
   lastExportReport?(): ExportReport | null;
-  importLibrary(file: File): Promise<{ added: number; updated: number; warnings: string[] }>;
+  /** `skillsAdded` is present when the backup also brought back Skills practice sessions. */
+  importLibrary(file: File): Promise<{ added: number; updated: number; warnings: string[]; skillsAdded?: number }>;
   /**
    * Decode, analyse and segment one file. Nothing is stored until commitClip. Rejects with a message that names the fix. `signal`
    * cancels: the analysis worker is stopped and the promise rejects with an AbortError (nothing to show for it). `options.isolate`

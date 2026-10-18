@@ -12,6 +12,7 @@ import { getExercise } from '../coach/exercises';
 import { ARTIST_VOICE_TYPE, clipFromAnalysis, MAX_CLIPS_PER_SINGER } from '../coach/measured';
 import { clearSessions, deleteSession, loadSessions, saveSession, sessionFromResults } from '../storage/history';
 import { removeAllAppKeys } from '../storage/local';
+import { clearSkillsStore } from '../skills/progress/store';
 import { clearMeasurements, loadMeasurements, saveMeasurements } from '../storage/measurements';
 import { DEFAULT_SETTINGS, loadSettings, saveSettings } from '../storage/settings';
 import type { AnalysisOptions, AppSettings, MeasuredClip, ReferenceComparison, SessionRecord, VoiceAnalysis, VoiceType } from '../types';
@@ -437,6 +438,7 @@ export function AppProvider(props: { children: ReactNode; deps?: ScoringDeps }) 
         setTheme('system');
         measuredRef.current = {};
         removeAllAppKeys(); // also the microphone choice, trainer preferences and other small flags, not only the three main stores
+        clearSkillsStore(); // the Skills key went with the line above; this also empties its in-memory copy and tells open Skills screens
         dispatch({ type: 'reset', settings: { ...DEFAULT_SETTINGS }, sessions: [] });
         // The Trainer's library (and anything else that keeps data) clears itself. One that fails must not stop the rest, and the
         // caller is told which ones failed: "cleared" is only true when every one of them is.

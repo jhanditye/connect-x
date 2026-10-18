@@ -8,6 +8,8 @@
 // - 0..1 indices are documented with anchor meanings so the analysis engine and the singer
 //   profiles agree on what a number means.
 
+import type { SkillsStore } from './skills/types';
+
 export type RegisterLabel = 'chest' | 'mix' | 'head';
 
 /** User's voice type. Drives the passaggio (register-transition) zone used for mix coaching. */
@@ -594,6 +596,8 @@ export interface LibraryExport {
   clips: ClipRecord[];
   attempts: AttemptRecord[];
   calibration: Record<string, number>;
+  /** Skills practice history and preferences (src/skills/progress). Optional: backups made before Skills have none. */
+  skills?: SkillsStore;
 }
 
 // ---------------------------------------------------------------------------------------------

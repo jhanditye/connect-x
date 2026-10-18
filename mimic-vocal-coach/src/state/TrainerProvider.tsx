@@ -48,6 +48,7 @@ import type { CommitEdits, ImportProgress, PreparedClip } from '../trainer/impor
 import type { PracticeEngine } from '../trainer/engine';
 import { MAX_STORE_RATE } from '../audio/pcm';
 import type { AppSettings, AttemptRecord, ClipRecord, PhraseRecord } from '../types';
+import { exportSkillsForBackup, importSkillsFromBackup } from '../skills/progress/backup';
 import { AppContext, type AppController } from './context';
 import { TrainerContext, type ExportReport, type TrainerController } from './trainerContext';
 import {
@@ -585,7 +586,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
             } catch {
               // The microphone timing is learned again within a few takes; it is not worth a warning.
             }
-            const lib = buildLibraryExport(clips, attempts, calibration, new Date((propsRef.current.now ?? Date.now)()));
+            const lib = buildLibraryExport(clips, attempts, calibration, new Date((propsRef.current.now ?? Date.now)()), exportSkillsForBackup());
             const blob = new Blob([JSON.stringify(lib)], { type: 'application/json' });
             lastExport.current = { complete, warnings, clips: lib.clips.length, attempts: lib.attempts.length };
             pendingExport.current = null;
@@ -612,7 +613,7 @@ export function TrainerProvider(props: TrainerProviderProps) {
           }),
         ),
 
-      importLibrary: (file: File): Promise<{ added: number; updated: number; warnings: string[] }> =>
+      importLibrary: (file: File): Promise<{ added: number; updated: number; warnings: string[]; skillsAdded?: number }> =>
         queue('*library*', () =>
           guard(async () => {
             if (file.size > MAX_IMPORT_BYTES) throw new Error('That file is far larger than a Mimic backup. Choose the .json file made with "Export my library".');
@@ -671,11 +672,14 @@ export function TrainerProvider(props: TrainerProviderProps) {
               }
             }
 
+            // Skills practice history (localStorage, merged by session id); absent in backups made before Skills.
+            const skills = importSkillsFromBackup(parsed.value.skills);
+
             const loaded = await loadLibrary(store);
             send({ type: 'loaded', ...loaded, warnings: [...loaded.warnings], memoryReason: memoryRef.current.reason, memoryRetryable: memoryRef.current.retryable });
             notifyTabs();
             void refreshStorage();
-            return { added: merged.added, updated: merged.updated, warnings };
+            return { added: merged.added, updated: merged.updated, warnings, ...(skills.added > 0 ? { skillsAdded: skills.added } : {}) };
           }),
         ),
 

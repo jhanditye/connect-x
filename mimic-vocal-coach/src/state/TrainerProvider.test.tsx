@@ -13,6 +13,8 @@ import { createInitialState } from './reducer';
 import { createInertTrainerController, createKeyedQueue, TrainerProvider, useTrainerExtras, type PracticeSession, type TrainerExtras, type TrainerImporter, type TrainerProviderProps } from './TrainerProvider';
 import { useTrainer, type TrainerController } from './trainerContext';
 import { MAX_ATTEMPTS_PER_PHRASE } from './trainerReducer';
+import { clearSkillsStore, emptySkillsStore, loadSkillsStore, recordSkillsSession, saveSkillsStore } from '../skills/progress/store';
+import { breathSession, earSession } from '../skills/progress/testKit';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -833,6 +835,21 @@ describe('export and import', () => {
     expect((await targetStore.getClip('fake-clip'))?.audioMissing).toBe(false);
     expect(target.c.queue.length).toBe(5);
     await expect(target.c.relinkClip('fake-clip', makeFakePreparedClip())).rejects.toThrow(/already has its audio/);
+  });
+
+  it('the backup carries the Skills practice history and an import brings it back', async () => {
+    let skills = recordSkillsSession(emptySkillsStore(), earSession([{ semitones: 7, correct: true }], 0, 'skills-e'));
+    skills = recordSkillsSession(skills, breathSession({ hissSec: 21 }, 1, 'skills-b'));
+    saveSkillsStore(skills);
+    const h = await mount({ props: { store: await seededStore() } });
+    const text = await (await act1(() => h.c.exportLibrary())).text();
+    expect(JSON.parse(text).skills.sessions).toHaveLength(2);
+    clearSkillsStore();
+    const r = await act1(() => h.c.importLibrary(new File([text], 'b.json')));
+    expect(r).toEqual({ added: 0, updated: 0, warnings: [], skillsAdded: 2 });
+    expect(loadSkillsStore().sessions.map((s) => s.id)).toEqual(['skills-e', 'skills-b']);
+    expect(loadSkillsStore().bests.hissSec?.value).toBe(21);
+    clearSkillsStore();
   });
 
   it('importing the same backup again adds nothing and duplicates no attempts', async () => {

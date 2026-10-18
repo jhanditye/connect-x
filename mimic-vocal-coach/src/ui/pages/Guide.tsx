@@ -11,6 +11,8 @@ import { importWords, ISOLATE_LIMIT_TEXT, isolatedToneNote } from '../../trainer
 import { isDesktopKind, platformKind, type PlatformKind } from '../../pwa/platform';
 import { currentAddress, dataStaysHereText, deviceNoun, headphoneAdvice, interruptionText, micDistanceText, onGithubPages, onLocalServer, tapVerb } from '../../pwa/words';
 import { DesktopInstallCard } from '../components/InstallCard';
+import { BREATH_SAFETY_NOTES } from '../../skills/theory/breath';
+import { INTERVALS, INTERVAL_SONG_HINTS } from '../../skills/theory/intervals';
 import type { VoiceType } from '../../types';
 
 const SECTIONS = [
@@ -24,6 +26,7 @@ const SECTIONS = [
   { id: 'guide-modes', title: 'Sing along, or listen then sing' },
   { id: 'guide-headphones', title: 'Headphones and AirPods' },
   { id: 'guide-trainer-scores', title: 'What the Trainer scores, and what it cannot hear' },
+  { id: 'guide-skills', title: 'Skills: cents, intervals, scale degrees and breath' },
   { id: 'guide-profiles', title: 'How the singer profiles were made' },
   { id: 'guide-health', title: 'Look after your voice' },
   { id: 'guide-privacy', title: 'Privacy' },
@@ -475,6 +478,80 @@ export function GuidePage(props: { /** Which device the words are for; the real 
           </p>
           <p>
             Fixes never ask for more volume or for rasp. If something feels tight, stop and rest.
+          </p>
+        </section>
+
+        <section id="guide-skills" aria-labelledby="guide-skills-h">
+          <h2 id="guide-skills-h" tabIndex={-1}>Skills: cents, intervals, scale degrees and breath</h2>
+          <p>
+            The Skills tab is for the fundamentals rather than for sounding like someone: landing notes in tune, hearing and singing intervals,
+            singing a line of scale degrees in one go, and breath control. It listens on this {noun} and keeps only the numbers, never the audio.
+          </p>
+          <h3>Cents</h3>
+          <p>
+            Pitch errors are measured in <strong>cents</strong>. 100 cents is one semitone (one piano key), so 50 cents is half way to the next
+            note and 25 cents is a quarter of a semitone. Most listeners start to hear a held note as out of tune somewhere around 10 to 25
+            cents. <strong>Strictness</strong> sets how close counts as in tune: Gentle 50 cents, Standard 25, Strict 15. A positive number
+            means sharp (too high), a negative one flat (too low).
+          </p>
+          <p>
+            Vibrato is fine: a held note is judged on the centre of its wobble, not on every peak. How you land (the first moment of the note)
+            is measured separately from how you hold it, so a small scoop shows up as a slow landing, not as a wrong note. Singing an octave
+            lower or higher than asked is not a mistake: the note name is what counts, and the result says “right note, different octave”.
+          </p>
+          <h3>Intervals</h3>
+          <p>An interval is the distance between two notes, counted in semitones:</p>
+          <table className="guide-table">
+            <thead>
+              <tr>
+                <th scope="col">Semitones</th>
+                <th scope="col">Short</th>
+                <th scope="col">Name</th>
+                <th scope="col">To hear it going up</th>
+              </tr>
+            </thead>
+            <tbody>
+              {INTERVALS.filter((i) => i.semitones >= 1 && i.semitones <= 12).map((i) => (
+                <tr key={i.semitones}>
+                  <td className="num">{i.semitones}</td>
+                  <td>{i.short}</td>
+                  <td>
+                    {i.name}
+                    {i.altName ? ` (${i.altName})` : ''}
+                  </td>
+                  <td>{INTERVAL_SONG_HINTS[i.semitones] ?? '–'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p>
+            When you sing an interval, the <strong>size of the jump</strong> is scored on its own, separately from where you started. That is the
+            skill that carries into real songs: if your first note is a little sharp and the jump is right, the jump scores well.
+          </p>
+          <h3>Scale degrees</h3>
+          <p>
+            In a key, the notes of the scale are numbered from the key note: 1 is the key note (do), then 2 re, 3 mi, 4 fa, 5 sol, 6 la, 7 ti, and
+            8 is the key note an octave up. Minor keys use the same numbers; in solfège their lowered notes are me (3), le (6) and te (7). A few
+            chords play first so your ear knows where 1 is, then you sing the line.
+          </p>
+          <p>
+            When you type a line, each number takes the octave closest to the note before it, so in “2 7 6 5” the 7 is just below the 2. Add{' '}
+            <span className="num">-</span> after a number for the octave below (“1 7- 1”) and <span className="num">+</span> for the octave above.
+          </p>
+          <h3>Breath</h3>
+          <p>
+            The breath exercises build a steady, unhurried airflow: paced breathing with a guide, a hiss test (a long, even “sss”), and a long
+            held note. Steadiness matters more than length.
+          </p>
+          <ul>
+            {BREATH_SAFETY_NOTES.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+          <p>
+            <strong>Limits:</strong> the scoring was tuned on synthetic voices with known pitches, not yet on many real singers. A noisy room or
+            a quiet voice gives “too quiet to score” rather than a made-up number. Use the numbers to watch yourself improve, alongside your own
+            ears and, ideally, a teacher’s.
           </p>
         </section>
 

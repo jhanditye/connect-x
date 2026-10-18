@@ -352,3 +352,64 @@ export function playPattern(
     },
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// Scheduling primitive for the Skills prompts (src/skills/audio/prompts.ts). Additive: nothing above uses it.
+
+/** One tone for scheduleTones, timed from the schedule's start. */
+export interface ScheduledTone {
+  /** Frequency in Hz; several values glide through them evenly over the tone. */
+  hz: number | number[];
+  /** Seconds after the schedule's start. */
+  startSec: number;
+  durSec: number;
+  /** Voice peak 0..1 before the master volume (playNote uses 0.8). */
+  peak?: number;
+  /** 'pluck' (default, piano-like) or 'organ' (slow attack, steady). */
+  envelope?: 'pluck' | 'organ';
+}
+
+export interface ToneSchedule {
+  /** The shared context the tones are scheduled on (read its clock to follow the playback). */
+  readonly context: AudioContext;
+  /** Context time of startSec 0. */
+  readonly t0: number;
+  /** Context time at which the last tone's release has finished. */
+  readonly endTime: number;
+  /** Fades the bus out over 40 ms, stops every voice and disconnects the bus. Safe to call more than once. */
+  stop(): void;
+}
+
+/**
+ * Schedules many piano-voice tones on the shared context's clock, on one master bus at `volume` (default 0.35),
+ * starting `leadSec` (default 0.08 s) from now. Null when this browser cannot play tones.
+ */
+export function scheduleTones(tones: readonly ScheduledTone[], opts: { volume?: number; leadSec?: number } = {}): ToneSchedule | null {
+  const ac = getContext();
+  if (!ac) return null;
+  const master = masterBus(ac, opts.volume ?? DEFAULT_VOLUME);
+  const t0 = ac.currentTime + Math.max(0, opts.leadSec ?? 0.08);
+  const voices: Voice[] = [];
+  let endTime = t0;
+  for (const tone of tones) {
+    const freqs = (Array.isArray(tone.hz) ? tone.hz : [tone.hz]).filter((f) => Number.isFinite(f) && f > 0);
+    if (freqs.length === 0 || !Number.isFinite(tone.startSec) || !Number.isFinite(tone.durSec)) continue;
+    const peak = Math.min(1, Math.max(0, tone.peak ?? 0.8));
+    const v = scheduleVoice(ac, master, t0 + Math.max(0, tone.startSec), Math.max(0.05, tone.durSec), freqs, peak, tone.envelope === 'organ' ? ORGAN : PLUCK);
+    if (v) {
+      voices.push(v);
+      endTime = Math.max(endTime, v.end);
+    }
+  }
+  let stopped = false;
+  return {
+    context: ac,
+    t0,
+    endTime,
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      silence(ac, master, voices);
+    },
+  };
+}

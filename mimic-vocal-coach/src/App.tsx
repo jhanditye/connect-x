@@ -18,6 +18,7 @@ import { PracticePage } from './ui/pages/Practice';
 import { ProgressPage } from './ui/pages/Progress';
 import { ResultsPage } from './ui/pages/Results';
 import { SettingsPage } from './ui/pages/Settings';
+import { SkillsPage } from './ui/skills/SkillsPage';
 import { StudioPage } from './ui/pages/Studio';
 import { TrainerPage } from './ui/pages/Trainer';
 
@@ -26,6 +27,8 @@ function Page() {
   switch (app.route) {
     case 'trainer':
       return <TrainerPage />;
+    case 'skills':
+      return <SkillsPage settings={app.state.settings} />;
     case 'more':
       return <MorePage />;
     case 'studio':

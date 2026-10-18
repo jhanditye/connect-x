@@ -1,6 +1,6 @@
-// App chrome: top bar (wordmark + desktop nav) and the phone tab bar. The phone bar has five tabs (Trainer, Studio, Results,
-// Progress, More); Practice, Guide and Settings sit under More there. The desktop bar lists every page. CSS shows one or the
-// other at the 720px breakpoint.
+// App chrome: top bar (wordmark + desktop nav) and the phone tab bar. The phone bar has five tabs (Trainer, Skills, Studio,
+// Progress, More); Results, Practice, Guide and Settings sit under More there. The desktop bar lists every page. CSS shows one
+// or the other at the 720px breakpoint.
 
 import { ROUTE_LABELS, routeHash, tabFor, TAB_ROUTES, TOP_ROUTES, type Route } from '../../state/routing';
 import { Icon } from './Icon';
@@ -12,7 +12,7 @@ interface NavProps {
 
 function NavItems(props: NavProps & { variant: 'top' | 'tabs' }) {
   const routes = props.variant === 'tabs' ? TAB_ROUTES : TOP_ROUTES;
-  // On a phone the More tab stands for Practice, Guide and Settings.
+  // On a phone the More tab stands for Results, Practice, Guide and Settings.
   const here = props.variant === 'tabs' ? tabFor(props.route) : props.route;
   return (
     <ul className={`nav-list nav-list--${props.variant}`}>

@@ -1,0 +1,544 @@
+/* Singing screens of the Skills section (src/ui/skills/sing). Tokens only (src/styles/tokens.css); works from a
+   390 px phone to a 1440 px Mac window. */
+
+.sing-screen {
+  display: grid;
+  gap: var(--space-4);
+  max-width: 860px;
+  min-width: 0;
+}
+.sing-head .sing-back {
+  margin-bottom: var(--space-2);
+}
+.sing-embedded-head {
+  display: grid;
+  gap: var(--space-1);
+}
+.sing-card {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  min-width: 0;
+}
+.sing-item {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.sing-progress {
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.sing-instruction {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.sing-key {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.sing-big {
+  font-family: var(--font-display);
+  font-size: clamp(2.6rem, 9vw, 4.2rem);
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+.sing-big--pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+.sing-big-faint {
+  color: var(--ink-3);
+}
+.sing-strictness {
+  font-size: var(--fs-sm);
+}
+
+/* Status line while a take runs */
+.sing-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  min-height: 44px;
+}
+.sing-status-phase {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.sing-status--idle .sing-status-phase {
+  font-size: var(--fs-md);
+  font-weight: 500;
+  color: var(--ink-2);
+}
+.sing-status--listening .sing-status-phase {
+  color: var(--rec);
+}
+.sing-status-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  font-weight: 500;
+}
+.sing-status-hint {
+  flex-basis: 100%;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}
+.sing-status-warn {
+  color: var(--warn);
+}
+
+/* Needle */
+.sing-needle {
+  display: grid;
+  gap: var(--space-2);
+}
+.sing-needle-scale {
+  position: relative;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.sing-needle-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--good) 22%, transparent);
+}
+.sing-needle-centre {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--good);
+}
+.sing-needle-mark {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 6px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--ink-2);
+  transition: left 60ms linear;
+}
+.sing-needle-mark--in {
+  background: var(--good);
+}
+.sing-needle-tick {
+  position: absolute;
+  bottom: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+.sing-needle-tick--lo {
+  left: var(--space-2);
+}
+.sing-needle-tick--hi {
+  right: var(--space-2);
+}
+.sing-needle-text {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sing-needle-text--in {
+  color: var(--good);
+}
+
+/* Hold progress / level */
+.sing-hold,
+.sing-level {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.sing-hold-fill,
+.sing-level-fill {
+  display: block;
+  height: 100%;
+  background: var(--good);
+  transition: width 80ms linear;
+}
+.sing-level {
+  height: 14px;
+}
+.sing-level-fill {
+  background: var(--accent);
+}
+
+/* Trace */
+.sing-trace {
+  width: 100%;
+  height: 160px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.sing-trace-band {
+  fill: color-mix(in srgb, var(--good) 16%, transparent);
+}
+.sing-trace-line {
+  stroke: var(--grid-strong);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.sing-trace-target--active .sing-trace-line {
+  stroke: var(--accent);
+}
+.sing-trace-pitch {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.sing-mini-trace {
+  width: 100%;
+  max-width: 420px;
+  height: 60px;
+}
+
+/* Degree strip */
+.sing-degrees {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.sing-degree {
+  display: grid;
+  grid-template-rows: 12px auto 12px auto;
+  justify-items: center;
+  min-width: 56px;
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.sing-degree-text {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 6vw, 2.6rem);
+  line-height: 1;
+}
+.sing-degree-mark {
+  font-size: 12px;
+  line-height: 12px;
+  color: var(--ink-2);
+  letter-spacing: 2px;
+}
+.sing-degree-cents {
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+.sing-degree--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.sing-acc--within {
+  border-color: var(--good);
+}
+.sing-acc--near {
+  border-color: var(--warn);
+}
+.sing-acc--off {
+  border-color: var(--bad);
+}
+.sing-acc--none {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+.sing-degree.sing-acc--within {
+  background: color-mix(in srgb, var(--good) 12%, var(--surface));
+}
+.sing-degree.sing-acc--near {
+  background: color-mix(in srgb, var(--warn) 12%, var(--surface));
+}
+.sing-degree.sing-acc--off {
+  background: color-mix(in srgb, var(--bad) 10%, var(--surface));
+}
+td.sing-acc--within {
+  color: var(--good);
+  font-weight: 600;
+}
+td.sing-acc--near {
+  color: var(--warn);
+  font-weight: 600;
+}
+td.sing-acc--off {
+  color: var(--bad);
+  font-weight: 600;
+}
+
+/* Results */
+.sing-result {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.sing-result-title {
+  font-size: var(--fs-xl);
+}
+.sing-result-title:focus {
+  outline: none;
+}
+.sing-result-title:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.sing-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+}
+.sing-stat {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  border-left: 4px solid var(--line);
+}
+.sing-stat.sing-acc--within {
+  border-left-color: var(--good);
+}
+.sing-stat.sing-acc--near {
+  border-left-color: var(--warn);
+}
+.sing-stat.sing-acc--off {
+  border-left-color: var(--bad);
+}
+.sing-stat dd {
+  margin: 0;
+}
+.sing-stat-label {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.sing-stat-value {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.sing-stat-note {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.sing-info {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+.sing-findings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.sing-finding {
+  padding: var(--space-2) var(--space-3);
+  border-left: 4px solid var(--line);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.sing-finding--good {
+  border-left-color: var(--good);
+}
+.sing-finding--work {
+  border-left-color: var(--warn);
+}
+.sing-finding--info {
+  border-left-color: var(--accent);
+}
+.sing-table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.sing-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+.sing-table th,
+.sing-table td {
+  text-align: left;
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--line);
+}
+.sing-table thead th {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+/* Sequence chooser */
+.sing-chooser {
+  display: grid;
+  gap: var(--space-3);
+}
+.sing-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.sing-preset-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.sing-type .input-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.sing-type .text-input {
+  flex: 1 1 200px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-lg);
+}
+.sing-type .field-error:empty {
+  display: none;
+}
+.sing-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-5);
+}
+.sing-details summary,
+.sing-options summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-weight: 600;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.sing-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+}
+.sing-check--disabled {
+  color: var(--ink-3);
+}
+
+/* Breath */
+.sing-safety {
+  padding: var(--space-3) var(--space-4);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: var(--fs-sm);
+}
+.sing-safety-title {
+  font-weight: 700;
+  margin-bottom: var(--space-1);
+}
+.sing-safety ul {
+  margin: 0;
+  padding-left: 1.2em;
+  display: grid;
+  gap: 2px;
+}
+.sing-breath {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: center;
+  text-align: center;
+}
+.sing-breath-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(260px, 70vw);
+  aspect-ratio: 1;
+}
+.sing-breath-circle {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 3px solid var(--accent);
+  transform: scale(0.45);
+  transition-property: transform;
+  transition-timing-function: linear;
+}
+.sing-breath--suspend .sing-breath-circle {
+  border-color: var(--reg-mix);
+}
+.sing-breath--exhale .sing-breath-circle {
+  border-color: var(--reg-head);
+}
+.sing-breath--rest .sing-breath-circle {
+  border-style: dashed;
+}
+.sing-breath--still .sing-breath-circle {
+  transform: none;
+  transition: none;
+}
+.sing-breath-count {
+  position: relative;
+  font-family: var(--font-display);
+  font-size: var(--fs-3xl);
+}
+.sing-breath-words {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.sing-breath .sing-hold {
+  width: min(320px, 100%);
+}
+.sing-part-nav {
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sing-breath-circle {
+    transform: none !important;
+    transition: none !important;
+  }
+  .sing-needle-mark,
+  .sing-hold-fill,
+  .sing-level-fill {
+    transition: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .sing-card {
+    padding: var(--space-4);
+  }
+  .sing-degree {
+    min-width: 44px;
+    padding: var(--space-1);
+  }
+  .sing-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+  .sing-stat-value {
+    font-size: var(--fs-lg);
+  }
+  .sing-table th,
+  .sing-table td {
+    padding: var(--space-1);
+  }
+}

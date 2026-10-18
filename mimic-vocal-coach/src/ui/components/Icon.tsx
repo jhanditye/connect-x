@@ -45,6 +45,8 @@ const PATHS: Record<IconName, string[]> = {
   save: ['M5 4.5h11l3.5 3.5v11.5H5z', 'M8.5 4.5v5h6v-5', 'M8.5 19.5v-5h7v5'],
   close: ['M6 6l12 12', 'M18 6L6 18'],
   trainer: ['M4 10v4', 'M8 6.5v11', 'M12 9v6', 'M16 4.5v15', 'M20 9.5v5'],
+  // Skills: a staircase of scale degrees climbing to a target note.
+  skills: ['M3.5 20h4.25v-4h4.25v-4h4.25v-4h2.5'],
   more: [],
   pause: ['M8.5 5v14', 'M15.5 5v14'],
   add: ['M12 5v14', 'M5 12h14'],
@@ -83,6 +85,7 @@ const CIRCLES: Partial<Record<IconName, [number, number, number][]>> = {
   ],
   info: [[12, 12, 9]],
   help: [[12, 12, 9]],
+  skills: [[19.5, 5.5, 2]],
 };
 
 const FILLED: Partial<Record<IconName, true>> = { stop: true, play: true };

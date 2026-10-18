@@ -8,6 +8,8 @@ import { TrainerProvider } from '../../state/TrainerProvider';
 import { createMemoryClipStore, type ClipStore } from '../../storage/clips';
 import { makeFakeClip } from '../../testing/trainerFixtures';
 import { SettingsPage } from './Settings';
+import { emptySkillsStore, loadSkillsStore, recordSkillsSession, saveSkillsStore, subscribeSkillsStore } from '../../skills/progress/store';
+import { earSession } from '../../skills/progress/testKit';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -57,6 +59,21 @@ describe('Settings: Delete everything', () => {
     expect(container.textContent).toContain('All data cleared.');
     expect(container.querySelector('.field-error')).toBeNull();
     expect(await store.usage()).toEqual({ clips: 0, attempts: 0, audioBytes: 0 });
+  });
+
+  it('also deletes the Skills practice history and tells open Skills screens', async () => {
+    saveSkillsStore(recordSkillsSession(emptySkillsStore(), earSession([{ semitones: 7, correct: true }], 0, 'skills-e1')));
+    expect(localStorage.getItem('mimic:v1:skills')).not.toBeNull();
+    let told = 0;
+    const off = subscribeSkillsStore(() => told++);
+    await act(async () => button(/^Delete everything, including settings$/).click());
+    await act(async () => button(/Yes, delete everything/).click());
+    await settle();
+    off();
+    expect(container.textContent).toContain('All data cleared.');
+    expect(localStorage.getItem('mimic:v1:skills')).toBeNull();
+    expect(loadSkillsStore().sessions).toEqual([]);
+    expect(told).toBeGreaterThanOrEqual(1);
   });
 
   it('does not claim success when the clips could not be deleted: it names what is left, keeps the question open and works on a retry', async () => {
