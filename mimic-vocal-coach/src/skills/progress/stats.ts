@@ -57,6 +57,11 @@ function cloneStats(s: SkillsStats): SkillsStats {
   return { hear: { ...s.hear }, sing: { ...s.sing }, hearDegree: { ...s.hearDegree }, degrees: { ...s.degrees }, registers: { ...s.registers } };
 }
 
+/** A note this far from the target is a different note, not a tuning error (same as the scorers' WRONG_NOTE_CENTS). */
+export const WRONG_NOTE_CENTS = 70;
+/** Sung-interval errors are capped at this for the running average (a semitone). */
+export const WRONG_INTERVAL_CAP_CENTS = 100;
+
 /** Stats after one more session (pure; `stats` is not changed). */
 export function applySessionToStats(stats: SkillsStats, session: SkillsSession): SkillsStats {
   const out = cloneStats(stats);
@@ -64,12 +69,15 @@ export function applySessionToStats(stats: SkillsStats, session: SkillsSession):
   switch (session.kind) {
     case 'pitch-test':
       for (const n of session.notes) {
-        if (n.status === 'ok' && n.heldCents !== null) out.registers[n.register] = updateCents(out.registers[n.register], n.heldCents, at);
+        // A different note (70+ cents away) is a listening slip, not a register's tuning: kept out.
+        if (n.status === 'ok' && n.heldCents !== null && Math.abs(n.heldCents) < WRONG_NOTE_CENTS) {
+          out.registers[n.register] = updateCents(out.registers[n.register], n.heldCents, at);
+        }
       }
       break;
     case 'match':
       for (const a of session.attempts) {
-        if (a.heldCents !== null) out.registers[a.register] = updateCents(out.registers[a.register], a.heldCents, at);
+        if (a.heldCents !== null && Math.abs(a.heldCents) < WRONG_NOTE_CENTS) out.registers[a.register] = updateCents(out.registers[a.register], a.heldCents, at);
       }
       break;
     case 'ear':
@@ -87,13 +95,18 @@ export function applySessionToStats(stats: SkillsStats, session: SkillsSession):
       for (const i of session.items) {
         if (i.status !== 'ok' || i.intervalCents === null) continue;
         const k = intervalKey(i.semitones, i.direction);
-        out.sing[k] = updateCents(out.sing[k], i.intervalCents, at);
+        // A different interval (wrong size, wrong direction or wrong octave) counts as a semitone off: it still marks
+        // the interval as weak, but one 1200-cent slip cannot swamp the average (and is never folded to "in tune").
+        const c = Math.max(-WRONG_INTERVAL_CAP_CENTS, Math.min(WRONG_INTERVAL_CAP_CENTS, i.intervalCents));
+        out.sing[k] = updateCents(out.sing[k], c, at);
       }
       break;
     case 'sequence':
       for (const item of session.items) {
         if (item.status !== 'ok') continue;
         for (const p of item.perNote) {
+          // Wrong notes are not a degree's tuning habit (the screens leave them out too; this guards old sessions).
+          if (!Number.isFinite(p.cents) || Math.abs(p.cents) >= WRONG_NOTE_CENTS) continue;
           const k = degreeKey(item.scaleMode, p.degree);
           out.degrees[k] = updateCents(out.degrees[k], p.cents, at);
         }

@@ -230,9 +230,17 @@ export function scoreHiss(samples: Float32Array, sampleRate: number): HissScore 
   };
 }
 
+/** Long-tone pitch frames further than this (semitones) from the tone's median are tracker slips, not wobble. */
+const LONG_TONE_OUTLIER_ST = 1.5;
+/** More than this share of slipped frames: too noisy to judge steadiness. */
+const LONG_TONE_MAX_DROPPED_SHARE = 0.25;
+/** The end of a long tone left out of the loudness SD (a natural taper). */
+const LONG_TONE_TAIL_SEC = 0.8;
+
 /**
  * Long tone: the longest voiced run (gaps up to 150 ms bridged). Pitch steadiness = SD of the 200 ms-smoothed pitch
- * after the first 300 ms (vibrato not counted); loudness steadiness = SD of the 100 ms-smoothed level.
+ * after the first 300 ms (vibrato not counted); loudness steadiness = SD of the 100 ms-smoothed level
+ * (without the last 0.8 s, where a natural taper is fine). Tracker slips over 1.5 semitones are dropped first.
  */
 export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: { a4Hz: number }): LongToneScore {
   const fr = analyseTake(samples, sampleRate, opts.a4Hz);
@@ -254,15 +262,40 @@ export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: {
   const [a, b] = best;
   const hop = fr.hop;
   const durationSec = (b - a) * hop;
-  const sm = smoothRange(fr.midi, a, b, Math.max(3, Math.round(SMOOTH_SEC / hop) | 1));
+  // Tracker slips (a soft tone in a noisy room can read an octave or a 5th off for a few frames) are dropped before
+  // smoothing, as buildNote does for held notes: frames more than LONG_TONE_OUTLIER_ST from the run's median.
+  const raw = fr.midi.subarray(a, b);
+  const med = median(Array.from(raw).filter((m) => !Number.isNaN(m)));
+  const clean = new Float64Array(raw.length);
+  let voicedN = 0;
+  let dropped = 0;
+  for (let k = 0; k < raw.length; k++) {
+    const m = raw[k];
+    if (Number.isNaN(m)) clean[k] = NaN;
+    else {
+      voicedN++;
+      if (Math.abs(m - med) > LONG_TONE_OUTLIER_ST) {
+        clean[k] = NaN;
+        dropped++;
+      } else clean[k] = m;
+    }
+  }
+  const tooNoisy = voicedN > 0 && dropped / voicedN > LONG_TONE_MAX_DROPPED_SHARE;
+  const sm = smoothRange(clean, 0, clean.length, Math.max(3, Math.round(SMOOTH_SEC / hop) | 1));
   const skip = Math.min(Math.round(LONG_TONE_SKIP_START_SEC / hop), Math.floor(sm.length / 4));
-  const pitchSdCents = sdCents(sm.subarray(skip, Math.max(skip + 1, sm.length - Math.round(0.15 / hop))));
+  const pitchSdRaw = sdCents(sm.subarray(skip, Math.max(skip + 1, sm.length - Math.round(0.15 / hop))));
+  const pitchSdCents = tooNoisy || !Number.isFinite(pitchSdRaw) ? null : pitchSdRaw;
   const lv: number[] = [];
   for (let k = a; k < b; k++) lv.push(fr.voiced[k] ? fr.rmsDb[k] : NaN);
   const lvSm = movingMean(lv, Math.max(1, Math.round(LEVEL_SMOOTH_SEC / hop)));
-  const loudnessSdDb = std(lvSm.subarray(skip, Math.max(skip + 1, lvSm.length - Math.round(0.15 / hop))));
+  // A natural taper at the end is not uneven volume: the last stretch (up to 0.8 s) is left out of the loudness SD.
+  const tail = Math.min(Math.round(LONG_TONE_TAIL_SEC / hop), Math.floor(lvSm.length * 0.15));
+  const loudnessSdDb = std(lvSm.subarray(skip, Math.max(skip + 1, lvSm.length - Math.max(tail, Math.round(0.15 / hop)))));
   const midi = heldPitch(fr.midi.subarray(a + skip, b), undefined, hop);
   const findings: Finding[] = [];
+  if (pitchSdCents === null) {
+    findings.push({ tone: 'info', text: `${durationSec.toFixed(1)} seconds. The pitch could not be followed cleanly (a noisy room or a very soft tone), so its steadiness is not judged this time.` });
+  } else {
   const words =
     pitchSdCents <= LONG_TONE_VERY_STEADY_CENTS
       ? 'very steady'
@@ -272,6 +305,7 @@ export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: {
           ? 'a little wobbly'
           : 'wobbly';
   findings.push({ tone: pitchSdCents <= LONG_TONE_STEADY_CENTS ? 'good' : 'work', text: `${durationSec.toFixed(1)} seconds, pitch ${words} (it moved about ${Math.round(pitchSdCents)} cents, vibrato not counted).` });
+  }
   if (loudnessSdDb > HISS_STEADY_DB) findings.push({ tone: 'work', text: `The volume varied by about ${loudnessSdDb.toFixed(1)} dB. Keep a steady medium volume all the way.` });
   else findings.push({ tone: 'good', text: `Even volume (varied ${loudnessSdDb.toFixed(1)} dB).` });
   return {

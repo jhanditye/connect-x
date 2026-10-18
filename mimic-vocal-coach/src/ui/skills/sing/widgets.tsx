@@ -58,11 +58,19 @@ export function PitchNeedle(props: { centsNow: number | null; toleranceCents: nu
  * away are folded onto the view so a man singing a woman's line still sees his trace. Decorative: the needle and
  * the status text carry the numbers.
  */
-export function LiveTrace(props: { trace: readonly LiveReading[]; targets: readonly number[]; toleranceCents: number; windowSec?: number; active?: number | null }) {
+/**
+ * The live pitch trace. With `hideTargets` (tests and read-by-ear takes) no target band is drawn and the vertical
+ * scale follows the voice itself, so the screen does not steer the singer onto the note: they sing by ear and the
+ * targets are revealed in the result.
+ */
+export function LiveTrace(props: { trace: readonly LiveReading[]; targets: readonly number[]; toleranceCents: number; windowSec?: number; active?: number | null; hideTargets?: boolean }) {
   const W = 600;
   const H = 160;
   const win = props.windowSec ?? 6;
-  const targets = props.targets.filter((t) => Number.isFinite(t));
+  const shown = props.hideTargets ? [] : props.targets.filter((t) => Number.isFinite(t));
+  const sungMidis = props.trace.map((r) => r.midi).filter((m): m is number => m !== null && Number.isFinite(m));
+  const voiceMid = sungMidis.length ? sungMidis[sungMidis.length - 1] : 63;
+  const targets = props.hideTargets ? [voiceMid - 3, voiceMid + 3] : shown;
   const lo = (targets.length ? Math.min(...targets) : 57) - 3;
   const hi = (targets.length ? Math.max(...targets) : 69) + 3;
   const last = props.trace.length ? props.trace[props.trace.length - 1].t : 0;
@@ -88,7 +96,7 @@ export function LiveTrace(props: { trace: readonly LiveReading[]; targets: reado
   if (cur.length > 1) segs.push(cur.join(' '));
   return (
     <svg className="sing-trace" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden="true" focusable="false">
-      {targets.map((t, i) => (
+      {shown.map((t, i) => (
         <g key={`${i}-${t}`} className={props.active === i ? 'sing-trace-target sing-trace-target--active' : 'sing-trace-target'}>
           <rect x={0} width={W} y={y(t + tol)} height={Math.max(1, y(t - tol) - y(t + tol))} className="sing-trace-band" />
           <line x1={0} x2={W} y1={y(t)} y2={y(t)} className="sing-trace-line" />
@@ -202,7 +210,7 @@ export function phaseText(phase: TakePhase, kind: PlatformKind): string {
     case 'scoring':
       return 'Scoring…';
     default:
-      return isDesktopKind(kind) ? 'Press Return to start' : 'Tap Start when you are ready';
+      return isDesktopKind(kind) ? 'Press Return to start' : 'Tap the button below when you are ready';
   }
 }
 

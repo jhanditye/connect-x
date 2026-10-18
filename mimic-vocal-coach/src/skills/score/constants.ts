@@ -55,9 +55,21 @@ export const ALIGN_OCTAVE_SLIP_COST = 1;
 /** Whole-take octave offsets tried. */
 export const OCTAVE_OFFSETS: readonly number[] = [0, -1, 1, -2, 2];
 
-/** Drift finding: at least this many cents over the line, with at least DRIFT_MIN_NOTES matched notes. */
+/** Drift finding: at least this many cents over the line, with at least DRIFT_MIN_NOTES matched notes (on 4 notes one
+ * flat last note reads as a slide). */
 export const DRIFT_FINDING_CENTS = 20;
-export const DRIFT_MIN_NOTES = 4;
+export const DRIFT_MIN_NOTES = 5;
+
+/** A note this far (or further) from the written one is a different note, not a tuning error: it is named, counted
+ * separately and kept out of the tuning averages (70 cents is nearer the neighbouring semitone than the target). */
+export const WRONG_NOTE_CENTS = 70;
+/** "Right note, other octave" only when the pitch-class error is within this; otherwise it is a different note. */
+export const OCTAVE_MATCH_CENTS = 150;
+/** A whole line this far from the key with every note within LINE_SHIFT_SPREAD_CENTS of that shift: right shape, wrong key. */
+export const LINE_SHIFT_CENTS = 40;
+export const LINE_SHIFT_SPREAD_CENTS = 20;
+/** Sung intervals: a single sung note is split in two when its halves differ by at least this (a narrow semitone). */
+export const FORCE_SPLIT_MIN_CENTS = 30;
 
 /** Wrong direction in an interval: the sung step must move at least this far the wrong way. */
 export const WRONG_DIRECTION_CENTS = 50;
@@ -101,7 +113,13 @@ export const LONG_TONE_WOBBLY_CENTS = 35;
 export const LEVEL_SMOOTH_SEC = 0.1;
 export const TRACE_STEP_SEC = 0.1;
 
-/** Live lock-in: readings averaged over this window; a voicing dropout longer than DROPOUT resets the hold. */
-export const LOCK_AVERAGE_SEC = 0.2;
+/**
+ * Live lock-in: readings averaged over this window; a voicing dropout longer than DROPOUT resets the hold. 0.5 s
+ * covers two or more whole cycles of any vibrato from 4 to 7 Hz, so a centred ±100-cent vibrato leaves at most about
+ * 13 cents in the average (a 200 ms window left up to 25 and a centred vibrato often never locked under Strict).
+ */
+export const LOCK_AVERAGE_SEC = 0.5;
+/** Time to land uses the same averaging window, for the same reason. */
+export const LAND_SMOOTH_SEC = 0.5;
 export const LOCK_DROPOUT_SEC = 0.15;
 export const LOCK_HOLD_SEC = 1.5;

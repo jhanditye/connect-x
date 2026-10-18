@@ -11,15 +11,22 @@
 //
 // Octave rule for unmarked degrees
 // - The first degree sits in the home octave: 1..7 above the tonic (8 = the octave).
-// - Each later degree takes the octave nearest the previous note. On an exact tie (a tritone) it takes the octave
-//   nearer the line's first note; if that is a tie too, the direction of the overall line (last typed degree vs
-//   first); if the line is flat, down.
+// - Each later degree stays in the home octave (1 up to 8) when the step from the previous note is a 5th or less, so
+//   "1 5" rises a 5th, "1 5 8 5 1" is the usual arpeggio and "3 6 2 5 1" stays between 1 and 6.
+// - A step that would be wider than a 5th crosses into the next octave instead: the degree takes the octave nearest
+//   the previous note ("2 7 6 5": the 7 is just below the 2; "6 7 1 2": the 1 is the 8 above). On an exact tie (a
+//   tritone) it takes the octave nearer the line's first note; if that is a tie too, the direction of the overall
+//   line (last typed degree vs first); if the line is flat, down.
+// - In a line that contains an 8, an unmarked 1 is always the home tonic ("1 8 1", "8 5 1", "5 8 1" come home).
+// - Marks always win: "1 5-" is the 5 below, "1 5+" the 5 an octave above the home one.
 
 import type { Degree, ScaleMode, SeqNote, SequenceParse, WrittenDegree } from '../types';
 import { SCALE_STEPS, degreeSemitones } from './scales';
 
 export const MAX_SEQUENCE_NOTES = 16;
 export const MAX_OCTAVE_MARKS = 2;
+/** An unmarked degree stays in the home octave when the step there is at most this many semitones (a 5th). */
+export const HOME_WINDOW_MAX_STEP = 7;
 
 export const SEQUENCE_EXAMPLE = '7 6 5 4 3 2';
 
@@ -118,6 +125,7 @@ export function placeDegrees(tokens: readonly { written: WrittenDegree; marks: n
   const notes: SeqNote[] = [];
   if (tokens.length === 0) return notes;
   const overall = Math.sign(lineIndex(tokens[tokens.length - 1]) - lineIndex(tokens[0]));
+  const hasEight = tokens.some((t) => t.written === 8);
   let first = 0;
   let prev = 0;
   tokens.forEach((t, idx) => {
@@ -129,6 +137,9 @@ export function placeDegrees(tokens: readonly { written: WrittenDegree; marks: n
       octave = writtenOctave + (t.marks ?? 0);
     } else if (idx === 0) {
       octave = writtenOctave;
+    } else if (Math.abs(step - prev) <= HOME_WINDOW_MAX_STEP || (hasEight && t.written === 1)) {
+      // Stays in the home octave (1 up to 8).
+      octave = 0;
     } else {
       // Nearest octave to the previous note; candidates around it.
       const base = Math.floor((prev - step) / 12);

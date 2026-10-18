@@ -41,8 +41,9 @@ wins. Lines are fitted with 1 semitone of margin when possible, centred; nothing
 
 **Sequence syntax.** Degrees 1-8, separated by spaces or commas (digits may run together: "765432"). Octave marks
 after a degree: `-` or `_` below, `+` or `'` above, up to 2. Marks are absolute (relative to the home octave), and 8 is
-always the upper tonic. Unmarked: the first degree sits 0-11 semitones above the tonic; each later one takes the octave
-nearest the previous note; an exact tie (tritone) goes to the octave nearer the first note, then the line's overall
+always the upper tonic. Unmarked: the first degree sits 0-11 semitones above the tonic; each later one stays in the
+home octave (1 up to 8) when that step is a 5th (7 semitones) or less, and otherwise takes the octave nearest the
+previous note; in a line containing an 8 an unmarked 1 is always the home tonic ("1 8 1", "8 5 1"); an exact tie (tritone) goes to the octave nearer the first note, then the line's overall
 direction (last vs first typed degree), then down. Errors are sentences with a character position (0, 9, 10, letters,
 sharps/flats, marks before a degree, more than 16 notes, span over 2 octaves).
 
@@ -116,8 +117,8 @@ interface SkillCapture { readonly analyser: AnalyserNode | null; readonly elapse
 Flow per item: play prompt -> wait `PROMPT_TIMING.beforeCaptureSec` -> `startSkillCapture` -> "Sing now" with live
 needle/trace -> stop by button, Return/Space (Mac keyboard; ignored while a text field has focus), auto-stop, or cap.
 The microphone is never open while a prompt plays. Auto-stop rules: pitch test `held-note` {holdSec 1.5, steadyCents
-50, capSec 5}; match `manual` {capSec 20} ended by the lock tracker; intervals `notes` {2, silenceSec 1.2, capSec 8};
-sequences `notes` {n, 1.2, min(30, 4 + 1.5n)}; hiss `sustain` {0.8, 90}; long tone `sustain` {0.8, 60}. Live note
+50, capSec 5}; match `notes` {1, silenceSec 1.5, capSec 20}, ended early by the lock tracker; intervals `notes` {2, silenceSec 1.2, capSec 8};
+sequences `notes` {n, 1.2, min(45, 4 + 3n)}; hiss `sustain` {0.8, 90}; long tone `sustain` {0.8, 60}. Live note
 count: >= 150 ms voiced within 50 cents; a new note after a > 70 cent move held 120 ms or >= 80 ms unvoiced. Silence =
 rmsDb < max(-55, floor + 6).
 

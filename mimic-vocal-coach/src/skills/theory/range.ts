@@ -2,8 +2,10 @@
 // outside the singer's comfortable range.
 //
 // The top of the range is a few semitones (COMFORT_ABOVE_PASSAGGIO) above the start of the voice type's passaggio zone
-// (src/analysis/passaggio.ts), so fundamentals are practised where the voice is easy; the bottom is a conservative low
-// note per voice type. Both are approximate: Settings can override them (SkillsPrefs.rangeOverride).
+// (src/analysis/passaggio.ts), so fundamentals are practised where the voice is easy; the bottom is a low note per
+// voice type. The female lows (soprano A3, mezzo G3) sit below common choral lows (about C4 and A3) to leave room for
+// the longest presets, so the bottom few notes may feel weak for some singers. Both ends are approximate: Settings
+// can override them (SkillsPrefs.rangeOverride).
 
 import { passaggioFor } from '../../analysis/passaggio';
 import type { VoiceType } from '../../types';

@@ -8,7 +8,7 @@ import { midiToNoteName } from '../../dsp/music';
 import { isDesktopKind, platformKind } from '../../pwa/platform';
 import { skillsHash } from '../../state/routing';
 import { lastSessionOf, practiceDays, sessionHeadline } from '../../skills/progress/history';
-import { buildWorkout, workoutSeconds } from '../../skills/progress/workout';
+import { buildWorkout } from '../../skills/progress/workout';
 import { noteEvents } from '../../skills/theory/prompts';
 import { mulberry32 } from '../../skills/theory/rng';
 import { SCALE_MODE_LABELS } from '../../skills/theory/scales';
@@ -111,7 +111,7 @@ export function lastResultLine(sessions: readonly SkillsSession[], kind: SkillsE
 const STRICTNESS_HINT: Record<Strictness, string> = {
   gentle: 'Within 50 cents (half a semitone) counts as in tune. Good for a first week.',
   standard: 'Within 25 cents (a quarter of a semitone) counts as in tune. A careful listener hears more than this as out of tune.',
-  strict: 'Within 15 cents counts as in tune: close to what a good choir aims for.',
+  strict: 'Within 15 cents (about a sixth of a semitone) counts as in tune. Tight: for when Standard feels easy.',
 };
 
 const LABEL_OPTIONS: { value: LabelMode; label: string }[] = [
@@ -172,8 +172,10 @@ export function SkillsHub(props: { store: SkillsStore; settings: AppSettings; on
             Today’s workout
           </h2>
           <p>
-            {aboutMinutes(workoutSeconds(workout))}, built from what you find hardest: breathing, matching notes, intervals by ear and by voice,
-            two scale-degree lines and a hiss test. Skip any step you like.
+            {/* The total is the sum of the rounded step times listed below, so the two always agree. */}
+            {aboutMinutes(workout.reduce((t, st) => t + Math.max(1, Math.round(st.estSec / 60)) * 60, 0))},{' '}
+            {store.sessions.length > 0 ? 'leaning towards what you have found hardest so far' : 'a balanced first workout that adapts as you practise'}: breathing,
+            matching notes, intervals by ear and by voice, two scale-degree lines and a hiss test. Skip any step you like.
           </p>
           {lastWorkout && (
             <p className="sk-hub-card-last">

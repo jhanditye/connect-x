@@ -6,7 +6,7 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { isDesktopKind } from '../../../pwa/platform';
 import { AUTO_STOP_RULES } from '../../../skills/audio';
-import { centsMeaning, foldCents } from '../../../skills/score';
+import { centsMeaning } from '../../../skills/score';
 import { makeSkillsRng, noteEvents, singleNoteTargets } from '../../../skills/theory';
 import {
   WIDE_BAND_CENTS,
@@ -19,9 +19,9 @@ import {
   type SkillScreenProps,
 } from '../../../skills/types';
 import { useSingDeps, type SingDeps } from './deps';
-import { a4For, accuracyOf, centsText, centsWords, NO_PITCH_TEXT, noteName, percent, rangeFor, seconds, sessionBase, toleranceFor, TOO_QUIET_TEXT } from './common';
+import { a4For, accuracyOf, centsText, centsWords, NO_PITCH_TEXT, noteName, percent, rangeFor, seconds, sessionBase, toleranceFor, TOO_QUIET_TEXT, useFlushOnHide, centsCount } from './common';
 import { outcomeError, useSkillKeys, useTake } from './useTake';
-import { ACCURACY_CLASS, ErrorNotice, FindingList, LiveRegion, LiveTrace, PitchNeedle, ScreenHead, Stat, StrictnessLine, TakeStatus, useAnnounceFocus } from './widgets';
+import { ACCURACY_CLASS, ErrorNotice, FindingList, LiveRegion, LiveTrace, ScreenHead, Stat, StrictnessLine, TakeStatus, useAnnounceFocus } from './widgets';
 
 export type PitchTestScreenProps = SkillScreenProps<PitchTestSession> & { plan?: PitchTestPlan; deps?: Partial<SingDeps> };
 
@@ -81,7 +81,7 @@ export function PitchTestScreen(props: PitchTestScreenProps) {
     const sum = deps.summarisePitchTest(list, tolerance);
     setSummary(sum);
     setStage('summary');
-    setAnnounce(sum.meanAbsCents !== null ? `Test finished. On average you were ${Math.round(sum.meanAbsCents)} cents from the note; ${percent(sum.shareWithin)} inside the band.` : 'Test finished, but no note could be scored.');
+    setAnnounce(sum.meanAbsCents !== null ? `Test finished. On average you were ${centsCount(sum.meanAbsCents)} from the note; ${percent(sum.shareWithin)} inside the band.` : 'Test finished, but no note could be scored.');
     if (!reported.current && list.some((s) => s.status === 'ok')) {
       reported.current = true;
       const { findings: _f, ...rest } = sum;
@@ -160,6 +160,12 @@ export function PitchTestScreen(props: PitchTestScreenProps) {
     },
     [],
   );
+  // A reload or closed tab never unmounts the screen: save the partial test then too (not on a mere hide, which would
+  // end a test the singer is coming back to).
+  useFlushOnHide(() => {
+    const { scores: s, finish: f } = latest.current;
+    if (!reported.current && s.some((x) => x?.status === 'ok')) f(s);
+  }, true);
 
   useSkillKeys({
     onReturn: () => {
@@ -178,7 +184,6 @@ export function PitchTestScreen(props: PitchTestScreenProps) {
   });
 
   const desktop = isDesktopKind(kind);
-  const live = take.live?.midi != null && target ? foldCents((take.live.midi - target.midi) * 100) : null;
 
   return (
     <section className="sing-screen" aria-labelledby="pitch-test-title">
@@ -221,8 +226,9 @@ export function PitchTestScreen(props: PitchTestScreenProps) {
           <TakeStatus phase={take.phase} kind={kind} elapsedSec={take.elapsedSec} onStop={() => take.stop('button')} hint="Hold the note steady; it stops by itself." noAudioText={take.noAudio ? 'No sound is reaching the app yet.' : null} />
           {take.phase === 'listening' && (
             <>
-              <PitchNeedle centsNow={live} toleranceCents={tolerance} />
-              <LiveTrace trace={take.trace} targets={[target.midi]} toleranceCents={tolerance} />
+              {/* A test of the ear: no needle or target band while singing (they would let the eye steer the note). */}
+              <p className="muted">Sing by ear: the screen shows your voice only, and how close you were comes after the note.</p>
+              <LiveTrace trace={take.trace} targets={[target.midi]} toleranceCents={tolerance} hideTargets />
             </>
           )}
           {current && take.phase === 'idle' && (
@@ -235,7 +241,7 @@ export function PitchTestScreen(props: PitchTestScreenProps) {
                   <dl className="sing-stats">
                     <Stat label="Held" value={centsText(current.heldCents)} note={current.heldCents !== null ? centsMeaning(current.heldCents) : undefined} tone={accuracyOf(current.heldCents, tolerance)} />
                     <Stat label="Landing" value={centsText(current.landingCents)} note="the first moment of the note" />
-                    <Stat label="Steadiness" value={current.stabilityCents !== null ? `±${Math.round(current.stabilityCents)} cents` : '–'} note="wobble, not counting vibrato" />
+                    <Stat label="Steadiness" value={current.stabilityCents !== null ? `±${centsCount(current.stabilityCents)}` : '–'} note="wobble, not counting vibrato" />
                     <Stat label="Time to land" value={current.timeToLandSec !== null ? seconds(current.timeToLandSec) : 'did not settle in the band'} />
                   </dl>
                   {current.octaveOffset !== 0 && (
@@ -312,10 +318,10 @@ function PitchTestSummaryView(props: {
       ) : (
         <>
           <dl className="sing-stats">
-            <Stat label="Average distance from the note" value={s.meanAbsCents !== null ? `${Math.round(s.meanAbsCents)} cents` : '–'} note={s.meanAbsCents !== null ? centsMeaning(s.meanAbsCents) : undefined} tone={accuracyOf(s.meanAbsCents, props.tolerance)} />
+            <Stat label="Average distance from the note" value={s.meanAbsCents !== null ? `${centsCount(s.meanAbsCents)}` : '–'} note={s.meanAbsCents !== null ? centsMeaning(s.meanAbsCents) : undefined} tone={accuracyOf(s.meanAbsCents, props.tolerance)} />
             <Stat label={`Inside ±${props.tolerance} cents`} value={percent(s.shareWithin)} note={`${percent(s.shareWithin50)} inside ±${WIDE_BAND_CENTS} cents`} />
             <Stat label="Tendency" value={s.biasCents !== null ? centsWords(s.biasCents) : '–'} note="on average, sharp (+) or flat (−)" />
-            <Stat label="Steadiness" value={s.meanStabilityCents !== null ? `±${Math.round(s.meanStabilityCents)} cents` : '–'} note={s.meanTimeToLandSec !== null ? `settled in ${seconds(s.meanTimeToLandSec)} on average` : undefined} />
+            <Stat label="Steadiness" value={s.meanStabilityCents !== null ? `±${centsCount(s.meanStabilityCents)}` : '–'} note={s.meanTimeToLandSec !== null ? `settled in ${seconds(s.meanTimeToLandSec)} on average` : undefined} />
           </dl>
           <FindingList findings={s.findings} />
           <h3 className="subhead">By part of your range</h3>
@@ -336,7 +342,7 @@ function PitchTestSummaryView(props: {
                   <tr key={r}>
                     <th scope="row">{REGISTER_WORDS[r]}</th>
                     <td>{row.n}</td>
-                    <td>{row.meanAbsCents !== null ? `${Math.round(row.meanAbsCents)} cents` : '–'}</td>
+                    <td>{row.meanAbsCents !== null ? `${centsCount(row.meanAbsCents)}` : '–'}</td>
                     <td>{row.biasCents !== null ? centsWords(row.biasCents) : '–'}</td>
                     <td>{percent(row.shareWithin)}</td>
                   </tr>

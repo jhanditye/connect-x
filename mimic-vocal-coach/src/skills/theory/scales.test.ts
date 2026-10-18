@@ -107,15 +107,29 @@ describe('cadence', () => {
     expect(cadenceChords({ tonicMidi: 60, mode: 'major' })).toEqual([
       [48, 60, 64, 67],
       [53, 60, 65, 69],
-      [43, 59, 62, 65, 67],
+      [55, 59, 62, 65, 67], // the bass moves up a step, F3 -> G3
       [48, 60, 64, 67],
     ]);
   });
 
-  it('minor uses i, iv and the major V7 (raised 7th)', () => {
+  it('harmonic minor uses V7 (ti); natural minor uses v7 (te), the 7 its lines ask for', () => {
     const [i, iv, v7] = cadenceChords({ tonicMidi: 57, mode: 'natural-minor' });
     expect(i).toEqual([45, 57, 60, 64]); // A C E
     expect(iv).toEqual([50, 57, 62, 65]); // D A D F
-    expect(v7).toContain(56); // G#
+    expect(v7).toContain(55); // G
+    expect(v7).not.toContain(56);
+    expect(cadenceChords({ tonicMidi: 57, mode: 'harmonic-minor' })[2]).toContain(56); // G#
+  });
+
+  it('voices the chords in a middle register whatever the singer\'s octave (no 40 Hz bass for a bass voice)', () => {
+    for (let tonic = 33; tonic <= 80; tonic++) {
+      for (const mode of ['major', 'natural-minor', 'harmonic-minor'] as const) {
+        const notes = cadenceChords({ tonicMidi: tonic, mode }).flat();
+        expect(Math.min(...notes)).toBeGreaterThanOrEqual(40); // E2
+        expect(Math.max(...notes)).toBeLessThanOrEqual(75);
+        // Same pitch classes as the key.
+        expect(((cadenceChords({ tonicMidi: tonic, mode })[0][1] - tonic) % 12 + 12) % 12).toBe(0);
+      }
+    }
   });
 });

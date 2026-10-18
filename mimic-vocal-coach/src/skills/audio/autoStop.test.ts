@@ -167,16 +167,17 @@ describe('notes rule (intervals and lines)', () => {
   });
 
   it('room noise and unvoiced breaths never count as notes; the cap ends it', () => {
-    const r = run(rule, stream(14, (t) => ({ midi: null, db: t % 2 < 0.5 ? -40 : -70 })));
+    const r = run(rule, stream(rule.capSec + 1, (t) => ({ midi: null, db: t % 2 < 0.5 ? -40 : -70 })));
     expect(r.notesHeard).toBe(0);
     expect(r.stop?.reason).toBe('cap');
-    expect(r.stop!.t).toBeCloseTo(13, 1);
+    expect(r.stop!.t).toBeCloseTo(rule.capSec, 1);
   });
 
-  it('caps a line at min(30, 4 + 1.5 n) seconds', () => {
-    expect(AUTO_STOP_RULES.sequence(6)).toEqual({ kind: 'notes', expectedNotes: 6, silenceSec: 1.2, capSec: 13 });
-    expect(AUTO_STOP_RULES.sequence(16).capSec).toBe(28);
-    expect(AUTO_STOP_RULES.sequence(40).capSec).toBe(30);
+  it('caps a line at min(45, 4 + 3 n) seconds (room for a slow, careful singer)', () => {
+    expect(AUTO_STOP_RULES.sequence(6)).toEqual({ kind: 'notes', expectedNotes: 6, silenceSec: 1.2, capSec: 22 });
+    expect(AUTO_STOP_RULES.sequence(4).capSec).toBe(16);
+    expect(AUTO_STOP_RULES.sequence(16).capSec).toBe(45);
+    expect(AUTO_STOP_RULES.sequence(40).capSec).toBe(45);
   });
 });
 
@@ -222,10 +223,25 @@ describe('sustain rule (hiss and long tone)', () => {
   });
 });
 
+describe('match the note', () => {
+  it('ends about 1.5 s after the singer stops without locking in, instead of waiting for the 20 s cap', () => {
+    const l = line([60]);
+    const r = run(AUTO_STOP_RULES.match(), stream(25, l.at));
+    expect(r.stop?.reason).toBe('auto-silence');
+    expect(r.stop?.t as number).toBeLessThan(l.end + 2);
+    expect(r.stop?.t as number).toBeGreaterThan(l.end + 1.3);
+  });
+
+  it('room noise alone never ends it early (only the cap)', () => {
+    const r = run(AUTO_STOP_RULES.match(), stream(25, () => ROOM));
+    expect(r.stop?.reason).toBe('cap');
+  });
+});
+
 describe('manual rule and the floor', () => {
   it('only the cap ends a manual take, whatever is sung', () => {
     const l = line([60, 62]);
-    const r = run(AUTO_STOP_RULES.match(), stream(25, l.at));
+    const r = run({ kind: 'manual', capSec: 20 }, stream(25, l.at));
     expect(r.stop).toEqual({ t: expect.closeTo(20, 1), reason: 'cap' });
     expect(r.notesHeard).toBe(2);
   });
@@ -247,7 +263,7 @@ describe('manual rule and the floor', () => {
 
   it('matches the SPEC rules', () => {
     expect(AUTO_STOP_RULES.pitchTest()).toEqual({ kind: 'held-note', holdSec: 1.5, steadyCents: 50, capSec: 5 });
-    expect(AUTO_STOP_RULES.match()).toEqual({ kind: 'manual', capSec: 20 });
+    expect(AUTO_STOP_RULES.match()).toEqual({ kind: 'notes', expectedNotes: 1, silenceSec: 1.5, capSec: 20 });
     expect(AUTO_STOP_RULES.interval()).toEqual({ kind: 'notes', expectedNotes: 2, silenceSec: 1.2, capSec: 8 });
     expect(AUTO_STOP_RULES.hiss()).toEqual({ kind: 'sustain', silenceSec: 0.8, capSec: 90 });
     expect(AUTO_STOP_RULES.longTone()).toEqual({ kind: 'sustain', silenceSec: 0.8, capSec: 60 });

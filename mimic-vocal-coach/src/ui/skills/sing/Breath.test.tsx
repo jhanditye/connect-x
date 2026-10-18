@@ -42,13 +42,15 @@ describe('BreathScreen', () => {
     await h.click(/^Start/);
     expect(h.text()).toContain('Breathe in, low and wide');
     expect(h.text()).toContain('Round 1 of 2');
-    // Round 1: 4 + 4 + 8 counts, then 4 counts of normal breathing.
+    // Round 1: 4 + 4 + 8 counts, then 8 counts of normal breathing (about two easy breaths).
     await counts(4);
     expect(h.text()).toContain('Suspend: a gentle pause, throat open');
     await counts(4);
     expect(h.text()).toContain('Out on a steady "sss"');
     await counts(8);
     expect(h.container.querySelector('.sing-breath-words')?.textContent).toBe('Breathe normally');
+    await counts(4);
+    expect(h.text()).toContain('Round 1 of 2');
     await counts(4);
     expect(h.text()).toContain('Round 2 of 2');
     expect(h.text()).toContain('out 10');
@@ -57,7 +59,10 @@ describe('BreathScreen', () => {
     expect(h.text()).toContain('10 counts');
     expect(world.captures).toHaveLength(0);
     vi.useRealTimers();
-    await h.click(/^Done/);
+    // Return now moves on (Done) instead of restarting the guide.
+    expect(h.text()).toContain('Done (Return)');
+    await h.key('Enter');
+    expect(h.container.querySelector('.sing-breath')).toBeNull();
     expect(props.onDone).toHaveBeenCalledTimes(1);
     expect(props.onDone.mock.calls[0][0]).toMatchObject({ kind: 'breath', paced: { rounds: 2, maxExhaleCounts: 10 }, hiss: null, longTone: null });
   });
@@ -66,9 +71,21 @@ describe('BreathScreen', () => {
     vi.useFakeTimers();
     renderBreath(fakeWorld(), { plan: { parts: ['paced'], pacedRounds: 3 } });
     await h.click(/^Start/);
-    await counts(21);
+    await counts(25);
     await h.click(/^Stop/);
     expect(h.text()).toContain('1 round done');
+  });
+
+  it('Escape stops the guide, and the phase word shows inside the circle', async () => {
+    vi.useFakeTimers();
+    renderBreath(fakeWorld(), { plan: { parts: ['paced'], pacedRounds: 3 } });
+    await h.click(/^Start/);
+    expect(h.container.querySelector('.sing-breath-phase')?.textContent).toBe('In');
+    await counts(4);
+    expect(h.container.querySelector('.sing-breath-phase')?.textContent).toBe('Pause');
+    await h.key('Escape');
+    expect(h.container.querySelector('.sing-breath')).toBeNull();
+    expect(h.text()).toContain('Start');
   });
 
   it('hiss test: no prompt, sustain rule, duration and steadiness, personal best', async () => {
@@ -83,7 +100,7 @@ describe('BreathScreen', () => {
     await h.flush();
     expect(h.text()).toContain('21.4 s of steady hiss');
     expect(h.text()).toContain('very steady');
-    expect(h.text()).toContain('new personal best (was 18.0 s)');
+    expect(h.text()).toContain('longest so far (was 18.0 s); only worth it if it felt easy');
     await h.click(/^Done/);
     expect(props.onDone.mock.calls[0][0].hiss).toEqual({ status: 'ok', durationSec: 21.4, steadinessDb: 1.2 });
   });

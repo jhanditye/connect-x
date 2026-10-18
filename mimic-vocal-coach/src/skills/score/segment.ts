@@ -223,3 +223,44 @@ export function segmentSpans(fr: TakeFrames): NoteSpan[] {
 export function segmentNotes(samples: Float32Array, sampleRate: number, a4Hz: number): SungNote[] {
   return segmentSpans(analyseTake(samples, sampleRate, a4Hz)).map((s) => s.note);
 }
+
+/**
+ * Splits one note span in two at the point that best separates two steady pitches (least squares over the two
+ * halves), for a two-note take where the singer glided legato from one note to the next and no boundary was found
+ * (a narrow semitone, or a unison sung without a break). Each half must hold at least NOTE_MIN_SEC of steady pitch.
+ */
+export function splitSpanInTwo(fr: TakeFrames, span: NoteSpan): [NoteSpan, NoteSpan] | null {
+  const { i0, i1 } = span;
+  const minLen = Math.round(NOTE_MIN_SEC / fr.hop) + 2;
+  if (i1 - i0 < 2 * minLen) return null;
+  let best = -1;
+  let bestCost = Infinity;
+  const vals: number[] = [];
+  for (let k = i0; k < i1; k++) vals.push(fr.midi[k]);
+  const sse = (a: number, b: number) => {
+    let s = 0;
+    let n = 0;
+    for (let k = a; k < b; k++) if (!Number.isNaN(vals[k])) (s += vals[k]), n++;
+    if (!n) return Infinity;
+    const m = s / n;
+    let e = 0;
+    for (let k = a; k < b; k++) if (!Number.isNaN(vals[k])) e += (vals[k] - m) ** 2;
+    return e;
+  };
+  for (let c = minLen; c <= vals.length - minLen; c++) {
+    const cost = sse(0, c) + sse(c, vals.length);
+    if (cost < bestCost) {
+      bestCost = cost;
+      best = c;
+    }
+  }
+  if (best < 0) return null;
+  // A unison has no pitch change to find: split it in the middle.
+  const a = buildNote(fr, i0, i0 + best);
+  const b = buildNote(fr, i0 + best, i1);
+  if (a && b) return [a, b];
+  const mid = i0 + ((i1 - i0) >> 1);
+  const ma = buildNote(fr, i0, mid);
+  const mb = buildNote(fr, mid, i1);
+  return ma && mb ? [ma, mb] : null;
+}

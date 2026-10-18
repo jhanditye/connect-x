@@ -64,6 +64,26 @@ describe('scoreHiss', () => {
 });
 
 describe('scoreLongTone', () => {
+  it('a few frames read an octave and more away do not turn a steady tone "wobbly"', () => {
+    // 8 s steady A3 with 0.2 s that reads 19 semitones low (as a tracker slip on a soft tone in a noisy room would).
+    const s = scoreLongTone(singContour(57, 8, (t) => (t > 3 && t < 3.2 ? -1940 : 0)), SR, { a4Hz: 440 });
+    expect(s.status).toBe('ok');
+    expect(s.pitchSdCents as number).toBeLessThan(12);
+    expect(s.findings[0].text).not.toMatch(/wobbly/);
+  });
+
+  it('a natural taper over the last second is not called uneven volume', () => {
+    const x = singContour(57, 6, () => 0);
+    const n = x.length;
+    // The synthetic take has 0.4 s of room before and after: fade the last 0.8 s of the voice by up to -20 dB.
+    const end = n - Math.round(0.4 * SR);
+    const fade = Math.round(0.8 * SR);
+    for (let i = end - fade; i < end; i++) x[i] *= Math.pow(10, (-20 * (i - (end - fade))) / fade / 20);
+    const s = scoreLongTone(x, SR, { a4Hz: 440 });
+    expect(s.loudnessSdDb as number).toBeLessThan(3);
+    expect(s.findings.some((f) => /volume varied/.test(f.text))).toBe(false);
+  });
+
   it('measures duration and steadiness of a steady 8 s tone with vibrato (vibrato not counted)', () => {
     const s = scoreLongTone(singContour(57, 8, () => 0), SR, { a4Hz: 440 });
     expect(s.status).toBe('ok');

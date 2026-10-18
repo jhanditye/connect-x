@@ -15,6 +15,7 @@ import { rangeFor } from './kit/session';
 import { BackToHub, FindingList, Segmented } from './kit/Widgets';
 import { whenText } from './SkillsHub';
 import './kit/skills-shell.css';
+import { centsCount } from './sing/common';
 
 const KIND_LABELS: Record<SkillsExerciseKind, string> = {
   'pitch-test': 'Pitch test',
@@ -281,11 +282,11 @@ export function SkillsProgressScreen(props: { store: SkillsStore; settings: AppS
                       <th scope="row">
                         {REGISTER_LABELS[r.register]}{' '}
                         <span className="sk-n">
-                          {midiToNoteName(bands[r.register].lowMidi)}–{midiToNoteName(bands[r.register].highMidi)}
+                          {midiToNoteName(bands[r.register].lowMidi).replace('#', '♯')}–{midiToNoteName(bands[r.register].highMidi).replace('#', '♯')}
                         </span>
                       </th>
                       <td className="num">{r.n}</td>
-                      <td className="num">{r.absCents === null ? '–' : `${Math.round(r.absCents)} cents`}</td>
+                      <td className="num">{r.absCents === null ? '–' : `${centsCount(r.absCents)}`}</td>
                       <td>{r.signedCents === null ? '–' : Math.abs(r.signedCents) < 5 ? 'in the middle' : `${formatCents(r.signedCents)} (${r.signedCents > 0 ? 'sharp' : 'flat'})`}</td>
                     </tr>
                   ))}

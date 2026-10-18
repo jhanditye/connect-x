@@ -284,12 +284,18 @@ export function createAutoStop(rule: AutoStopRule): AutoStop {
 export const AUTO_STOP_RULES = Object.freeze({
   /** Pitch test: stop once a steady note has been held 1.5 s, or at 5 s. */
   pitchTest: (): AutoStopRule => ({ kind: 'held-note', holdSec: 1.5, steadyCents: 50, capSec: 5 }),
-  /** Match the note: the lock tracker (score) decides; the button or 20 s otherwise. */
-  match: (): AutoStopRule => ({ kind: 'manual', capSec: 20 }),
+  /**
+   * Match the note: the lock tracker (score) ends it on a lock; otherwise 1.5 s of silence once a sung note has been
+   * heard (the singer stopped without locking in), the button, or 20 s.
+   */
+  match: (): AutoStopRule => ({ kind: 'notes', expectedNotes: 1, silenceSec: 1.5, capSec: 20 }),
   /** Sing an interval: two notes, then 1.2 s of silence, or 8 s. */
   interval: (): AutoStopRule => ({ kind: 'notes', expectedNotes: 2, silenceSec: 1.2, capSec: 8 }),
-  /** A scale-degree line of n notes: n notes, then 1.2 s of silence, or min(30, 4 + 1.5 n) s. */
-  sequence: (n: number): AutoStopRule => ({ kind: 'notes', expectedNotes: Math.max(1, Math.round(n)), silenceSec: 1.2, capSec: Math.min(30, 4 + 1.5 * Math.max(1, Math.round(n))) }),
+  /**
+   * A scale-degree line of n notes: n notes, then 1.2 s of silence, or min(45, 4 + 3 n) s. The copy says "at your own
+   * pace", so the cap leaves room for a slow, careful singer (3 s a note); the screen shows the time left.
+   */
+  sequence: (n: number): AutoStopRule => ({ kind: 'notes', expectedNotes: Math.max(1, Math.round(n)), silenceSec: 1.2, capSec: Math.min(45, 4 + 3 * Math.max(1, Math.round(n))) }),
   /** Hiss test: 0.8 s of silence after the hiss, or 90 s. */
   hiss: (): AutoStopRule => ({ kind: 'sustain', silenceSec: 0.8, capSec: 90 }),
   /** Long tone: 0.8 s of silence after the tone, or 60 s. */

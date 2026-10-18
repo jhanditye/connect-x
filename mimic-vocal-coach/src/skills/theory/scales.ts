@@ -157,18 +157,27 @@ export function degreeLabelText(label: DegreeLabel): string {
 // Cadence
 
 /**
- * I-IV-V7-I (minor: i-iv-V7-i with the harmonic-minor raised 7th) in close voicing around the tonic, each chord with a
- * bass note below. In C: C3+C4 E4 G4, F3+C4 F4 A4, G2+B3 D4 F4 G4, C3+C4 E4 G4. Returned lowest note first.
+ * I-IV-V7-I in close voicing, each chord with a bass note below; harmonic minor i-iv-V7-i (raised 7th, ti), natural
+ * minor i-iv-v7-i (no leading tone: its 7 is te, the note its lines use). The chords sit in a fixed middle register
+ * whatever the singer's octave (chord tonic E3..D#4, bass E2..A#3), where laptop and phone speakers still sound and
+ * close chords are not muddy; the tonic prompt that follows is played in the singer's own octave. The bass moves up a
+ * step from IV to V. In C: C3+C4 E4 G4, F3+C4 F4 A4, G3+B3 D4 F4 G4, C3+C4 E4 G4. Returned lowest note first.
  */
 export function cadenceChords(key: MusicalKey): number[][] {
-  const t = Math.round(key.tonicMidi);
+  let t = Math.round(key.tonicMidi);
+  while (t < CADENCE_TONIC_LOW) t += 12;
+  while (t > CADENCE_TONIC_LOW + 11) t -= 12;
   const minor = key.mode !== 'major';
   const third = minor ? 3 : 4;
   const sixth = minor ? 8 : 9;
+  const seventh = key.mode === 'natural-minor' ? -2 : -1;
   return [
     [t - 12, t, t + third, t + 7],
     [t - 7, t, t + 5, t + sixth],
-    [t - 17, t - 1, t + 2, t + 5, t + 7],
+    [t - 5, t + seventh, t + 2, t + 5, t + 7],
     [t - 12, t, t + third, t + 7],
   ];
 }
+
+/** Lowest chord tonic of the cadence (E3); the chords are voiced from here up to D#4. */
+export const CADENCE_TONIC_LOW = 52;

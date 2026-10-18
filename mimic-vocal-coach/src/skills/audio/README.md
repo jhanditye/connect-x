@@ -120,9 +120,9 @@ rule's cap + 5 s) also ends a take whose audio clock has stalled.
 | Exercise | Rule | Ends when |
 |---|---|---|
 | Pitch test | `held-note` {1.5 s, 50 cents, cap 5 s} | A steady note has been held 1.5 s |
-| Match | `manual` {cap 20 s} | The lock tracker (score) or the button; the cap |
+| Match | `notes` {1 note, silence 1.5 s, cap 20 s} | The lock tracker (score), 1.5 s of silence after singing, the button; the cap |
 | Sing interval | `notes` {2, 1.2 s, cap 8 s} | Two notes heard, then 1.2 s without singing |
-| Sequence of n | `notes` {n, 1.2 s, cap min(30, 4 + 1.5n)} | n notes heard, then 1.2 s without singing |
+| Sequence of n | `notes` {n, 1.2 s, cap min(45, 4 + 3n)} | n notes heard, then 1.2 s without singing |
 | Hiss | `sustain` {0.8 s, cap 90 s} | Sound started, then 0.8 s below the silence line |
 | Long tone | `sustain` {0.8 s, cap 60 s} | The same |
 

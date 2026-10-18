@@ -15,6 +15,12 @@ import type { Finding, IntervalDirection, SkillsPrefs, SkillsSession, SkillsStor
 import { degreeTendencies, registerTable } from './history';
 import { degreeWeights, intervalSetWeakness, intervalWeakness, weakestIntervals } from './stats';
 
+/** "1 cent", "12 cents" (rounded). */
+const centsCount = (c: number): string => {
+  const a = Math.round(c);
+  return `${a} ${Math.abs(a) === 1 ? 'cent' : 'cents'}`;
+};
+
 export const WORKOUT_PLAN = Object.freeze({
   pacedRounds: 2,
   matchNotes: 6,
@@ -157,13 +163,13 @@ function comparables(s: SkillsSession): Comparable[] {
 }
 
 function fmt(v: number, unit: Comparable['unit']): string {
-  if (unit === 'cents') return `${Math.round(v)} cents off on average`;
+  if (unit === 'cents') return `${centsCount(v)} off on average`;
   if (unit === 'share') return `${Math.round(v * 100)}% right`;
   return `${v < 10 ? Math.round(v * 10) / 10 : Math.round(v)} s`;
 }
 
 function fmtShort(v: number, unit: Comparable['unit']): string {
-  if (unit === 'cents') return `${Math.round(v)} cents`;
+  if (unit === 'cents') return `${centsCount(v)}`;
   if (unit === 'share') return `${Math.round(v * 100)}%`;
   return fmt(v, unit);
 }

@@ -11,6 +11,7 @@ import {
   LEVEL_DIP_DB,
   MIN_VOICED_SEC,
   NO_PITCH_LOUD_DB,
+  OCTAVE_MATCH_CENTS,
   QUIET_P90_DB,
 } from './constants';
 
@@ -256,4 +257,16 @@ export function sdCents(values: ArrayLike<number>): number {
   let ss = 0;
   for (let i = 0; i < values.length; i++) if (!Number.isNaN(values[i])) ss += (values[i] - m) ** 2;
   return Math.sqrt(ss / n) * 100;
+}
+
+/**
+ * Splits a pitch difference (cents) into whole octaves plus a remainder. Only a remainder within OCTAVE_MATCH_CENTS
+ * counts as "the same note in another octave"; anything else is a different note, returned unfolded with octaves 0
+ * (a 5th up is +700, never "an octave up and 500 flat").
+ */
+export function octaveAndCents(diffCents: number): { octaves: number; cents: number } {
+  const k = Math.round(diffCents / 1200);
+  const rest = diffCents - 1200 * k;
+  if (k !== 0 && Math.abs(rest) <= OCTAVE_MATCH_CENTS) return { octaves: k, cents: rest };
+  return { octaves: 0, cents: diffCents };
 }

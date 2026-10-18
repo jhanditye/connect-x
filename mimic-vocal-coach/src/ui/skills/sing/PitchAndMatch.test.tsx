@@ -16,7 +16,7 @@ function renderPitch(world = fakeWorld(), count = 3, propsOver: Partial<ReturnTy
 }
 
 describe('PitchTestScreen', () => {
-  it('plays the note first, then opens the microphone, shows the live needle, and scores the take', async () => {
+  it('plays the note first, then opens the microphone, shows the voice but no target while singing, and scores the take', async () => {
     const order: string[] = [];
     const world = fakeWorld();
     const play = world.deps.playEvents;
@@ -44,11 +44,15 @@ describe('PitchTestScreen', () => {
       world.last.emit(target - 0.4);
       world.last.emit(target - 0.4);
     });
-    expect(h.text()).toContain('40 cents flat');
+    // A test of the ear: the voice is traced, but no needle and no target band while singing.
+    expect(h.text()).toContain('Sing by ear');
+    expect(h.text()).not.toContain('40 cents flat');
+    expect(h.container.querySelector('.sing-trace-pitch')).not.toBeNull();
+    expect(h.container.querySelectorAll('.sing-trace-band')).toHaveLength(0);
     await act(async () => {
       world.last.emit(target + 0.05);
     });
-    expect(h.text()).toMatch(/In the band/);
+    expect(h.text()).not.toMatch(/In the band/);
     await act(async () => world.last.autoStop('auto-held'));
     await h.flush();
     expect(world.deps.scoreHeldNote).toHaveBeenCalledWith(expect.any(Float32Array), 16000, target, expect.objectContaining({ a4Hz: 440, toleranceCents: 25 }));
@@ -172,7 +176,7 @@ describe('MatchNoteScreen', () => {
     const { world, props } = renderMatch();
     await h.click(/Play and sing/);
     const target = world.plays[0][0].midis[0];
-    expect(world.last.opts.rule).toEqual({ kind: 'manual', capSec: 20 });
+    expect(world.last.opts.rule).toEqual({ kind: 'notes', expectedNotes: 1, silenceSec: 1.5, capSec: 20 });
     await act(async () => {
       world.last.emit(target - 1);
       world.last.emit(target - 0.5);

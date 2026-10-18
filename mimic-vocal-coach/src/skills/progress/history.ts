@@ -19,6 +19,12 @@ import type {
 } from '../types';
 import { degreeKey } from './stats';
 
+/** "1 cent", "12 cents" (rounded). */
+const centsCount = (c: number): string => {
+  const a = Math.round(c);
+  return `${a} ${Math.abs(a) === 1 ? 'cent' : 'cents'}`;
+};
+
 // ---------------------------------------------------------------------------------------------
 // Time series
 
@@ -102,7 +108,7 @@ export function sessionHeadline(s: SkillsSession): SessionHeadline {
   switch (s.kind) {
     case 'pitch-test': {
       const v = s.summary.meanAbsCents;
-      return { metric: 'pitch-mean-abs-cents', value: v, text: v === null ? 'Not enough sound to score' : `${Math.round(v)} cents off on average` };
+      return { metric: 'pitch-mean-abs-cents', value: v, text: v === null ? 'Not enough sound to score' : `${centsCount(v)} off on average` };
     }
     case 'match': {
       const locked = s.attempts.filter((a) => a.locked).length;
@@ -112,7 +118,7 @@ export function sessionHeadline(s: SkillsSession): SessionHeadline {
       return { metric: s.mode === 'interval' ? 'ear-accuracy' : null, value: s.total ? s.correct / s.total : null, text: `${s.correct} of ${s.total} right` };
     case 'sing-intervals': {
       const v = metricValue(s, 'interval-abs-cents');
-      return { metric: 'interval-abs-cents', value: v, text: v === null ? 'Not enough sound to score' : `Interval size ${Math.round(v)} cents off on average` };
+      return { metric: 'interval-abs-cents', value: v, text: v === null ? 'Not enough sound to score' : `Interval size ${centsCount(v)} off on average` };
     }
     case 'sequence': {
       const v = metricValue(s, 'sequence-accuracy');

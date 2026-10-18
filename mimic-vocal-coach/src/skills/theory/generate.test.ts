@@ -149,3 +149,18 @@ describe('lines', () => {
     expect(randomLine(mulberry32(8), 6, 'natural-minor')).toEqual(randomLine(mulberry32(8), 6, 'natural-minor'));
   });
 });
+
+describe('randomLine leaves out tritone leaps (until asked for)', () => {
+  it('no step of 6 semitones over many seeds, and some 5ths do appear', () => {
+    let fifths = 0;
+    for (let seed = 1; seed <= 400; seed++) {
+      const notes = randomLine(mulberry32(seed), 6, 'major');
+      for (let i = 1; i < notes.length; i++) {
+        const st = Math.abs(notes[i].semitones - notes[i - 1].semitones);
+        expect(st).not.toBe(6);
+        if (st === 7) fifths++;
+      }
+    }
+    expect(fifths).toBeGreaterThan(0);
+  });
+});

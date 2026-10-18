@@ -179,6 +179,65 @@ describe('alignNotes', () => {
   });
 });
 
+describe('scoreSequence: wrong notes, wrong leaps and wrong keys are not "well pitched"', () => {
+  const rel = (t: SequenceTarget, semis: number[]) => semis.map((x) => ({ midi: t.key.tonicMidi + x, durSec: 0.6 }));
+  const texts = (s: { findings: { text: string }[] }) => s.findings.map((f) => f.text).join(' / ');
+
+  it('"2 7 6 5" with a 6th UP to the 7 is caught as a wrong leap, not praised', () => {
+    const t = target('2 7 6 5');
+    const s = scoreSequence(singLine(rel(t, [2, 11, 9, 7])), SR, t, opts);
+    expect(s.noteAccuracy as number).toBeLessThan(1);
+    expect(texts(s)).not.toMatch(/Well pitched/);
+    expect(texts(s)).toMatch(/From 2 to 7 you sang a major 6th up; it should be a minor 3rd down/);
+  });
+
+  it('"1 3 5 8 5 3 1" with no octave leap is not praised', () => {
+    const t = target('1 3 5 8 5 3 1');
+    const s = scoreSequence(singLine(rel(t, [0, 4, 7, 0, 7, 4, 0])), SR, t, opts);
+    expect(texts(s)).not.toMatch(/Well pitched/);
+    expect(s.notes.filter((n) => n.within).length).toBeLessThan(7);
+    expect(texts(s)).toMatch(/you sang a perfect 4th down; it should be a perfect 4th up|jumped to a different octave/);
+  });
+
+  it('a 3 sung as a 4 is named, kept out of the tuning figures and stops the praise', () => {
+    const t = target('7 6 5 4 3 2');
+    const s = scoreSequence(singDetached(rel(t, [11, 9, 7, 5, 5, 2])), SR, t, opts);
+    expect(texts(s)).not.toMatch(/Well pitched/);
+    expect(texts(s)).toMatch(/You sang a 4 where the 3 was written \(a semitone sharp\)/);
+    expect(Math.abs(s.biasCents as number)).toBeLessThan(8);
+  });
+
+  it('the right shape 2 semitones above the key is said so, without blaming one degree', () => {
+    const t = target('7 6 5 4 3 2');
+    const s = scoreSequence(singLine(notesOf(t, [200, 200, 200, 200, 200, 200], 0.6)), SR, t, opts);
+    expect(s.missing).toBe(0);
+    expect(s.keyShiftCents as number).toBeGreaterThan(180);
+    expect(texts(s)).toMatch(/^Right shape, but the whole line sat about 2 semitones above the key/);
+    expect(texts(s)).not.toMatch(/Your \d sat/);
+  });
+
+  it('a line 50 cents flat throughout is one finding about the key, not "your 1 sat 50 cents flat"', () => {
+    const t = target('5 4 3 2 1');
+    const s = scoreSequence(singLine(notesOf(t, [-50, -50, -50, -50, -50], 0.6)), SR, t, opts);
+    expect(s.keyShiftCents as number).toBeLessThan(-40);
+    expect(texts(s)).toMatch(/about \d+ cents below the key/);
+    expect(texts(s)).not.toMatch(/Your 1 sat/);
+  });
+
+  it('one flat last note on a 4-note line is not reported as the line sliding', () => {
+    const t = target('5 4 3 2');
+    const s = scoreSequence(singLine(notesOf(t, [0, 0, 0, -40], 0.6)), SR, t, opts);
+    expect(texts(s)).not.toMatch(/slid/);
+    expect(texts(s)).toMatch(/Your 2 sat \d+ cents flat/);
+  });
+
+  it('a repeated note sung legato as one long note gets advice, not "a note I could not hear"', () => {
+    const t = target('5 5 4 3');
+    const s = scoreSequence(singLine([{ midi: t.midis[0], durSec: 1.2 }, { midi: t.midis[2], durSec: 0.6 }, { midi: t.midis[3], durSec: 0.6 }]), SR, t, opts);
+    expect(texts(s)).toMatch(/one long note where the same note was written twice/);
+  });
+});
+
 describe('scoreSungInterval', () => {
   it('separates the interval size from the starting pitch: 30 cents wide from a 20-cent-sharp start', () => {
     const tgt = { referenceMidi: 52, semitones: 9, direction: 'up' as const };
@@ -210,8 +269,59 @@ describe('scoreSungInterval', () => {
     const s = scoreSungInterval(singLine([{ midi: 55, durSec: 1 }, { midi: 52, durSec: 1 }]), SR, tgt, opts);
     expect(s.wrongDirection).toBe(true);
     expect(s.within).toBe(false);
-    expect(Math.abs(s.intervalCents as number)).toBeLessThanOrEqual(600);
-    expect(s.findings[0].text).toMatch(/went down instead of up/);
+    // The real size error, never folded to the same note name: down 3 instead of up 9 is 12 semitones off.
+    expect(s.intervalCents as number).toBeGreaterThan(-1215);
+    expect(s.intervalCents as number).toBeLessThan(-1185);
+    expect(s.findings[0].text).toMatch(/went down instead of up: you sang a minor 3rd down; the target was a major 6th up/);
+  });
+
+  const sing2 = (a: number, b: number, dur = 1) => singLine([{ midi: a, durSec: dur }, { midi: b, durSec: dur }]);
+
+  it('names a clearly wrong interval instead of saying the second note was not heard', () => {
+    const cases: [number, number, RegExp][] = [
+      [9, 3, /^You sang a minor 3rd up; the target was a major 6th up/],
+      [12, 4, /^You sang a major 3rd up; the target was an octave up/],
+      [10, 3, /^You sang a minor 3rd up; the target was a minor 7th up/],
+      [11, 5, /^You sang a perfect 4th up; the target was a major 7th up/],
+      [9, 2, /^You sang a major 2nd up; the target was a major 6th up/],
+      [11, 2, /^You sang a major 2nd up; the target was a major 7th up/],
+      [12, 7, /^You sang a perfect 5th up; the target was an octave up/],
+    ];
+    for (const [asked, sang, re] of cases) {
+      const s = scoreSungInterval(sing2(50, 50 + sang), SR, { referenceMidi: 50, semitones: asked, direction: 'up' }, opts);
+      expect(s.second, `asked ${asked} sang ${sang}`).not.toBeNull();
+      expect(s.within).toBe(false);
+      expect(Math.abs((s.intervalCents as number) - (sang - asked) * 100)).toBeLessThan(15);
+      expect(s.findings[0].text).toMatch(re);
+      expect(s.findings.some((f) => /another octave/.test(f.text))).toBe(false);
+    }
+    const down = scoreSungInterval(sing2(62, 57), SR, { referenceMidi: 62, semitones: 12, direction: 'down' }, opts);
+    expect(down.findings[0].text).toMatch(/^You sang a perfect 4th down; the target was an octave down/);
+  });
+
+  it('an octave jump that stays on the same note is about 1200 cents off and never "the right size"', () => {
+    const s = scoreSungInterval(singDetached([{ midi: 50, durSec: 1 }, { midi: 50, durSec: 1 }], 0.2), SR, { referenceMidi: 50, semitones: 12, direction: 'up' }, opts);
+    expect(s.within).toBe(false);
+    expect(s.intervalCents as number).toBeLessThan(-1150);
+    expect(s.findings[0].text).toMatch(/right name but was in another octave: you sang the same note; the target was an octave up/);
+    const six = scoreSungInterval(sing2(50, 47, 1), SR, { referenceMidi: 50, semitones: 9, direction: 'up' }, opts);
+    expect(six.within).toBe(false);
+    expect(six.intervalCents as number).toBeLessThan(-1150);
+  });
+
+  it('a semitone sung 40-50 cents narrow and legato still gives an interval and a true first note', () => {
+    for (const sungCents of [50, 60]) {
+      const s = scoreSungInterval(sing2(55, 55 + sungCents / 100), SR, { referenceMidi: 55, semitones: 1, direction: 'up' }, opts);
+      expect(s.intervalCents, `sung ${sungCents}`).not.toBeNull();
+      expect(Math.abs((s.intervalCents as number) - (sungCents - 100))).toBeLessThan(12);
+      expect(Math.abs(s.referenceCents as number)).toBeLessThan(10);
+    }
+  });
+
+  it('a unison sung legato (no break) is two notes, in tune', () => {
+    const s = scoreSungInterval(singLine([{ midi: 55, durSec: 2 }]), SR, { referenceMidi: 55, semitones: 0, direction: 'up' }, opts);
+    expect(s.second).not.toBeNull();
+    expect(s.within).toBe(true);
   });
 
   it('says so when only one note was heard, and when nothing was', () => {

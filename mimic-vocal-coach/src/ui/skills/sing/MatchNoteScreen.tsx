@@ -8,7 +8,7 @@ import { AUTO_STOP_RULES } from '../../../skills/audio';
 import { foldCents } from '../../../skills/score';
 import { makeSkillsRng, noteEvents, singleNoteTargets } from '../../../skills/theory';
 import type { LiveReading, MatchPlan, MatchSession, SkillScreenProps } from '../../../skills/types';
-import { a4For, accuracyOf, centsText, centsWords, meanAbs, meanOf, noteName, rangeFor, seconds, sessionBase, toleranceFor, TOO_QUIET_TEXT } from './common';
+import { a4For, accuracyOf, centsText, centsWords, meanAbs, meanOf, noteName, rangeFor, seconds, sessionBase, toleranceFor, TOO_QUIET_TEXT, useFlushOnHide, centsCount } from './common';
 import { useSingDeps, type SingDeps } from './deps';
 import { outcomeError, useSkillKeys, useTake } from './useTake';
 import { ErrorNotice, HeadphonesQuestion, LiveRegion, LiveTrace, PitchNeedle, ScreenHead, Stat, StrictnessLine, TakeStatus, useAnnounceFocus } from './widgets';
@@ -40,17 +40,20 @@ export function MatchNoteScreen(props: MatchNoteScreenProps) {
   const [announce, setAnnounce] = useState('');
   const [finished, setFinished] = useState(false);
   const startedMs = useRef(deps.nowMs());
-  const reported = useRef(false);
+  const reported = useRef(0);
   const headingRef = useAnnounceFocus(current ?? (finished ? 'done' : null));
   const target = targets[index];
   const busy = take.phase !== 'idle';
   const headphones = props.prefs.headphones;
   const droneOn = drone && headphones === true;
 
+  // Saves the attempts not saved yet as one session (Finish, Back, leaving the screen, or the page being hidden/closed).
   const report = (list: Attempt[]) => {
-    if (reported.current || list.length === 0) return;
-    reported.current = true;
-    props.onDone({ ...sessionBase(props, deps, startedMs.current), kind: 'match', drone: droneOn, attempts: list });
+    const fresh = list.slice(reported.current);
+    if (fresh.length === 0) return;
+    reported.current = list.length;
+    props.onDone({ ...sessionBase(props, deps, startedMs.current), kind: 'match', drone: droneOn, attempts: fresh });
+    startedMs.current = deps.nowMs();
   };
 
   const sing = async () => {
@@ -133,6 +136,7 @@ export function MatchNoteScreen(props: MatchNoteScreenProps) {
   const reportRef = useRef(report);
   reportRef.current = report;
   useEffect(() => () => reportRef.current(latest.current), []);
+  useFlushOnHide(() => reportRef.current(latest.current), props.plan !== undefined);
 
   useSkillKeys({
     onReturn: () => {
@@ -231,7 +235,7 @@ export function MatchNoteScreen(props: MatchNoteScreenProps) {
             <Stat label="Average time to lock in" value={seconds(meanOf(attempts.filter((a) => a.locked).map((a) => a.lockSec)))} />
             <Stat label="Average distance where you settled" value={(() => {
               const m = meanAbs(attempts.map((a) => a.heldCents));
-              return m !== null ? `${Math.round(m)} cents` : '–';
+              return m !== null ? `${centsCount(m)}` : '–';
             })()} />
           </dl>
           <div className="button-row">

@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { isDesktopKind } from '../../../pwa/platform';
 import { AUTO_STOP_RULES } from '../../../skills/audio';
 import { degreeWeights } from '../../../skills/progress';
-import { centsMeaning } from '../../../skills/score';
+import { centsMeaning, countsForTuning } from '../../../skills/score';
 import {
   cadenceEvents,
   concatEvents,
@@ -20,17 +20,19 @@ import {
   makeSkillsRng,
   mixedLength,
   parseSequence,
+  prettyAccidentals,
   randomLine,
   SCALE_MODE_LABELS,
   SCALE_MODES,
   SEQUENCE_EXAMPLE,
   SEQUENCE_PRESETS,
   sequenceText,
+  spellDegreeWithOctave,
   tooWideMessage,
   type Rng,
 } from '../../../skills/theory';
 import type { LabelMode, ScaleMode, SequencePlan, SequenceScore, SequenceSession, SequenceTarget, SkillScreenProps, VoiceRange } from '../../../skills/types';
-import { a4For, centsText, centsWords, NO_PITCH_TEXT, noteName, percent, rangeFor, sessionBase, toleranceFor, TOO_QUIET_TEXT } from './common';
+import { a4For, centsText, centsWords, NO_PITCH_TEXT, percent, rangeFor, sessionBase, toleranceFor, TOO_QUIET_TEXT, useFlushOnHide, centsCount } from './common';
 import { useSingDeps, type SingDeps } from './deps';
 import { outcomeError, useSkillKeys, useTake } from './useTake';
 import { DegreeStrip, ErrorNotice, FindingList, LiveRegion, LiveTrace, ScreenHead, Stat, StrictnessLine, TakeStatus, useAnnounceFocus } from './widgets';
@@ -66,7 +68,8 @@ export function sequenceItem(s: SequenceScore, mode: 'read' | 'listen'): Item {
     meanAbsIntervalCents: s.meanAbsIntervalCents,
     driftCents: s.driftCents,
     octaveOffset: s.octaveOffset,
-    perNote: s.notes.filter((n) => n.sung && n.cents !== null).map((n) => ({ degree: n.degree, cents: n.cents as number })),
+    // Only tuning errors feed the per-degree profile: wrong notes, octave slips and a line sung in another key do not.
+    perNote: s.notes.filter((n) => countsForTuning(n, s)).map((n) => ({ degree: n.degree, cents: n.cents as number })),
     missing: s.missing,
     extras: s.extras.length,
   };
@@ -108,7 +111,7 @@ export function SequenceScreen(props: SequenceScreenProps) {
   const [active, setActive] = useState<number | null>(null);
   const [finished, setFinished] = useState(false);
   const startedMs = useRef(deps.nowMs());
-  const reported = useRef(false);
+  const reported = useRef(0);
   const headingRef = useAnnounceFocus(score ?? (finished ? 'done' : null));
   const busy = take.phase !== 'idle';
 
@@ -118,10 +121,13 @@ export function SequenceScreen(props: SequenceScreenProps) {
 
   const labels = useMemo(() => (target ? lineLabels(target.notes, target.key.mode, labelMode, target.key) : []), [target, labelMode]);
 
+  // Saves the takes not saved yet as one session (Finish, Back, leaving the screen, or the page being hidden/closed).
   const report = (list: Item[]) => {
-    if (reported.current || !list.some((i) => i.status === 'ok')) return;
-    reported.current = true;
-    props.onDone({ ...sessionBase(props, deps, startedMs.current), kind: 'sequence', items: list });
+    const fresh = list.slice(reported.current);
+    if (!fresh.some((i) => i.status === 'ok')) return;
+    reported.current = list.length;
+    props.onDone({ ...sessionBase(props, deps, startedMs.current), kind: 'sequence', items: fresh });
+    startedMs.current = deps.nowMs();
   };
 
   const chooseLine = (t: string, m: ScaleMode = scaleMode) => {
@@ -146,11 +152,22 @@ export function SequenceScreen(props: SequenceScreenProps) {
 
   const promptEvents = (t: SequenceTarget) => (mode === 'listen' ? concatEvents(cadenceEvents(t.key), lineEvents(t), 0.5) : cadenceEvents(t.key));
 
+  const itemRef = useRef<HTMLDivElement>(null);
+  /** Brings the line, the status, Stop and the trace on screen (on a 780 px Mac window they sit below the chooser). */
+  const showItem = () => {
+    try {
+      itemRef.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+    } catch {
+      // jsdom and some embedded browsers do not scroll.
+    }
+  };
+
   const sing = async () => {
     if (!target || busy) return;
     const t = target;
     setError(null);
     setScore(null);
+    showItem();
     const out = await take.run({
       events: promptEvents(t),
       rule: AUTO_STOP_RULES.sequence(t.midis.length),
@@ -199,6 +216,7 @@ export function SequenceScreen(props: SequenceScreenProps) {
   const latest = useRef({ items, report });
   latest.current = { items, report };
   useEffect(() => () => latest.current.report(latest.current.items), []);
+  useFlushOnHide(() => latest.current.report(latest.current.items), planTexts !== null);
 
   useSkillKeys({
     onReturn: () => {
@@ -283,7 +301,7 @@ export function SequenceScreen(props: SequenceScreenProps) {
                   </button>
                 </div>
                 <p className="field-hint" id="seq-text-help">
-                  Degrees 1 to 8, with spaces or commas: "7 6 5 4 3 2" or "2 7 6 5". Add - after a degree for the octave below, + for the octave above ("1 7- 1").
+                  Degrees 1 to 8, with spaces or commas: "7 6 5 4 3 2" or "2 7 6 5". Each number stays between 1 and 8 unless the step would be wider than a 5th ("1 5" goes up). Add - after a degree for the octave below ("1 7- 1", "1 5-"), + for the octave above.
                 </p>
                 <p className="field-error" id="seq-text-error" role="alert">
                   {typedError ? `${typedError.error}${typedError.at !== null ? ` (at character ${typedError.at + 1})` : ''}` : (lineError ?? '')}
@@ -335,14 +353,16 @@ export function SequenceScreen(props: SequenceScreenProps) {
             </p>
           )}
           {target && (
-            <div className="sing-item">
+            <div className="sing-item" ref={itemRef}>
               <p className="sing-key">
-                In {keyName(target.key)} · 1 = {noteName(target.key.tonicMidi)}
+                In {keyName(target.key)} · 1 = {prettyAccidentals(spellDegreeWithOctave(target.key, 1, target.key.tonicMidi))}
               </p>
               <DegreeStrip labels={labels} results={score?.status === 'ok' ? score.notes : null} activeIndex={active} toleranceCents={tolerance} />
               <StrictnessLine strictness={props.prefs.strictness} toleranceCents={tolerance} />
-              <TakeStatus phase={take.phase} kind={kind} elapsedSec={take.elapsedSec} onStop={() => take.stop('button')} hint={`Sing all ${target.midis.length} notes. It stops after a short silence at the end.`} />
-              {take.phase === 'listening' && <LiveTrace trace={take.trace} targets={target.midis} toleranceCents={tolerance} windowSec={Math.min(12, 3 + target.midis.length)} />}
+              <TakeStatus phase={take.phase} kind={kind} elapsedSec={take.elapsedSec} onStop={() => take.stop('button')} hint={`Sing all ${target.midis.length} notes at your own pace. It stops after a short silence at the end${take.phase === 'listening' ? ` (or in ${Math.max(0, Math.ceil(AUTO_STOP_RULES.sequence(target.midis.length).capSec - take.elapsedSec))} s)` : ''}.`} />
+              {take.phase === 'listening' && (
+                <LiveTrace trace={take.trace} targets={target.midis} toleranceCents={tolerance} windowSec={Math.min(12, 3 + target.midis.length)} hideTargets={mode === 'read'} />
+              )}
               {score && take.phase === 'idle' && <SequenceResult score={score} labels={labels.map(degreeLabelText)} headingRef={headingRef} />}
               {take.phase === 'idle' && (
                 <div className="button-row">
@@ -409,7 +429,7 @@ export function SequenceScreen(props: SequenceScreenProps) {
                 <tr key={k}>
                   <th scope="row">{i.text}</th>
                   <td>{percent(i.noteAccuracy)}</td>
-                  <td>{i.meanAbsCents !== null ? `${Math.round(i.meanAbsCents)} cents` : '–'}</td>
+                  <td>{i.meanAbsCents !== null ? `${centsCount(i.meanAbsCents)}` : '–'}</td>
                   <td>{centsText(i.driftCents)}</td>
                 </tr>
               ))}
@@ -451,11 +471,11 @@ function SequenceResult(props: { score: SequenceScore; labels: string[]; heading
       </h2>
       <dl className="sing-stats">
         <Stat label="Notes in the band" value={percent(s.noteAccuracy)} tone={s.noteAccuracy !== null && s.noteAccuracy >= 0.8 ? 'within' : s.noteAccuracy !== null && s.noteAccuracy >= 0.5 ? 'near' : 'off'} />
-        <Stat label="Average distance" value={s.meanAbsCents !== null ? `${Math.round(s.meanAbsCents)} cents` : '–'} note={s.meanAbsCents !== null ? centsMeaning(s.meanAbsCents) : undefined} />
-        <Stat label="Steps between notes" value={s.meanAbsIntervalCents !== null ? `${Math.round(s.meanAbsIntervalCents)} cents off` : '–'} note="average error of each jump" />
+        <Stat label="Average distance" value={s.meanAbsCents !== null ? `${centsCount(s.meanAbsCents)}` : '–'} note={s.meanAbsCents !== null ? centsMeaning(s.meanAbsCents) : undefined} />
+        <Stat label="Steps between notes" value={s.meanAbsIntervalCents !== null ? `${centsCount(s.meanAbsIntervalCents)} off` : '–'} note="average error of each jump" />
         <Stat label="Drift over the line" value={centsText(s.driftCents)} note={s.driftCents !== null ? (Math.abs(s.driftCents) < 20 ? 'the key held steady' : `slid ${s.driftCents < 0 ? 'flat' : 'sharp'} from start to end`) : undefined} />
       </dl>
-      {s.octaveOffset !== 0 && (
+      {s.octaveOffset !== 0 && !s.findings.some((f) => /^You sang the line .*octave/.test(f.text)) && (
         <p className="sing-info">
           You sang the line {Math.abs(s.octaveOffset) === 1 ? 'an octave' : `${Math.abs(s.octaveOffset)} octaves`} {s.octaveOffset < 0 ? 'lower' : 'higher'} than it played. That is fine: the notes are judged by name.
         </p>

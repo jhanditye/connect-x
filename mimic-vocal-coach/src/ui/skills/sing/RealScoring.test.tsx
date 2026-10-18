@@ -37,7 +37,9 @@ describe('singing screens with the real scorers', () => {
     expect(items[0].className).not.toContain('sing-acc--within');
     expect(items[0].getAttribute('aria-label')).toMatch(/^7: (3\d|4\d) cents flat/);
     for (const el of items.slice(1)) expect(el.className).toContain('sing-acc--within');
-    expect(h.text()).toContain('an octave lower than it played');
+    // The octave is said once (the scorer's finding; the screen's own line is not repeated under it).
+    expect(h.text()).toContain('You sang the line an octave lower. That is fine');
+    expect(h.text()).not.toContain('an octave lower than it played');
     expect(h.text()).toContain('5 of 6 notes in the band');
     await h.click(/^Finish/);
     const s = props.onDone.mock.calls[0][0];

@@ -112,7 +112,7 @@ export function earFindings(answers: readonly EarAnswer[], mode: EarMode): Findi
   const top = [...pairs.values()].sort((a, b) => b.n - a.n)[0];
   if (top) {
     const asked = mode === 'interval' ? `the ${intervalName(top.asked)}` : `degree ${top.asked}`;
-    const said = mode === 'interval' ? `a ${intervalName(top.said)}`.replace(/^a ([aeiou]|octave)/, 'an $1') : `${top.said}`;
+    const said = mode === 'interval' ? `a ${intervalName(top.said)}`.replace(/^a ([aeio]|octave)/, 'an $1') : `${top.said}`;
     const times = top.n === 1 ? 'once' : top.n === 2 ? 'twice' : `${top.n} times`;
     out.push({ tone: 'work', text: `You heard ${asked} as ${said} ${times}. Use "Hear both" after a miss to compare them side by side.` });
   }

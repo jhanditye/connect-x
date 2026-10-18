@@ -92,7 +92,7 @@ describe('SequenceScreen', () => {
     expect(roles.slice(0, 4)).toEqual(['cadence', 'cadence', 'cadence', 'cadence']);
     expect(roles[4]).toBe('tonic');
     expect(roles).not.toContain('line');
-    expect(world.last.opts.rule).toEqual({ kind: 'notes', expectedNotes: 6, silenceSec: 1.2, capSec: 13 });
+    expect(world.last.opts.rule).toEqual({ kind: 'notes', expectedNotes: 6, silenceSec: 1.2, capSec: 22 });
     await act(async () => {
       world.last.emit(60);
       world.last.autoStop('auto-silence');
@@ -115,6 +115,31 @@ describe('SequenceScreen', () => {
     expect(s.kind).toBe('sequence');
     expect(s.items[0]).toMatchObject({ text: '7 6 5 4 3 2', scaleMode: 'major', octaveOffset: -1, missing: 0, extras: 0 });
     expect(s.items[0].perNote[0]).toEqual({ degree: 7, cents: -41 });
+  });
+
+  it('saves scored takes when the page is closed or reloaded (no unmount), and Finish saves only the new ones', async () => {
+    const { world, props } = renderSeq();
+    await h.click(/Play the key and sing/);
+    await act(async () => world.last.autoStop('auto-silence'));
+    await h.flush();
+    expect(props.onDone).not.toHaveBeenCalled();
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(props.onDone).toHaveBeenCalledTimes(1);
+    expect(props.onDone.mock.calls[0][0].items).toHaveLength(1);
+    // A second pagehide with nothing new saves nothing.
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'));
+    });
+    expect(props.onDone).toHaveBeenCalledTimes(1);
+    await h.key('Enter');
+    await act(async () => world.last.autoStop('auto-silence'));
+    await h.flush();
+    await h.click(/^Finish/);
+    expect(props.onDone).toHaveBeenCalledTimes(2);
+    expect(props.onDone.mock.calls[1][0].items).toHaveLength(1);
+    expect(props.onDone.mock.calls[1][0].id).not.toBe(props.onDone.mock.calls[0][0].id);
   });
 
   it('listen and repeat plays the line after the cadence and highlights the sounding degree', async () => {

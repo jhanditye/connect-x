@@ -161,7 +161,7 @@ describe('library backup: export, wipe, import, add the files again', () => {
     expect(saved).toHaveLength(1);
     expect(saved[0].name).toMatch(/^mimic-library-\d{4}-\d{2}-\d{2}\.json$/);
     const backupText = await saved[0].text;
-    expect(document.body.textContent).toMatch(/Backup saved\. It holds your clips, phrases and scores but no audio/);
+    expect(document.body.textContent).toMatch(/Backup saved\. It holds your clips, phrases and scores and your Skills progress, but no audio/);
     const backup = JSON.parse(backupText);
     expect(backup.clips).toHaveLength(1);
     expect(backup.attempts).toHaveLength(1);

@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { isDesktopKind } from '../../../pwa/platform';
 import { AUTO_STOP_RULES } from '../../../skills/audio';
 import { intervalSetWeakness } from '../../../skills/progress';
-import { centsMeaning } from '../../../skills/score';
+import { centsMeaning, sungStepPhrase } from '../../../skills/score';
 import {
   cleanIntervalSet,
   earSetForLevel,
@@ -21,7 +21,7 @@ import {
   singIntervalTarget,
 } from '../../../skills/theory';
 import type { IntervalTarget, SingIntervalsPlan, SingIntervalsSession, SkillScreenProps, SungDirection, SungIntervalScore } from '../../../skills/types';
-import { a4For, accuracyOf, centsText, centsWords, meanAbs, NO_PITCH_TEXT, noteName, rangeFor, sessionBase, toleranceFor, TOO_QUIET_TEXT } from './common';
+import { a4For, accuracyOf, centsText, centsWords, meanAbs, NO_PITCH_TEXT, noteName, rangeFor, sessionBase, toleranceFor, TOO_QUIET_TEXT, useFlushOnHide, centsCount } from './common';
 import { useSingDeps, type SingDeps } from './deps';
 import { outcomeError, useSkillKeys, useTake } from './useTake';
 import { ACCURACY_CLASS, ErrorNotice, FindingList, LiveRegion, LiveTrace, ScreenHead, Stat, StrictnessLine, TakeStatus, useAnnounceFocus } from './widgets';
@@ -48,11 +48,18 @@ export function intervalInstruction(t: IntervalTarget, mode: 'read' | 'listen'):
   return `Sing the note, then ${intervalPhrase(t.semitones, t.direction)}`;
 }
 
+/** A wrong interval counts as a semitone off in averages (as in the progress stats), so one slip cannot swamp them. */
+const capCents = (c: number | null): number | null => (c === null ? null : Math.max(-100, Math.min(100, c)));
+
 export function intervalResultLine(s: SungIntervalScore, tolerance: number): string {
   if (s.status === 'too-quiet') return 'Too quiet to score.';
-  if (s.status === 'no-pitch' || s.intervalCents === null) return 'Two clear notes were not found.';
+  if (s.status === 'no-pitch' || s.intervalCents === null) return s.first && !s.second ? 'Only one clear note was heard.' : 'Two clear notes were not found.';
   if (s.wrongDirection) return `The second note went the other way (${s.target.direction === 'up' ? 'down instead of up' : 'up instead of down'}).`;
-  const size = Math.abs(s.intervalCents) <= tolerance ? 'the right size' : `${Math.round(Math.abs(s.intervalCents))} cents too ${s.intervalCents > 0 ? 'wide' : 'narrow'}`;
+  // A different interval (a 3rd for a 6th, the same note for an octave) is named, never called "the right size".
+  if (!s.within && Math.abs(s.intervalCents) >= 105 && s.sungSemitones !== null) {
+    return `You sang ${sungStepPhrase(s.sungSemitones)}, not ${intervalPhrase(s.target.semitones, s.target.direction)}.`;
+  }
+  const size = Math.abs(s.intervalCents) <= tolerance ? 'the right size' : `${centsCount(Math.abs(s.intervalCents))} too ${s.intervalCents > 0 ? 'wide' : 'narrow'}`;
   return `Interval ${size}.`;
 }
 
@@ -82,21 +89,24 @@ export function SingIntervalsScreen(props: SingIntervalsScreenProps) {
   const [announce, setAnnounce] = useState('');
   const [finished, setFinished] = useState(false);
   const startedMs = useRef(deps.nowMs());
-  const reported = useRef(false);
+  const reported = useRef(0);
   const headingRef = useAnnounceFocus(current ?? (finished ? 'done' : null));
   const busy = take.phase !== 'idle';
   const second = intervalTargetOf(target);
   const scoredItems = items.filter((i) => i.status === 'ok');
 
+  // Saves the takes not saved yet as one session (Finish, Back, leaving the screen, or the page being hidden/closed).
   const report = (list: Item[]) => {
-    if (reported.current || !list.some((i) => i.status === 'ok')) return;
-    reported.current = true;
+    const fresh = list.slice(reported.current);
+    if (!fresh.some((i) => i.status === 'ok')) return;
+    reported.current = list.length;
     props.onDone({
       ...sessionBase(props, deps, startedMs.current),
       kind: 'sing-intervals',
-      items: list,
-      meanAbsIntervalCents: meanAbs(list.map((i) => i.intervalCents)),
+      items: fresh,
+      meanAbsIntervalCents: meanAbs(fresh.map((i) => capCents(i.intervalCents))),
     });
+    startedMs.current = deps.nowMs();
   };
 
   const promptEvents = () => (mode === 'listen' ? intervalEvents(target.referenceMidi, target.semitones, target.direction) : noteEvents(target.referenceMidi));
@@ -162,6 +172,7 @@ export function SingIntervalsScreen(props: SingIntervalsScreenProps) {
   const latest = useRef({ items, report });
   latest.current = { items, report };
   useEffect(() => () => latest.current.report(latest.current.items), []);
+  useFlushOnHide(() => latest.current.report(latest.current.items), props.plan !== undefined);
 
   useSkillKeys({
     onReturn: () => {
@@ -216,7 +227,7 @@ export function SingIntervalsScreen(props: SingIntervalsScreenProps) {
           </p>
           {hint && mode === 'read' && <p className="muted">Hint: {intervalName(target.semitones)} up starts {hint}.</p>}
           <TakeStatus phase={take.phase} kind={kind} elapsedSec={take.elapsedSec} onStop={() => take.stop('button')} hint="Sing the first note, then the second. It stops after a short silence." />
-          {take.phase === 'listening' && <LiveTrace trace={take.trace} targets={[target.referenceMidi, second]} toleranceCents={tolerance} />}
+          {take.phase === 'listening' && <LiveTrace trace={take.trace} targets={[target.referenceMidi, second]} toleranceCents={tolerance} hideTargets={mode === 'read'} />}
           {current && take.phase === 'idle' && (
             <div className="sing-result">
               <h2 className="sing-result-title" tabIndex={-1} ref={headingRef}>
@@ -288,8 +299,8 @@ export function SingIntervalsScreen(props: SingIntervalsScreenProps) {
             <Stat
               label="Average interval error"
               value={(() => {
-                const m = meanAbs(scoredItems.map((i) => i.intervalCents));
-                return m !== null ? `${Math.round(m)} cents` : '–';
+                const m = meanAbs(scoredItems.map((i) => capCents(i.intervalCents)));
+                return m !== null ? `${centsCount(m)}` : '–';
               })()}
               note="the size of the jump, whatever note you started on"
             />

@@ -531,11 +531,13 @@ export function GuidePage(props: { /** Which device the words are for; the real 
           <h3>Scale degrees</h3>
           <p>
             In a key, the notes of the scale are numbered from the key note: 1 is the key note (do), then 2 re, 3 mi, 4 fa, 5 sol, 6 la, 7 ti, and
-            8 is the key note an octave up. Minor keys use the same numbers; in solfège their lowered notes are me (3), le (6) and te (7). A few
+            8 is the key note an octave up. Minor keys use the same numbers; in solfège their lowered notes are me (3) and le (6), plus te (7) in natural minor
+            (harmonic minor keeps ti, and its chords use ti too). A few
             chords play first so your ear knows where 1 is, then you sing the line.
           </p>
           <p>
-            When you type a line, each number takes the octave closest to the note before it, so in “2 7 6 5” the 7 is just below the 2. Add{' '}
+            When you type a line, each number stays between 1 and 8 when the step there is a 5th or smaller, so “1 5 8 5 1” rises and comes
+            home. A step that would be wider than a 5th goes to the nearer octave instead, so in “2 7 6 5” the 7 is just below the 2. Add{' '}
             <span className="num">-</span> after a number for the octave below (“1 7- 1”) and <span className="num">+</span> for the octave above.
           </p>
           <h3>Breath</h3>

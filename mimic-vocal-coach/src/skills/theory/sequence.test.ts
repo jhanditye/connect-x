@@ -36,6 +36,44 @@ describe('parseSequence: the singer\'s examples', () => {
   });
 });
 
+describe('parseSequence: unmarked degrees stay between 1 and 8 unless the step is wider than a 5th', () => {
+  it('rising 5ths and arpeggios from 1 go up, not down', () => {
+    expect(semis('1 5')).toEqual([0, 7]);
+    expect(semis('1 5 1')).toEqual([0, 7, 0]);
+    // A 6th is wider than a 5th, so the plain 6 after 1 is the nearer one, a 3rd below. Marks give the rising 6th
+    // (the key is fitted to the voice afterwards, so only the shape matters).
+    expect(semis('1 6 5')).toEqual([0, -3, -5]);
+    expect(semis('1- 6- 5-')).toEqual([-12, -3, -5]);
+    expect(semis('1 5 3 1')).toEqual([0, 7, 4, 0]);
+    expect(semis('1 5 8')).toEqual([0, 7, 12]);
+    expect(semis('1 5 8 5 1')).toEqual([0, 7, 12, 7, 0]);
+  });
+
+  it('a line with an 8 comes home to the lower 1', () => {
+    expect(semis('1 8 1')).toEqual([0, 12, 0]);
+    expect(semis('8 1')).toEqual([12, 0]);
+    expect(semis('8 5 1')).toEqual([12, 7, 0]);
+    expect(semis('5 8 1')).toEqual([7, 12, 0]);
+    expect(semis('1 8 1 5 1')).toEqual([0, 12, 0, 7, 0]);
+  });
+
+  it('"3 6 2 5 1" stays inside the octave instead of climbing by 4ths', () => {
+    expect(semis('3 6 2 5 1')).toEqual([4, 9, 2, 7, 0]);
+  });
+
+  it('a step wider than a 5th crosses to the nearer octave', () => {
+    expect(semis('6 7 1 2')).toEqual([9, 11, 12, 14]);
+    expect(semis('3 2 1 7 1')).toEqual([4, 2, 0, -1, 0]);
+    expect(semis('2 7 6 5 4')).toEqual([2, -1, -3, -5, -7]);
+  });
+
+  it('marks still say exactly where a note goes', () => {
+    expect(semis('1 5-')).toEqual([0, -5]);
+    expect(semis('1 5+')).toEqual([0, 19]);
+    expect(semis('1 8 1-')).toEqual([0, 12, -12]);
+  });
+});
+
 describe('parseSequence: octave marks', () => {
   it('"-" and "_" put a degree in the octave below; "+" and "\'" above; marks stack', () => {
     expect(semis('1 7- 1 2 1')).toEqual([0, -1, 0, 2, 0]);
@@ -75,8 +113,13 @@ describe('parseSequence: tritone ties', () => {
     expect(semis('4 7 4 7')).toEqual([5, 11, 5, 11]);
   });
 
-  it('a flat line goes down on the tie and comes back home', () => {
-    expect(semis('4 7 4')).toEqual([5, -1, 5]);
+  it('a tritone inside the home octave stays at home: "4 7 4" is F B F', () => {
+    expect(semis('4 7 4')).toEqual([5, 11, 5]);
+  });
+
+  it('a tie outside the home octave follows the line down', () => {
+    // From the 7 an octave up, the 4 at home is 18 semitones away: crosses, and 17 / 29 tie at a tritone.
+    expect(semis('7+ 4')).toEqual([23, 17]);
   });
 
   it('the mode changes the scale steps: natural minor 2 -> 6 is a tritone', () => {

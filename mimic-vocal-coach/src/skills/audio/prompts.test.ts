@@ -221,11 +221,14 @@ describe('the cadence that sets the key', () => {
         for (let i = 0; i + 1 < uppers.length; i++) {
           for (const n of uppers[i]) expect(Math.min(...uppers[i + 1].map((m) => Math.abs(m - n)))).toBeLessThanOrEqual(2);
         }
-        // V7 has the leading tone (raised 7th, also in minor) resolving up to the tonic.
-        expect(chords[2]).toContain(tonic - 1);
-        expect(chords[3]).toContain(tonic);
+        // The chords sit in a middle register whatever the tonic, so compare pitch classes.
+        const pcs = (c: number[]) => c.map((m) => ((m % 12) + 12) % 12);
+        const pc = (m: number) => ((m % 12) + 12) % 12;
+        // V7 has the leading tone (ti) in major and harmonic minor; natural minor's v7 has te, the 7 its lines use.
+        expect(pcs(chords[2])).toContain(pc(tonic + (mode === 'natural-minor' ? -2 : -1)));
+        expect(pcs(chords[3])).toContain(pc(tonic));
         // Tonic chord third: major 3rd in major, minor 3rd in minor.
-        expect(chords[0]).toContain(tonic + (mode === 'major' ? 4 : 3));
+        expect(pcs(chords[0])).toContain(pc(tonic + (mode === 'major' ? 4 : 3)));
         // Bass under everything.
         chords.forEach((c) => expect(c[0]).toBe(Math.min(...c)));
       }

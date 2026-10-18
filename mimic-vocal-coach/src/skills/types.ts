@@ -257,6 +257,8 @@ export interface PitchTestSummary {
   meanStabilityCents: number | null;
   meanTimeToLandSec: number | null;
   octaveSlips: number;
+  /** Notes sung as a different note (WRONG_NOTE_CENTS or more away, not just another octave); kept out of the averages. */
+  wrongNotes?: number;
   byRegister: Record<RegisterThird, RegisterStats>;
   findings: Finding[];
 }
@@ -319,6 +321,11 @@ export interface SequenceScore {
   meanAbsIntervalCents: number | null;
   /** Trend of the signed error from the first to the last note, cents (- = slid flat). */
   driftCents: number | null;
+  /**
+   * Right shape in the wrong key: every matched note sat about this far from the key (cents, + = above). Absent or
+   * null when the line was in the key. Such takes are kept out of the per-degree tuning profile.
+   */
+  keyShiftCents?: number | null;
   findings: Finding[];
 }
 

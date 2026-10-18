@@ -85,7 +85,7 @@ export async function downloadLibraryBackup(trainer: Pick<TrainerController, 'ex
     }
     await trainer.markExported?.();
     const where = isDesktopKind(platformKind()) ? ` Look for ${name} in your Downloads folder (or wherever your browser keeps downloads).` : '';
-    return { ok: true, message: `Backup saved.${where} It holds your clips, phrases and scores but no audio; the audio stays on this device.${leftOut(report)}` };
+    return { ok: true, message: `Backup saved.${where} It holds your clips, phrases and scores and your Skills progress, but no audio; the audio stays on this device.${leftOut(report)}` };
   } catch (err) {
     const why = err instanceof Error && err.message ? ` ${err.message}` : '';
     return { ok: false, message: `The backup could not be saved.${why} Try again, or reload the app first.` };

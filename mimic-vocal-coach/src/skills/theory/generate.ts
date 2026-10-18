@@ -147,13 +147,14 @@ export function lineFromDegrees(degrees: readonly WrittenDegree[], mode: ScaleMo
 /**
  * A random line of `length` notes (clamped 2..12), biased towards weak degrees. `degreeWeights[d-1]` is the weakness
  * weight of degree d (default 1 each). Starts on 1, 3 or 5 so the key is easy to hear; never repeats a degree back to
- * back; leaps are at most `maxLeap` semitones (default 7, a 5th); the whole line spans at most `maxSpan` (default 12).
+ * back; leaps are at most `maxLeap` semitones (default 7, a 5th) and never a tritone unless `allowTritone`; the whole line
+ * spans at most `maxSpan` (default 12).
  */
 export function randomLine(
   rng: Rng,
   length: number,
   mode: ScaleMode,
-  opts: { degreeWeights?: readonly number[]; maxLeap?: number; maxSpan?: number } = {},
+  opts: { degreeWeights?: readonly number[]; maxLeap?: number; maxSpan?: number; allowTritone?: boolean } = {},
 ): SeqNote[] {
   const n = Math.max(2, Math.min(12, Math.round(length)));
   const maxLeap = opts.maxLeap ?? 7;
@@ -173,7 +174,9 @@ export function randomLine(
         const last = trial[trial.length - 1].semitones;
         const before = trial[trial.length - 2].semitones;
         const span = Math.max(...trial.map((x) => x.semitones)) - Math.min(...trial.map((x) => x.semitones));
-        if (Math.abs(last - before) <= maxLeap && span <= maxSpan) {
+        // Tritone leaps (4 to 7) are hard to sing in tune: left out unless asked for.
+        const tritone = Math.abs(last - before) === 6 && !opts.allowTritone;
+        if (Math.abs(last - before) <= maxLeap && span <= maxSpan && !tritone) {
           degrees.push(d);
           placed = true;
         }

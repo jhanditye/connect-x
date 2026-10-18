@@ -1,6 +1,7 @@
 // Single held notes: the pitch accuracy test and match-the-note (offline score and live lock-in).
 
 import { mean } from '../../dsp/stats';
+import { intervalPhrase } from '../theory/intervals';
 import { registerThirdOf } from '../theory/range';
 import type {
   Finding,
@@ -16,6 +17,7 @@ import { WIDE_BAND_CENTS } from '../types';
 import {
   BIAS_FINDING_CENTS,
   BIAS_FINDING_MIN_NOTES,
+  LAND_SMOOTH_SEC,
   LAND_STAY_SEC,
   LANDING_SLOPE_ST_PER_SEC,
   LANDING_WINDOW_SEC,
@@ -29,9 +31,10 @@ import {
   SCOOP_FINDING_CENTS,
   SMOOTH_SEC,
   WANDER_FINDING_CENTS,
+  WRONG_NOTE_CENTS,
 } from './constants';
 import { centsMeaning, sharpFlat } from './format';
-import { analyseTake, foldCents, slopeAt, smoothRange, takeStatus, unscoredFinding, voicedStretches } from './frames';
+import { analyseTake, foldCents, octaveAndCents, slopeAt, smoothRange, takeStatus, unscoredFinding, voicedStretches } from './frames';
 import { buildNote, landingPitch } from './segment';
 
 /**
@@ -81,8 +84,12 @@ export function scoreHeldNote(
   const hop = fr.hop;
   const tol = opts.toleranceCents;
 
-  const octaveOffset = Math.round((note.midi - targetMidi) / 12) || 0;
-  const heldCents = foldCents((note.midi - targetMidi) * 100);
+  // An octave error only when the pitch class is right; a 5th up is a different note (+700), not "an octave up, 500 flat".
+  const oc = octaveAndCents((note.midi - targetMidi) * 100);
+  const octaveOffset = oc.octaves || 0;
+  const heldCents = oc.cents;
+  const wrongNote = Math.abs(heldCents) >= WRONG_NOTE_CENTS;
+  const centsOf = (midi: number) => (midi - targetMidi - 12 * octaveOffset) * 100;
 
   // Landing and time to land are measured from the voice onset over the whole stretch (scoops included).
   const [s0, s1] = best;
@@ -93,18 +100,20 @@ export function scoreHeldNote(
     const sl = slopeAt(sm, k, hop);
     if (Number.isNaN(sl) || Math.abs(sl) >= LANDING_SLOPE_ST_PER_SEC) continue;
     const m = landingPitch(fr, s0 + k, lw);
-    if (!Number.isNaN(m)) landingCents = foldCents((m - targetMidi) * 100);
+    if (!Number.isNaN(m)) landingCents = centsOf(m);
     break;
   }
   if (landingCents !== null) note.landingMidi = targetMidi + 12 * octaveOffset + landingCents / 100;
+  // Time to land: averaged over whole vibrato cycles (LAND_SMOOTH_SEC), so a centred vibrato counts as landed.
+  const smLand = smoothRange(fr.midi, s0, s1, Math.max(3, Math.round(LAND_SMOOTH_SEC / hop) | 1));
   let onset = 0;
   while (onset < sm.length && Number.isNaN(sm[onset])) onset++;
   const stay = Math.round(LAND_STAY_SEC / hop);
   let timeToLandSec: number | null = null;
   let run = 0;
-  for (let k = onset; k < sm.length; k++) {
-    if (Number.isNaN(sm[k])) continue;
-    if (Math.abs(foldCents((sm[k] - targetMidi) * 100)) <= tol) {
+  for (let k = onset; k < smLand.length; k++) {
+    if (Number.isNaN(smLand[k])) continue;
+    if (Math.abs(centsOf(smLand[k])) <= tol) {
       run++;
       if (run >= stay) {
         timeToLandSec = Math.max(0, (k - run + 1 - onset) * hop);
@@ -122,8 +131,9 @@ export function scoreHeldNote(
     });
   }
   if (within) findings.push({ tone: 'good', text: `In tune: ${sharpFlat(heldCents)}.` });
+  else if (wrongNote) findings.push({ tone: 'work', text: `That was a different note: ${differentNoteWords(heldCents)} the one played. Listen again and match it.` });
   else findings.push({ tone: 'work', text: `You held it ${sharpFlat(heldCents)} (${centsMeaning(heldCents)}).` });
-  if (landingCents !== null && landingCents - heldCents <= SCOOP_FINDING_CENTS) {
+  if (!wrongNote && landingCents !== null && landingCents - heldCents <= SCOOP_FINDING_CENTS) {
     findings.push({ tone: 'work', text: `You arrived about ${Math.round(heldCents - landingCents)} cents under the note and then slid up. Aim for the centre straight away.` });
   }
   if (note.stabilityCents > WANDER_FINDING_CENTS) {
@@ -146,6 +156,20 @@ export function scoreHeldNote(
 
 const REGISTER_WORDS: Record<RegisterThird, string> = { low: 'low', mid: 'middle', high: 'high' };
 
+/** "about a perfect 5th above", "a semitone below" for a different note (cents from the target). */
+export function differentNoteWords(cents: number): string {
+  const semis = Math.round(Math.abs(cents) / 100);
+  const where = cents > 0 ? 'above' : 'below';
+  if (semis <= 1) return `about a semitone ${where}`;
+  if (semis <= 12) return `about ${intervalPhrase(semis, 'up').replace(/ up$/, '')} ${where}`;
+  return `more than an octave ${where}`;
+}
+
+/** A held note sung as a different note (not just out of tune, not just another octave). */
+export function isWrongHeldNote(n: Pick<HeldNoteScore, 'status' | 'heldCents'>): boolean {
+  return n.status === 'ok' && n.heldCents !== null && Math.abs(n.heldCents) >= WRONG_NOTE_CENTS;
+}
+
 function registerStats(notes: HeldNoteScore[], tol: number): RegisterStats {
   const cents = notes.map((n) => n.heldCents).filter((c): c is number => c !== null);
   if (!cents.length) return { n: 0, meanAbsCents: null, biasCents: null, shareWithin: null };
@@ -159,7 +183,10 @@ function registerStats(notes: HeldNoteScore[], tol: number): RegisterStats {
 
 /** Summary of a pitch test: accuracy, bias, by register, and up to three plain findings. */
 export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: number): PitchTestSummary {
-  const scored = notes.filter((n) => n.status === 'ok' && n.heldCents !== null);
+  const allScored = notes.filter((n) => n.status === 'ok' && n.heldCents !== null);
+  // Different notes are counted, named and kept out of the averages (one misheard note must not read as a flat voice).
+  const wrong = allScored.filter((n) => isWrongHeldNote(n));
+  const scored = allScored.filter((n) => !isWrongHeldNote(n));
   const cents = scored.map((n) => n.heldCents as number);
   const nullable = (xs: number[]) => (xs.length ? mean(xs) : null);
   const stab = scored.map((n) => n.stabilityCents).filter((c): c is number => c !== null && Number.isFinite(c));
@@ -169,14 +196,14 @@ export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: numbe
     mid: registerStats(scored.filter((n) => n.register === 'mid'), toleranceCents),
     high: registerStats(scored.filter((n) => n.register === 'high'), toleranceCents),
   };
-  const shareWithin = cents.length ? cents.filter((c) => Math.abs(c) <= toleranceCents).length / cents.length : null;
-  const shareWithin50 = cents.length ? cents.filter((c) => Math.abs(c) <= WIDE_BAND_CENTS).length / cents.length : null;
+  const shareWithin = allScored.length ? cents.filter((c) => Math.abs(c) <= toleranceCents).length / allScored.length : null;
+  const shareWithin50 = allScored.length ? cents.filter((c) => Math.abs(c) <= WIDE_BAND_CENTS).length / allScored.length : null;
   const biasCents = nullable(cents);
   const meanAbsCents = nullable(cents.map(Math.abs));
   const octaveSlips = scored.filter((n) => n.octaveOffset !== 0).length;
 
   const findings: Finding[] = [];
-  if (!scored.length) {
+  if (!allScored.length) {
     findings.push({ tone: 'info', text: 'No notes could be scored this time. Check the microphone and sing a clear "ah".' });
   } else {
     if (shareWithin !== null && shareWithin >= PRAISE_SHARE) {
@@ -202,6 +229,16 @@ export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: numbe
     if (stab.length && mean(stab) > WANDER_FINDING_CENTS) {
       findings.push({ tone: 'work', text: `Held notes wander about ${Math.round(mean(stab))} cents (vibrato not counted). Long tones will help.` });
     }
+    if (wrong.length > 0) {
+      const w = wrong[0].heldCents as number;
+      findings.push({
+        tone: 'work',
+        text:
+          wrong.length === 1
+            ? `One note came out as a different note (${differentNoteWords(w)} the one played), so it is left out of the averages. Listen to each note before you sing.`
+            : `${wrong.length} notes came out as different notes, so they are left out of the averages. Listen to each note before you sing.`,
+      });
+    }
     if (octaveSlips > 0) {
       findings.push({ tone: 'info', text: `${octaveSlips} ${octaveSlips === 1 ? 'note was' : 'notes were'} sung in a different octave. That is fine: the note name was judged.` });
     }
@@ -210,8 +247,8 @@ export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: numbe
     }
   }
   return {
-    scored: scored.length,
-    unscored: notes.length - scored.length,
+    scored: allScored.length,
+    unscored: notes.length - allScored.length,
     meanAbsCents,
     shareWithin,
     shareWithin50,
@@ -219,13 +256,14 @@ export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: numbe
     meanStabilityCents: nullable(stab),
     meanTimeToLandSec: nullable(ttl),
     octaveSlips,
+    wrongNotes: wrong.length,
     byRegister,
     findings: findings.slice(0, MAX_FINDINGS),
   };
 }
 
 export interface LockState {
-  /** Pitch-class error of the last 200 ms of voiced readings, cents; null when not singing. */
+  /** Pitch-class error of the last 500 ms of voiced readings, cents; null when not singing. */
   centsNow: number | null;
   inside: boolean;
   /** Seconds continuously inside the tolerance so far. */
@@ -237,7 +275,7 @@ export interface LockState {
 
 /**
  * Live lock-in for "Match the note": pass = `holdSec` continuously inside the tolerance. Readings are averaged over
- * 200 ms so vibrato does not throw the needle out of the band; a voicing dropout up to 150 ms does not reset the hold.
+ * 500 ms (whole vibrato cycles) so vibrato does not throw the needle out of the band; a voicing dropout up to 150 ms does not reset the hold.
  */
 export function createLockTracker(
   targetMidi: number,
@@ -274,7 +312,8 @@ export function createLockTracker(
       const heldSec = insideSince !== null ? r.t - insideSince : 0;
       if (!locked && insideSince !== null && heldSec >= holdSec - 1e-9) {
         locked = true;
-        lockSec = Math.max(0, insideSince - (firstVoiced ?? insideSince));
+        // The average describes the middle of its window, so the voice got there about half a window earlier.
+        lockSec = Math.max(0, insideSince - LOCK_AVERAGE_SEC / 2 - (firstVoiced ?? insideSince));
       }
       return { centsNow, inside, heldSec, locked, lockSec };
     },

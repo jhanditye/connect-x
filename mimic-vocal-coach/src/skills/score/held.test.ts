@@ -120,7 +120,51 @@ function fakeNote(heldCents: number | null, register: RegisterThird, extra: Part
   };
 }
 
+describe('scoreHeldNote: a different note is not an octave error', () => {
+  it('a 5th, a tritone and 650 cents up are named as different notes, never "right note, one octave higher"', () => {
+    for (const up of [700, 600, 650]) {
+      const s = scoreHeldNote(singContour(57, 2.2, () => up), SR, 57, opts());
+      expect(s.octaveOffset, `${up}`).toBe(0);
+      expect(s.heldCents as number).toBeGreaterThan(up - 15);
+      expect(s.heldCents as number).toBeLessThan(up + 15);
+      expect(s.within).toBe(false);
+      expect(s.findings.some((f) => /Right note/.test(f.text))).toBe(false);
+      expect(s.findings[0].text).toMatch(/different note: about .* above/);
+    }
+    const fifth = scoreHeldNote(singContour(57, 2.2, () => 700), SR, 57, opts());
+    expect(fifth.findings[0].text).toMatch(/about a perfect 5th above/);
+  });
+
+  it('an octave plus a small error is still "right note, one octave higher"', () => {
+    const s = scoreHeldNote(singContour(57, 2.2, () => 1220), SR, 57, opts());
+    expect(s.octaveOffset).toBe(1);
+    expect(Math.abs((s.heldCents as number) - 20)).toBeLessThan(8);
+  });
+
+  it('time to land is found on a centred wide vibrato under Strict', () => {
+    for (const rateHz of [4, 6, 7]) {
+      const s = scoreHeldNote(singContour(57, 2.5, () => 0, { vibrato: { rateHz, extentCents: 100, delaySec: 0 } }), SR, 57, opts(baritone, 15));
+      expect(Math.abs(s.heldCents as number), `${rateHz} Hz`).toBeLessThan(6);
+      expect(s.timeToLandSec, `${rateHz} Hz`).not.toBeNull();
+    }
+  });
+});
+
 describe('summarisePitchTest', () => {
+  it('keeps a different note out of the bias, the registers and the octave count', () => {
+    const notes = [0, 2, -3, 1, 700, -2, 3, 0, 1, -1].map((c, i) => fakeNote(c, i < 3 ? 'low' : i < 7 ? 'mid' : 'high'));
+    const s = summarisePitchTest(notes, 25);
+    expect(s.wrongNotes).toBe(1);
+    expect(s.octaveSlips).toBe(0);
+    expect(Math.abs(s.biasCents as number)).toBeLessThan(2);
+    expect(s.meanAbsCents as number).toBeLessThan(3);
+    expect(s.byRegister.mid.n).toBe(3);
+    expect(s.shareWithin).toBeCloseTo(0.9, 5);
+    const text = s.findings.map((f) => f.text).join(' / ');
+    expect(text).not.toMatch(/sit about|tend to sit/);
+    expect(text).toMatch(/One note came out as a different note \(about a perfect 5th above/);
+  });
+
   it('reports accuracy, bias and the weakest register in plain words', () => {
     const notes = [
       fakeNote(-5, 'low'),
@@ -204,6 +248,26 @@ describe('createLockTracker', () => {
     expect(out.inside).toBe(false);
     expect(out.heldSec).toBe(0);
     expect(out.locked).toBe(false);
+  });
+
+  it('locks in on a normal or wide vibrato that is centred or inside the band (whole cycles are averaged)', () => {
+    const lockedWith = (tol: number, rateHz: number, extent: number, offset: number) => {
+      const lt = createLockTracker(57, tol);
+      let st = null;
+      for (let i = 0; i <= 400; i++) {
+        const t = i * 0.01;
+        st = lt.push(reading(t, offset + extent * Math.sin(2 * Math.PI * rateHz * t)));
+        if (st.locked) break;
+      }
+      return st?.locked ?? false;
+    };
+    for (const rate of [4, 5, 5.5, 6, 7]) {
+      expect(lockedWith(15, rate, 100, 0), `strict, centred ±100 at ${rate} Hz`).toBe(true);
+      expect(lockedWith(15, rate, 50, 5), `strict, ±50 5 cents sharp at ${rate} Hz`).toBe(true);
+      expect(lockedWith(25, rate, 100, 10), `standard, ±100 10 cents sharp at ${rate} Hz`).toBe(true);
+    }
+    // Still honest: a vibrato centred 40 cents sharp never locks under Standard.
+    expect(lockedWith(25, 5.5, 50, 40)).toBe(false);
   });
 
   it('judges pitch class (an octave below still counts)', () => {

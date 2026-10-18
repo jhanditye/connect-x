@@ -9,7 +9,7 @@ import { AUTO_STOP_RULES } from '../../../skills/audio';
 import { foldCents } from '../../../skills/score';
 import { BREATH_DEFAULTS, noteEvents, pacedBreathPlan } from '../../../skills/theory';
 import type { BreathPlan, BreathSession, HissScore, LongToneScore, PacedBreathRound, SkillsBests, SkillScreenProps } from '../../../skills/types';
-import { a4For, hissSteadinessLabel, NO_PITCH_TEXT, noteName, pitchSteadinessLabel, rangeFor, seconds, sessionBase, TOO_QUIET_TEXT } from './common';
+import { a4For, toleranceFor, hissSteadinessLabel, NO_PITCH_TEXT, noteName, pitchSteadinessLabel, rangeFor, seconds, sessionBase, TOO_QUIET_TEXT, centsCount } from './common';
 import { useSingDeps, type SingDeps } from './deps';
 import { outcomeError, useSkillKeys, useTake } from './useTake';
 import { ErrorNotice, FindingList, LevelBar, LiveRegion, PitchNeedle, SafetyNote, ScreenHead, Stat, TakeStatus, useAnnounceFocus } from './widgets';
@@ -34,7 +34,10 @@ const PHASE_WORDS: Record<BreathPhase, string> = {
   exhale: 'Out on a steady "sss"',
   rest: 'Breathe normally',
 };
-const REST_COUNTS = 4;
+/** Short phase word inside the circle, so the phase reads at a glance even without the growing circle (reduced motion). */
+const PHASE_SHORT: Record<BreathPhase, string> = { inhale: 'In', suspend: 'Pause', exhale: 'Out', rest: 'Rest' };
+/** Normal breathing between rounds: about two easy breaths, not one. */
+const REST_COUNTS = 8;
 
 function prefersReducedMotion(): boolean {
   try {
@@ -44,13 +47,37 @@ function prefersReducedMotion(): boolean {
   }
 }
 
-/** The animated guide. Counts are one second each; between rounds there are 4 counts of normal breathing. */
+/**
+ * The animated guide. Counts are one second each; between rounds there are 8 counts of normal breathing. It scrolls
+ * itself into view when it starts (Return on a Mac starts it with the page scrolled up), and Escape, Return or Space
+ * stop it.
+ */
 export function BreathGuide(props: { plan: readonly PacedBreathRound[]; onFinish(done: { rounds: number; maxExhaleCounts: number }): void; onStop(done: { rounds: number; maxExhaleCounts: number }): void; countSec?: number }) {
   const countMs = Math.round((props.countSec ?? BREATH_DEFAULTS.countSec) * 1000);
   const [pos, setPos] = useState<{ round: number; phase: BreathPhase; count: number }>({ round: 0, phase: 'inhale', count: 1 });
   const reduced = useMemo(prefersReducedMotion, []);
   const finishRef = useRef(props.onFinish);
   finishRef.current = props.onFinish;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const stopRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    try {
+      rootRef.current?.scrollIntoView?.({ block: 'start', behavior: reduced ? 'auto' : 'smooth' });
+    } catch {
+      // Some embedded browsers do not scroll.
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
+      const el = e.target instanceof HTMLElement ? e.target : null;
+      const onControl = !!el && (['BUTTON', 'A', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable);
+      const isStopKey = e.key === 'Escape' || (!onControl && (e.key === 'Enter' || e.key === ' ' || e.code === 'Space'));
+      if (!isStopKey) return;
+      e.preventDefault();
+      stopRef.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [reduced]);
   const round = props.plan[pos.round];
   const lengthOf = (phase: BreathPhase, r: PacedBreathRound) => (phase === 'rest' ? REST_COUNTS : r[phase]);
 
@@ -76,14 +103,18 @@ export function BreathGuide(props: { plan: readonly PacedBreathRound[]; onFinish
   const total = lengthOf(pos.phase, round);
   const scale = pos.phase === 'inhale' ? 0.45 + 0.55 * (pos.count / total) : pos.phase === 'suspend' ? 1 : pos.phase === 'exhale' ? 1 - 0.55 * (pos.count / total) : 0.45;
   const doneSoFar = { rounds: pos.round, maxExhaleCounts: pos.round > 0 ? Math.max(...props.plan.slice(0, pos.round).map((x) => x.exhale)) : 0 };
+  stopRef.current = () => props.onStop(doneSoFar);
   return (
-    <div className={`sing-breath sing-breath--${pos.phase}${reduced ? ' sing-breath--still' : ''}`}>
+    <div ref={rootRef} className={`sing-breath sing-breath--${pos.phase}${reduced ? ' sing-breath--still' : ''}`}>
       <p className="sing-progress">
         Round {pos.round + 1} of {props.plan.length} · in {round.inhale}, suspend {round.suspend}, out {round.exhale}
       </p>
       <div className="sing-breath-stage" aria-hidden="true">
         <span className="sing-breath-circle" style={reduced ? undefined : { transform: `scale(${scale.toFixed(3)})`, transitionDuration: `${countMs}ms` }} />
-        <span className="sing-breath-count">{pos.count}</span>
+        <span className="sing-breath-count">
+          <span className="sing-breath-phase">{PHASE_SHORT[pos.phase]}</span>
+          {pos.count}
+        </span>
       </div>
       <p className="sing-breath-words" aria-live="polite">
         {PHASE_WORDS[pos.phase]}
@@ -94,7 +125,7 @@ export function BreathGuide(props: { plan: readonly PacedBreathRound[]; onFinish
       </div>
       <div className="button-row">
         <button type="button" className="button" onClick={() => props.onStop(doneSoFar)}>
-          Stop
+          Stop (Esc)
         </button>
       </div>
     </div>
@@ -210,26 +241,35 @@ export function BreathScreen(props: BreathScreenProps) {
   latest.current = { paced, hiss, tone, report };
   useEffect(() => () => latest.current.report(latest.current.paced, latest.current.hiss, latest.current.tone), []);
 
+  // After a finished set of rounds, Return moves on (Next or Done) instead of restarting a 40-second guide.
+  const pacedSetDone = part === 'paced' && paced !== null;
+  const moveOn = () => (props.plan && nextPart ? setPart(nextPart) : done());
   useSkillKeys(
     {
-      onReturn: () => {
-        if (take.phase === 'listening') take.stop('key');
-        else if (busy || finished) return;
-        else if (part === 'hiss') void runHiss();
-        else if (part === 'long-tone') void runTone();
-        else if (part === 'paced') setPacedRunning(true);
-      },
-      onSpace: () => {
-        if (take.phase === 'listening') take.stop('key');
-        else if (part === 'long-tone' && !busy) void take.play(noteEvents(toneMidi), a4Hz);
-      },
+      // While the guide runs it owns the keys (Escape, Return and Space stop it).
+      onReturn: pacedRunning
+        ? undefined
+        : () => {
+            if (take.phase === 'listening') take.stop('key');
+            else if (busy || finished) return;
+            else if (part === 'hiss') void runHiss();
+            else if (part === 'long-tone') void runTone();
+            else if (pacedSetDone) moveOn();
+            else if (part === 'paced') setPacedRunning(true);
+          },
+      onSpace: pacedRunning
+        ? undefined
+        : () => {
+            if (take.phase === 'listening') take.stop('key');
+            else if (part === 'long-tone' && !busy) void take.play(noteEvents(toneMidi), a4Hz);
+          },
     },
     !finished,
   );
 
   const best = (b: { value: number } | null | undefined, now: number | null): string | undefined => {
     if (!b) return now !== null ? 'your first one: this is your best so far' : undefined;
-    if (now !== null && now > b.value) return `new personal best (was ${seconds(b.value)})`;
+    if (now !== null && now > b.value) return `longest so far (was ${seconds(b.value)}); only worth it if it felt easy`;
     return `your best: ${seconds(b.value)}`;
   };
 
@@ -289,9 +329,9 @@ export function BreathScreen(props: BreathScreenProps) {
                     </div>
                   )}
                   <div className="button-row">
-                    <button type="button" className="button button--accent" onClick={() => setPacedRunning(true)}>
+                    <button type="button" className={paced ? 'button' : 'button button--accent'} onClick={() => setPacedRunning(true)}>
                       {paced ? 'Go again' : 'Start'}
-                      {desktop ? ' (Return)' : ''}
+                      {desktop && !paced ? ' (Return)' : ''}
                     </button>
                   </div>
                 </>
@@ -303,7 +343,7 @@ export function BreathScreen(props: BreathScreenProps) {
             <div className="sing-item">
               <p>
                 Take one easy, low breath, then hiss a steady "sss" for as long as is comfortable. Stop while it still feels easy, not at the very last drop. Keep the
-                hiss the same loudness all the way. The first half second is used to measure the room, so start right after you press Start.
+                hiss the same loudness all the way. Start hissing whenever you are ready after pressing Start; the app works out the room noise by itself.
               </p>
               <TakeStatus phase={take.phase} kind={kind} elapsedSec={take.elapsedSec} onStop={() => take.stop('button')} hint="It stops by itself when the hiss ends." />
               {take.phase === 'listening' && <LevelBar rmsDb={take.live?.rmsDb ?? null} />}
@@ -351,7 +391,7 @@ export function BreathScreen(props: BreathScreenProps) {
               <TakeStatus phase={take.phase} kind={kind} elapsedSec={take.elapsedSec} onStop={() => take.stop('button')} hint="It stops by itself when you stop singing." />
               {take.phase === 'listening' && (
                 <>
-                  <PitchNeedle centsNow={take.live?.midi != null ? foldCents((take.live.midi - toneMidi) * 100) : null} toleranceCents={25} />
+                  <PitchNeedle centsNow={take.live?.midi != null ? foldCents((take.live.midi - toneMidi) * 100) : null} toleranceCents={toleranceFor(props)} />
                   <LevelBar rmsDb={take.live?.rmsDb ?? null} />
                 </>
               )}
@@ -364,7 +404,7 @@ export function BreathScreen(props: BreathScreenProps) {
                     <>
                       <dl className="sing-stats">
                         <Stat label="Length" value={seconds(tone.durationSec)} note={best(bests.longToneSec, tone.durationSec)} />
-                        <Stat label="Pitch" value={pitchSteadinessLabel(tone.pitchSdCents)} note={tone.pitchSdCents !== null ? `wandered about ±${Math.round(tone.pitchSdCents)} cents (vibrato not counted)` : undefined} />
+                        <Stat label="Pitch" value={pitchSteadinessLabel(tone.pitchSdCents)} note={tone.pitchSdCents !== null ? `wandered about ±${centsCount(tone.pitchSdCents)} (vibrato not counted)` : undefined} />
                         <Stat label="Loudness" value={tone.loudnessSdDb !== null ? `±${tone.loudnessSdDb.toFixed(1)} dB` : '–'} note="smaller is steadier" />
                       </dl>
                       <Trace values={tone.pitchTrace} label="Pitch over time" />
@@ -392,12 +432,14 @@ export function BreathScreen(props: BreathScreenProps) {
           {!busy && (
             <div className="button-row sing-part-nav">
               {props.plan && nextPart ? (
-                <button type="button" className="button" onClick={() => setPart(nextPart)}>
+                <button type="button" className={pacedSetDone ? 'button button--accent' : 'button'} onClick={() => setPart(nextPart)}>
                   Next: {PART_LABELS[nextPart]}
+                  {desktop && pacedSetDone ? ' (Return)' : ''}
                 </button>
               ) : (
-                <button type="button" className="button" onClick={done}>
+                <button type="button" className={pacedSetDone ? 'button button--accent' : 'button'} onClick={done}>
                   Done
+                  {desktop && pacedSetDone ? ' (Return)' : ''}
                 </button>
               )}
             </div>
