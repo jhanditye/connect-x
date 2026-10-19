@@ -55,10 +55,13 @@ describe('scoreHeldNote on the synthetic singer (vibrato 5.5 Hz +/-40, jitter 0.
     expect(Math.abs(s.heldCents as number)).toBeLessThan(5);
     expect(s.timeToLandSec as number).toBeGreaterThan(0.4);
     expect(s.findings.some((f) => /slid up/.test(f.text))).toBe(true);
-    // A 150-cent linear scoop over 120 ms: held is unaffected; landing is where the voice settled (the note itself).
+    // A 150-cent linear scoop over 120 ms: held is unaffected; the landing (mean of the first 200 ms from the onset)
+    // carries the scoop (-33.5 measured), and the scoop finding fires.
     const scoop = scoreHeldNote(singContour(57, 2.2, (t) => (t < 0.12 ? -150 + 1250 * t : 0)), SR, 57, opts());
     expect(Math.abs(scoop.heldCents as number)).toBeLessThan(5);
-    expect(Math.abs(scoop.landingCents as number)).toBeLessThan(15);
+    expect(scoop.landingCents as number).toBeLessThan(-30);
+    expect(scoop.landingCents as number).toBeGreaterThan(-60);
+    expect(scoop.findings.some((f) => /slid up/.test(f.text))).toBe(true);
     expect(scoop.timeToLandSec as number).toBeGreaterThan(0.05);
     expect(scoop.timeToLandSec as number).toBeLessThan(0.35);
   });

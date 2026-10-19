@@ -368,6 +368,35 @@ td.sing-acc--off {
 .sing-finding--info {
   border-left-color: var(--accent);
 }
+/* Pitch test: the suggested next step under the findings. */
+.sing-next {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  min-width: 0;
+}
+.sing-next--unsure {
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+.sing-next-eyebrow {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+.sing-next-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+.sing-next-text {
+  margin: 0;
+}
+.sing-next .button-row {
+  margin-top: var(--space-1);
+}
 .sing-table-wrap {
   overflow-x: auto;
   max-width: 100%;

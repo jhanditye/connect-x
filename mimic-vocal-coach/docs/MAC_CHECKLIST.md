@@ -176,7 +176,33 @@ Then press **Command-Return**: the count-in starts and, while you sing, Command-
 Safari may skip buttons unless you hold Option while you press Tab (or switch on "Press Tab to highlight each item on a webpage" in Safari's Advanced settings). Note what happened.
 *Protects against:* a screen that needs two dozen Tab presses, or the mouse, to start a take.
 
-## 8. Report
+## 8. Skills (the fundamentals)
+
+**23. Pitch accuracy test.** Skills, **How accurate is my pitch?** Use headphones or keep the volume moderate. Sing all ten notes on "ah".
+*You should see:* each note's error in cents (100 cents is a semitone), then a summary: how many notes were within the tolerance, whether you lean sharp or flat,
+which part of your range is weakest, and one suggested next step. Then sing one note on purpose a little sharp and one a little flat:
+the sign of the number should follow. Write down your average error and whether it matches what you hear.
+*Protects against:* numbers that look precise but do not follow your voice. This is the check that matters most.
+
+**24. A line in one go.** Skills, **Scale-degree lines**, pick `7 6 5 4 3 2`, then type `2 7 6 5` and press Use this line.
+*You should see:* the key line ("In C major, 1 = ...") and the degrees in big type; after the chords, sing the line on any syllable. Every note gets a number;
+a note sung clearly wrong is named ("you sang a 4 where the 3 was written"); singing the whole line an octave lower is accepted.
+Try one take where you sing the 7 deliberately low and check the 7 is the one flagged.
+*Protects against:* a scorer that blames the wrong note or misreads short notes with vibrato (short or wobbly notes are marked rough and left out of the average).
+
+**25. Intervals, by ear and by voice.** Skills, **Interval ear training**: ten questions with the number keys. Then **Sing intervals**: sing the first note, then the asked interval, in one take.
+*You should see:* right/wrong with a "hear both" comparison when wrong; for sung intervals, the jump size scored on its own ("the 6th was 20 cents narrow") whatever note you started on.
+*Protects against:* an interval reported as wrong because your first note was a little off.
+
+**26. Breath.** Skills, **Breath control**: two rounds of paced breathing (Escape stops the guide), then the hiss test and a long tone.
+*You should see:* the guide's words change even with reduced motion on; the hiss and long-tone times close to what a stopwatch says; the safety notes. Stop at once if you feel dizzy.
+*Protects against:* a hiss time that counts room noise, or a long tone called steady when it sagged.
+
+**27. The workout and progress.** Run **Today's workout** once (about 9 minutes; skip any step), quit Mimic, start it again.
+*You should see:* the sessions in **Skills progress**, including the per-degree tuning (for example "7 about 20 cents flat") once you have sung a few lines.
+*Protects against:* practice that is not saved.
+
+## 9. Report
 
 Settings, Trainer, **Open the device checks**, run the quick checks and the microphone and click tests, then copy or save the report.
 On a Mac the phone-only list (silent switch, Siri, Home Screen) is left out. Add your Mac model, macOS version, the browser, and which headphones you used, then send me the report with

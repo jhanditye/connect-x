@@ -4,7 +4,18 @@
 import { mean, median } from '../../dsp/stats';
 import type { SungNote } from '../types';
 import {
+  CENTRE_CHECK_CENTS,
+  CENTRE_CHECK_SHARE,
+  CONFIDENT_STEADY_SEC,
   GLIDE_SLOPE_ST_PER_SEC,
+  RAMP_MAX_SEC,
+  RAMP_MIN_R2,
+  RAMP_MIN_ST,
+  RAMP_REACH_ST,
+  RAMP_VIB_FACTOR,
+  UNFITTED_SPREAD_ST,
+  VIB_CONFIDENCE_AMP,
+  VIB_STEP_WINDOW_SEC,
   LANDING_SLOPE_ST_PER_SEC,
   LANDING_WINDOW_SEC,
   LEVEL_DIP_DB,
@@ -19,13 +30,32 @@ import {
   STEADY_SKIP_START_SEC,
   STEADY_SKIP_START_SHARE,
 } from './constants';
-import { analyseTake, heldPitch, sdCents, slopeAt, smoothRange, voicedStretches, type TakeFrames } from './frames';
+import { analyseTake, heldPitchFit, jointVibratoRate, sdCents, slopeAt, smoothRange, vibratoStep, voicedStretches, type TakeFrames } from './frames';
 
 /** A note plus the frame range it came from (internal). */
 export interface NoteSpan {
   i0: number;
   i1: number;
   note: SungNote;
+  /** Frame indices of the steady part (the frames the held pitch was measured on). */
+  steady: number[];
+  /** Vibrato semi-extent found on this note, semitones (0 when none). */
+  vibAmp: number;
+  /** Vibrato rate used for this note's centre, Hz (null when none). */
+  vibRateHz: number | null;
+}
+
+/**
+ * How far a note's held pitch can be trusted. Low when the steady part is shorter than CONFIDENT_STEADY_SEC, when a
+ * clear vibrato (VIB_CONFIDENCE_AMP or wider) was caught over less than one whole cycle, or when the pitch swung
+ * widely and no vibrato centre could be fitted (the median of a partial swing is a guess). buildNote also requires the
+ * centre to be stable (centreAgrees).
+ */
+export function noteConfidence(steadySec: number, fit: { amp: number; rateHz: number | null; fitted: boolean; spread: number }): 'high' | 'low' {
+  if (steadySec < CONFIDENT_STEADY_SEC) return 'low';
+  if (fit.fitted && fit.amp >= VIB_CONFIDENCE_AMP && fit.rateHz !== null && steadySec * fit.rateHz < 1) return 'low';
+  if (!fit.fitted && fit.spread >= UNFITTED_SPREAD_ST) return 'low';
+  return 'high';
 }
 
 const smoothFrames = (hop: number) => Math.max(3, Math.round(SMOOTH_SEC / hop) | 1);
@@ -33,9 +63,10 @@ const smoothFrames = (hop: number) => Math.max(3, Math.round(SMOOTH_SEC / hop) |
 /**
  * Builds a note from frames [i0, i1). Glide frames at either end (smoothed pitch more than STEADY_BAND_CENTS from the
  * median, or moving faster than GLIDE_SLOPE_ST_PER_SEC) are trimmed off; returns null when what is left is shorter
- * than `minSec`.
+ * than `minSec`. `rateHz` is the take's vibrato rate when known (see jointVibratoRate): a short note's centre is then
+ * fitted at that rate instead of searching for one in two or three cycles.
  */
-export function buildNote(fr: TakeFrames, i0: number, i1: number, minSec = NOTE_MIN_SEC): NoteSpan | null {
+export function buildNote(fr: TakeFrames, i0: number, i1: number, minSec = NOTE_MIN_SEC, rateHz: number | null = null): NoteSpan | null {
   const hop = fr.hop;
   const win = smoothFrames(hop);
   let sm = smoothRange(fr.midi, i0, i1, win);
@@ -81,7 +112,8 @@ export function buildNote(fr: TakeFrames, i0: number, i1: number, minSec = NOTE_
       smooth.push(sm[k]);
     }
   }
-  const held = heldPitch(raw, idx, hop);
+  const fit = heldPitchFit(raw, idx, hop, rateHz);
+  const held = fit.midi;
   // Landing: the first LANDING_WINDOW_SEC after the smoothed slope first drops under LANDING_SLOPE_ST_PER_SEC.
   let landingMidi: number | null = null;
   const lw = Math.round(LANDING_WINDOW_SEC / hop);
@@ -105,8 +137,29 @@ export function buildNote(fr: TakeFrames, i0: number, i1: number, minSec = NOTE_
       stabilityCents: sdCents(smooth),
       steadySec: raw.length * hop,
       meanRmsDb: levels.length ? mean(levels) : -120,
+      confidence: noteConfidence(raw.length * hop, fit) === 'low' || !centreAgrees(raw, idx, hop, fit) ? 'low' : 'high',
     },
+    steady: idx,
+    vibAmp: fit.fitted ? fit.amp : 0,
+    vibRateHz: fit.fitted ? fit.rateHz : null,
   };
+}
+
+/**
+ * Whether a note's centre is stable: fitted again on the first and on the last CENTRE_CHECK_SHARE of its steady
+ * frames (at the same vibrato rate), the two must agree within CENTRE_CHECK_CENTS. A clean note, even under one cycle
+ * with a known rate, agrees to a few cents; a short note whose steady part still holds glide or onset residue does not.
+ * Checked only on notes shorter than two vibrato cycles (or 0.4 s without vibrato), where it matters.
+ */
+function centreAgrees(raw: readonly number[], idx: readonly number[], hop: number, fit: { rateHz: number | null; spanSec: number }): boolean {
+  const cycles = fit.rateHz ? fit.spanSec * fit.rateHz : fit.spanSec / 0.2;
+  if (cycles >= 2) return true;
+  const n = raw.length;
+  const m = Math.round(n * CENTRE_CHECK_SHARE);
+  if (m < 5) return false;
+  const a = heldPitchFit(raw.slice(0, m), idx.slice(0, m), hop, fit.rateHz).midi;
+  const b = heldPitchFit(raw.slice(n - m), idx.slice(n - m), hop, fit.rateHz).midi;
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) * 100 <= CENTRE_CHECK_CENTS;
 }
 
 /** Landing pitch: the plain mean of the window [i, i + len) (fractional MIDI, NaN when unvoiced). */
@@ -199,19 +252,106 @@ function smoothRangeDb(x: Float64Array, window: number): Float64Array {
   return out;
 }
 
-/** Notes of a take as frame spans (internal; the scorers need the frame ranges). */
+/** Spans for the frame ranges between consecutive boundaries of [s0, s1) (each range at least two frames). */
+function spansBetween(fr: TakeFrames, s0: number, s1: number, cuts: readonly number[], rateHz: number | null): { a: number; b: number; span: NoteSpan | null }[] {
+  const out: { a: number; b: number; span: NoteSpan | null }[] = [];
+  let a = s0;
+  for (const c of [...cuts, s1]) {
+    if (c - a >= 2) out.push({ a, b: c, span: buildNote(fr, a, c, NOTE_MIN_SEC, rateHz) });
+    a = c;
+  }
+  return out;
+}
+
+/** Straight-line fit of the raw pitch over [i0, i1): value at both ends and R^2 (NaN-aware). */
+function rampOf(fr: TakeFrames, i0: number, i1: number): { start: number; end: number; r2: number } | null {
+  let n = 0;
+  let st = 0;
+  let sx = 0;
+  for (let k = i0; k < i1; k++) if (!Number.isNaN(fr.midi[k])) {
+    n++;
+    st += k;
+    sx += fr.midi[k];
+  }
+  if (n < 5) return null;
+  const mt = st / n;
+  const mx = sx / n;
+  let stt = 0;
+  let stx = 0;
+  let sxx = 0;
+  for (let k = i0; k < i1; k++) if (!Number.isNaN(fr.midi[k])) {
+    stt += (k - mt) ** 2;
+    stx += (k - mt) * (fr.midi[k] - mx);
+    sxx += (fr.midi[k] - mx) ** 2;
+  }
+  if (stt <= 0 || sxx <= 1e-12) return null;
+  const slope = stx / stt;
+  return { start: mx + slope * (i0 - mt), end: mx + slope * (i1 - 1 - mt), r2: (stx * stx) / (stt * sxx) };
+}
+
+/**
+ * A short span that is a straight ramp of RAMP_MIN_ST or more (and well beyond the vibrato) heading into the next
+ * note (a scoop) or away from the previous one (a fall) is part of that note, not a note of its own.
+ */
+function rampInto(fr: TakeFrames, sp: NoteSpan, prev: NoteSpan | null, next: NoteSpan | null, vibAmp: number): 'next' | 'prev' | null {
+  if ((sp.i1 - sp.i0) * fr.hop > RAMP_MAX_SEC) return null;
+  const r = rampOf(fr, sp.i0, sp.i1);
+  if (!r || r.r2 < RAMP_MIN_R2 || Math.abs(r.end - r.start) < Math.max(RAMP_MIN_ST, RAMP_VIB_FACTOR * vibAmp)) return null;
+  if (next && Math.abs(r.end - next.note.midi) < Math.abs(r.start - next.note.midi) && Math.abs(r.end - next.note.midi) <= RAMP_REACH_ST) return 'next';
+  if (prev && Math.abs(r.start - prev.note.midi) < Math.abs(r.end - prev.note.midi) && Math.abs(r.start - prev.note.midi) <= RAMP_REACH_ST) return 'prev';
+  return null;
+}
+
+/**
+ * Notes of a take as frame spans (internal; the scorers need the frame ranges). Two passes: the first finds candidate
+ * notes and, from all of them together, the singer's vibrato rate (jointVibratoRate). The second keeps only pitch
+ * boundaries that are real steps once that vibrato is fitted across both sides (vibratoStep), so one wide vibrato
+ * swing is never split into two notes, folds scoops and falls into their note, and measures every note's centre at
+ * the take's vibrato rate.
+ */
 export function segmentSpans(fr: TakeFrames): NoteSpan[] {
+  const stretches = voicedStretches(fr).map(([s0, s1]) => ({ s0, s1, pitch: pitchBoundaries(fr, s0, s1), dips: dipBoundaries(fr, s0, s1) }));
+  const merged = (a: readonly number[], b: readonly number[]) => [...new Set([...a, ...b])].sort((x, y) => x - y);
+  const first: NoteSpan[] = [];
+  for (const st of stretches) for (const p of spansBetween(fr, st.s0, st.s1, merged(st.pitch, st.dips), null)) if (p.span) first.push(p.span);
+  const rate = jointVibratoRate(
+    first.map((sp) => ({ values: sp.steady.map((k) => fr.midi[k]), frames: sp.steady })),
+    fr.hop,
+  );
+  const amps = first.map((sp) => sp.vibAmp).filter((a) => a > 0);
+  const vibAmp = amps.length ? median(amps) : 0;
   const spans: NoteSpan[] = [];
-  for (const [s0, s1] of voicedStretches(fr)) {
-    const cuts = [...new Set([...pitchBoundaries(fr, s0, s1), ...dipBoundaries(fr, s0, s1)])].sort((x, y) => x - y);
-    let a = s0;
-    for (const c of [...cuts, s1]) {
-      if (c - a >= 2) {
-        const sp = buildNote(fr, a, c);
-        if (sp) spans.push(sp);
+  const reach = Math.round(VIB_STEP_WINDOW_SEC / fr.hop);
+  for (const st of stretches) {
+    let cuts = merged(st.pitch, st.dips);
+    if (rate !== null) {
+      // A pitch boundary stays only when the step is real with the vibrato fitted across it.
+      const keep: number[] = [];
+      for (let i = 0; i < cuts.length; i++) {
+        const c = cuts[i];
+        if (st.dips.includes(c)) {
+          keep.push(c);
+          continue;
+        }
+        const a = Math.max(keep.length ? keep[keep.length - 1] : st.s0, c - reach);
+        const b = Math.min(i + 1 < cuts.length ? cuts[i + 1] : st.s1, c + reach);
+        const step = vibratoStep(fr.midi, a, c, b, fr.hop, rate);
+        if (step === null || Math.abs(step) * 100 >= SPLIT_CENTS) keep.push(c);
       }
-      a = c;
+      cuts = keep;
     }
+    let parts = spansBetween(fr, st.s0, st.s1, cuts, rate);
+    // Scoops into a note and falls off one are part of that note.
+    const drop = new Set<number>();
+    const built = parts.filter((p) => p.span);
+    for (let i = 0; i < built.length; i++) {
+      const sp = built[i].span as NoteSpan;
+      const into = rampInto(fr, sp, i > 0 ? built[i - 1].span : null, i + 1 < built.length ? built[i + 1].span : null, vibAmp);
+      if (into === 'next') drop.add(built[i].b);
+      else if (into === 'prev') drop.add(built[i].a);
+    }
+    if (drop.size) parts = spansBetween(fr, st.s0, st.s1, cuts.filter((c) => !drop.has(c)), rate);
+    for (const p of parts) if (p.span) spans.push(p.span);
   }
   return spans;
 }
@@ -229,10 +369,17 @@ export function segmentNotes(samples: Float32Array, sampleRate: number, a4Hz: nu
  * halves), for a two-note take where the singer glided legato from one note to the next and no boundary was found
  * (a narrow semitone, or a unison sung without a break). Each half must hold at least NOTE_MIN_SEC of steady pitch.
  */
-export function splitSpanInTwo(fr: TakeFrames, span: NoteSpan): [NoteSpan, NoteSpan] | null {
+export function splitSpanInTwo(fr: TakeFrames, span: NoteSpan, unison = false): [NoteSpan, NoteSpan] | null {
   const { i0, i1 } = span;
   const minLen = Math.round(NOTE_MIN_SEC / fr.hop) + 2;
   if (i1 - i0 < 2 * minLen) return null;
+  if (unison) {
+    // A unison has no pitch change to find (a "best" split would land on the vibrato onset): split in the middle.
+    const mid = i0 + ((i1 - i0) >> 1);
+    const ma = buildNote(fr, i0, mid);
+    const mb = buildNote(fr, mid, i1);
+    return ma && mb ? [ma, mb] : null;
+  }
   let best = -1;
   let bestCost = Infinity;
   const vals: number[] = [];

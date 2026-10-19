@@ -5,10 +5,13 @@
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { isDesktopKind } from '../../../pwa/platform';
+import { skillsHash } from '../../../state/routing';
 import { AUTO_STOP_RULES } from '../../../skills/audio';
-import { centsMeaning } from '../../../skills/score';
+import { centsMeaning, isWrongHeldNote, SCORE_CONSTANTS } from '../../../skills/score';
 import { makeSkillsRng, noteEvents, singleNoteTargets } from '../../../skills/theory';
 import {
+  STRICTNESS_CENTS,
+  STRICTNESS_LABELS,
   WIDE_BAND_CENTS,
   type HeldNoteScore,
   type PitchTestNoteLite,
@@ -17,6 +20,9 @@ import {
   type PitchTestSummary,
   type RegisterThird,
   type SkillScreenProps,
+  type SkillsPrefs,
+  type SkillsView,
+  type Strictness,
 } from '../../../skills/types';
 import { useSingDeps, type SingDeps } from './deps';
 import { a4For, accuracyOf, centsText, centsWords, NO_PITCH_TEXT, noteName, percent, rangeFor, seconds, sessionBase, toleranceFor, TOO_QUIET_TEXT, useFlushOnHide, centsCount } from './common';
@@ -47,6 +53,193 @@ export function heldNoteLine(s: HeldNoteScore, tolerance: number): string {
   const octave = s.octaveOffset !== 0 ? ` Right note, ${Math.abs(s.octaveOffset) === 1 ? 'one octave' : `${Math.abs(s.octaveOffset)} octaves`} ${s.octaveOffset < 0 ? 'lower' : 'higher'}: that counts.` : '';
   const band = s.heldCents !== null && Math.abs(s.heldCents) <= tolerance ? 'inside the band' : 'outside the band';
   return `Held ${centsWords(s.heldCents)}, ${band}.${octave}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// What to do next, from the test result
+
+/** One thing the singer can do from the summary: open another exercise, take the test again, or tighten the band. */
+export type PitchNextAction =
+  | { kind: 'open'; view: SkillsView; label: string }
+  | { kind: 'retest'; label: string }
+  | { kind: 'strictness'; strictness: Strictness; label: string };
+
+export interface PitchNextStep {
+  /** Which rule chose it (also `data-next` on the section, for tests and styling). */
+  id: 'wrong-notes' | 'unsure' | 'register' | 'bias' | 'octave' | 'all-in' | 'spread';
+  title: string;
+  text: string;
+  /** Too little was measured to be sure: the advice says so instead of pointing at a habit. */
+  lowConfidence: boolean;
+  actions: PitchNextAction[];
+}
+
+/** Fewer measured notes than this and the test says it cannot tell what to practise (the scorer's bias rule uses the same count). */
+export const NEXT_STEP_MIN_NOTES = SCORE_CONSTANTS.BIAS_FINDING_MIN_NOTES;
+/** A register's lean must be at least this much bigger than the overall lean to be named on its own. */
+export const NEXT_STEP_REGISTER_MARGIN = 10;
+/** Octave slips count as right; only a habit of them (this many) becomes the next step. */
+export const NEXT_STEP_OCTAVE_SLIPS = 2;
+
+const REGISTER_LOWER: Record<RegisterThird, string> = { low: 'low', mid: 'middle', high: 'high' };
+const STRICTER: Partial<Record<Strictness, Strictness>> = { gentle: 'standard', standard: 'strict' };
+
+/** "E4", "E4 and G4", "E4, F♯4 and G4", "E4, F4, G4, A4 and 2 more" (lowest first, each note once). */
+export function noteList(notes: readonly Pick<HeldNoteScore, 'targetMidi'>[], max = 4): string {
+  const midis = [...new Set(notes.map((n) => n.targetMidi))].sort((a, b) => a - b);
+  const words = midis.slice(0, max).map(noteName);
+  if (midis.length > max) words.push(`${midis.length - max} more`);
+  if (words.length <= 1) return words[0] ?? '';
+  return `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
+}
+
+function plural(n: number, one: string, many: string): string {
+  return `${n === 1 ? 'one' : n} ${n === 1 ? one : many}`;
+}
+
+/** A short, safe aiming tip for a flat or sharp lean. */
+function aimTip(cents: number): string {
+  return cents < 0
+    ? 'aim for the top edge of the note and keep the breath moving right to the end, as pitch tends to sag when the air runs low'
+    : 'aim for the bottom edge of the note and ease off any push, as pressing for volume tends to pull the pitch up';
+}
+
+/**
+ * The one next step the pitch-test summary suggests, from the same numbers the summary shows. In order: different
+ * notes (2+), too few measured notes (low confidence: no habit is named), a register that sits off more than the
+ * whole voice does, an overall lean, octave slips (2+), a single different note, everything inside the band (raise
+ * the bar), else scattered misses.
+ * Null when nothing was scored (the summary already says to check the microphone).
+ */
+export function pitchTestNextStep(summary: PitchTestSummary, scores: readonly (HeldNoteScore | null)[], tolerance: number, strictness: Strictness): PitchNextStep | null {
+  if (summary.scored === 0) return null;
+  // Rough notes (too short or unsteady to measure reliably) are left out here, as the summary leaves them out.
+  const measured = scores.filter((s): s is HeldNoteScore => s !== null && s.status === 'ok' && s.heldCents !== null && s.sung?.confidence !== 'low');
+  const wrong = measured.filter((s) => isWrongHeldNote(s));
+  const wrongCount = summary.wrongNotes ?? wrong.length;
+  const usable = measured.filter((s) => !isWrongHeldNote(s));
+  const usableCount = Math.max(0, summary.scored - wrongCount);
+  const outside = usable.filter((s) => Math.abs(s.heldCents as number) > tolerance);
+  const band = `±${tolerance} cents`;
+  const retestSlowly: PitchNextAction = { kind: 'retest', label: 'Take the test again, slowly' };
+  const retest: PitchNextAction = { kind: 'retest', label: 'Take the test again' };
+  const match: PitchNextAction = { kind: 'open', view: 'match', label: 'Practise: Match the note' };
+  const intervals: PitchNextAction = { kind: 'open', view: 'sing-intervals', label: 'Sing intervals' };
+  const sequences: PitchNextAction = { kind: 'open', view: 'sequence', label: 'Sequences' };
+
+  const wrongStep = (): PitchNextStep => {
+    const names = noteList(wrong);
+    const which = wrongCount === 1 ? `One note came out as a different note${names ? ` (${names})` : ''}` : `${wrongCount} notes came out as different notes${names ? ` (${names})` : ''}`;
+    const rest = wrongCount === 1 && outside.length === 0 && usableCount > 0 ? `, and every other measured note landed within ${band}` : '';
+    return {
+      id: 'wrong-notes',
+      title: 'Next: find each note before you sing it',
+      text: `${which}${rest}. That is about hearing the note, not fine tuning. Take the test again slowly: play each note twice with "Hear it again", hum it quietly in your head, then sing. Sing intervals trains the same step from hearing a note to finding it.`,
+      lowConfidence: false,
+      actions: [retestSlowly, intervals],
+    };
+  };
+
+  if (wrongCount >= 2 || (wrongCount > 0 && usableCount === 0)) return wrongStep();
+
+  if (usableCount < NEXT_STEP_MIN_NOTES) {
+    const unscored = summary.unscored > 0 ? ` ${summary.unscored === 1 ? 'One more note was' : `${summary.unscored} more notes were`} too quiet or unsteady to score.` : '';
+    return {
+      id: 'unsure',
+      title: 'Next: sing a few more notes',
+      text: `Only ${plural(usableCount, 'note', 'notes')} could be measured, which is too few to say what to practise.${unscored} Take the whole test again in a quiet room, singing each note on a clear "ah".`,
+      lowConfidence: true,
+      actions: [retest],
+    };
+  }
+
+  // A register that sits off: the scorer's own rule (n >= 2, |bias| >= 20), with at least one note outside the band that way.
+  let worst: RegisterThird | null = null;
+  for (const r of ['low', 'mid', 'high'] as RegisterThird[]) {
+    const row = summary.byRegister[r];
+    if (row.n < SCORE_CONSTANTS.REGISTER_FINDING_MIN_NOTES || row.biasCents === null || Math.abs(row.biasCents) < SCORE_CONSTANTS.REGISTER_FINDING_CENTS) continue;
+    if (!worst || Math.abs(row.biasCents) > Math.abs(summary.byRegister[worst].biasCents ?? 0)) worst = r;
+  }
+  const leanBias = summary.biasCents !== null && Math.abs(summary.biasCents) >= SCORE_CONSTANTS.BIAS_FINDING_CENTS ? summary.biasCents : null;
+  // A register is the step only when it stands out from the whole voice; a voice that is 22 cents flat everywhere has
+  // an overall lean, not a "low notes" problem.
+  const standsOut = (bias: number) => leanBias === null || Math.sign(bias) !== Math.sign(leanBias) || Math.abs(bias) - Math.abs(leanBias) >= NEXT_STEP_REGISTER_MARGIN;
+
+  if (worst && standsOut(summary.byRegister[worst].biasCents as number)) {
+    const row = summary.byRegister[worst];
+    const bias = row.biasCents as number;
+    const off = outside.filter((s) => s.register === worst && Math.sign(s.heldCents as number) === Math.sign(bias));
+    if (off.length > 0) {
+      const words = REGISTER_LOWER[worst];
+      const thin = row.n < 3 ? ` That is from only ${row.n} notes, so take it as a first hint.` : '';
+      return {
+        id: 'register',
+        title: `Practise: Match the note on your ${words} notes`,
+        text: `Your ${words} notes sat about ${centsWords(bias)} on average (${noteList(off)} ${off.length === 1 ? 'was' : 'were'} outside ${band}).${thin} On those notes, ${aimTip(bias)}. In Match the note a live needle shows the moment you are in the band; give your ${words} notes extra care when they come up.`,
+        lowConfidence: row.n < 3,
+        actions: [match, retest],
+      };
+    }
+  }
+
+  if (leanBias !== null && outside.some((s) => Math.sign(s.heldCents as number) === Math.sign(leanBias))) {
+    return {
+      id: 'bias',
+      title: `Practise: Match the note, aiming a little ${leanBias < 0 ? 'higher' : 'lower'}`,
+      text: `Overall you tend to sit about ${centsWords(leanBias)}. A tip: ${aimTip(leanBias)}. Match the note's live needle shows you when you are there.`,
+      lowConfidence: false,
+      actions: [match, retest],
+    };
+  }
+
+  if (summary.octaveSlips >= NEXT_STEP_OCTAVE_SLIPS) {
+    return {
+      id: 'octave',
+      title: 'Next: sing each note in the octave it was played',
+      text: `${summary.octaveSlips} notes came out an octave away from where they were played. They still count as right. To sing them where they were played, take the test again slowly and listen for how high or low each note sits before you sing; Sing intervals (octaves included) trains the same sense.`,
+      lowConfidence: false,
+      actions: [retestSlowly, intervals],
+    };
+  }
+
+  if (wrongCount === 1) return wrongStep();
+
+  if (outside.length === 0) {
+    const r = worst && standsOut(summary.byRegister[worst].biasCents as number) ? worst : null;
+    const lean = r
+      ? ` Your ${REGISTER_LOWER[r]} notes lean about ${centsWords(summary.byRegister[r].biasCents)}, still inside the band.`
+      : leanBias !== null
+        ? ` Overall you lean about ${centsWords(leanBias)}, still inside the band.`
+        : '';
+    const stricter = STRICTER[strictness];
+    if (stricter) {
+      return {
+        id: 'all-in',
+        title: `Next: try ${STRICTNESS_LABELS[stricter]}`,
+        text: `Every measured note landed within ${band}. Well done.${lean} Try ${STRICTNESS_LABELS[stricter]} (±${STRICTNESS_CENTS[stricter]} cents) to tighten the band, or put this accuracy to work in Sequences.`,
+        lowConfidence: false,
+        actions: [{ kind: 'strictness', strictness: stricter, label: `Try ${STRICTNESS_LABELS[stricter]}` }, sequences],
+      };
+    }
+    return {
+      id: 'all-in',
+      title: 'Next: carry this accuracy into lines',
+      text: `Every measured note landed within ${band}, the strictest band. Well done.${lean} Sequences and Sing intervals ask for the same accuracy while you move between notes.`,
+      lowConfidence: false,
+      actions: [sequences, intervals],
+    };
+  }
+
+  const sharp = outside.filter((s) => (s.heldCents as number) > 0).length;
+  const flat = outside.length - sharp;
+  const sides = sharp > 0 && flat > 0 ? ', some sharp and some flat, so there is no single habit to fix' : '';
+  return {
+    id: 'spread',
+    title: 'Practise: Match the note',
+    text: `${outside.length} of ${usableCount} measured notes landed outside ${band} (${noteList(outside)})${sides}. Match the note's live needle helps you hear those last few cents.`,
+    lowConfidence: false,
+    actions: [match, retest],
+  };
 }
 
 export function PitchTestScreen(props: PitchTestScreenProps) {
@@ -292,7 +485,20 @@ export function PitchTestScreen(props: PitchTestScreenProps) {
         </div>
       )}
 
-      {stage === 'summary' && summary && <PitchTestSummaryView summary={summary} scores={scores} tolerance={tolerance} headingRef={resultRef} onRestart={restart} onExit={exit} embedded={props.embedded} desktop={desktop} />}
+      {stage === 'summary' && summary && (
+        <PitchTestSummaryView
+          summary={summary}
+          scores={scores}
+          tolerance={tolerance}
+          strictness={props.prefs.strictness}
+          headingRef={resultRef}
+          onRestart={restart}
+          onExit={exit}
+          onPrefs={props.onPrefs}
+          embedded={props.embedded}
+          desktop={desktop}
+        />
+      )}
     </section>
   );
 }
@@ -301,13 +507,18 @@ function PitchTestSummaryView(props: {
   summary: PitchTestSummary;
   scores: readonly (HeldNoteScore | null)[];
   tolerance: number;
+  strictness: Strictness;
   headingRef: RefObject<HTMLHeadingElement | null>;
   onRestart(): void;
   onExit(): void;
+  onPrefs?(patch: Partial<SkillsPrefs>): void;
   embedded?: boolean;
   desktop: boolean;
 }) {
   const s = props.summary;
+  const step = pitchTestNextStep(s, props.scores, props.tolerance, props.strictness);
+  // The next step's first action is the accent button; the plain retest below steps back so there is one.
+  const nextHasActions = step !== null && visibleNextActions(step, props.embedded, Boolean(props.onPrefs)).length > 0;
   return (
     <div className="sing-card sing-summary">
       <h2 className="sing-result-title" tabIndex={-1} ref={props.headingRef}>
@@ -324,6 +535,7 @@ function PitchTestSummaryView(props: {
             <Stat label="Steadiness" value={s.meanStabilityCents !== null ? `±${centsCount(s.meanStabilityCents)}` : '–'} note={s.meanTimeToLandSec !== null ? `settled in ${seconds(s.meanTimeToLandSec)} on average` : undefined} />
           </dl>
           <FindingList findings={s.findings} />
+          {step && <NextStepView step={step} onRestart={props.onRestart} onPrefs={props.onPrefs} embedded={props.embedded} />}
           <h3 className="subhead">By part of your range</h3>
           <table className="sing-table">
             <thead>
@@ -391,7 +603,7 @@ function PitchTestSummaryView(props: {
         </>
       )}
       <div className="button-row">
-        <button type="button" className="button button--accent" onClick={props.onRestart}>
+        <button type="button" className={nextHasActions ? 'button' : 'button button--accent'} onClick={props.onRestart}>
           Take the test again{props.desktop ? ' (Return)' : ''}
         </button>
         {!props.embedded && (
@@ -406,5 +618,51 @@ function PitchTestSummaryView(props: {
         )}
       </div>
     </div>
+  );
+}
+
+/** Inside the daily workout the screen must not navigate away, and a strictness change needs somewhere to save it. */
+function visibleNextActions(step: PitchNextStep, embedded: boolean | undefined, canSavePrefs: boolean): PitchNextAction[] {
+  return step.actions.filter((a) => (a.kind === 'open' ? !embedded : a.kind === 'strictness' ? canSavePrefs : true));
+}
+
+/** The suggested next step under the findings: a title, one short paragraph and the actions (links and buttons, so Tab and Return reach them). */
+function NextStepView(props: { step: PitchNextStep; onRestart(): void; onPrefs?(patch: Partial<SkillsPrefs>): void; embedded?: boolean }) {
+  const { step } = props;
+  const actions = visibleNextActions(step, props.embedded, Boolean(props.onPrefs));
+  return (
+    <section className={`sing-next${step.lowConfidence ? ' sing-next--unsure' : ''}`} aria-labelledby="pitch-next-title" data-next={step.id}>
+      <p className="sing-next-eyebrow">{step.lowConfidence ? 'Next step (not enough to be sure)' : 'Next step'}</p>
+      <h3 className="sing-next-title" id="pitch-next-title">
+        {step.title}
+      </h3>
+      <p className="sing-next-text">{step.text}</p>
+      {actions.length > 0 && (
+        <div className="button-row">
+          {actions.map((a, i) => {
+            const cls = i === 0 ? 'button button--accent' : 'button';
+            if (a.kind === 'open') {
+              return (
+                <a key={a.label} className={cls} href={skillsHash({ view: a.view })} data-view={a.view}>
+                  {a.label}
+                </a>
+              );
+            }
+            const onClick =
+              a.kind === 'retest'
+                ? props.onRestart
+                : () => {
+                    props.onPrefs?.({ strictness: a.strictness });
+                    props.onRestart();
+                  };
+            return (
+              <button key={a.label} type="button" className={cls} onClick={onClick}>
+                {a.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </section>
   );
 }

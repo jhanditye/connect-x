@@ -68,16 +68,33 @@ Numbers (put them in `score/constants.ts`):
 - Pitch = `hzToMidi(f0, a4Hz)` from `trackPitch` (10 ms). Voiced = `voiced` flag. **Too quiet** when voiced time < 0.3 s
   or the 90th-percentile rmsDb of voiced frames < -50 dBFS: status `too-quiet`, numbers null, finding says so.
 - Smoothed pitch = 200 ms centred moving average over voiced runs (one vibrato cycle at 5 Hz), used for steadiness,
-  landing window detection, stability and lock-in. **Held** = median of raw pitch over the steady part (whole note
-  minus the first 250 ms after onset and the last 150 ms before release, frames whose smoothed pitch is within 50 cents
-  of the note median). **Landing** = mean of the first 200 ms after the smoothed slope first drops under 3 semitones/s.
-  **Stability** = SD of smoothed pitch over the steady part (vibrato is not instability). **Time to land** = onset to
-  the first time the smoothed pitch enters the tolerance band and stays 300 ms.
+  landing window detection, stability and lock-in. **Held** = the vibrato centre of the raw pitch over the steady part
+  (whole note minus the first 250 ms after onset and the last 150 ms before release, frames whose smoothed pitch is
+  within 50 cents of the note median), fitted at the take's vibrato rate (one rate shared by all notes of a line), the
+  median when there is no vibrato. **Landing** (held notes) = mean pitch over the first 200 ms from the voice onset, so
+  it grows with a scoop's depth and length. **Stability** = SD of smoothed pitch over
+  the steady part (vibrato is not instability). **Time to land** = onset to the first time the smoothed pitch enters
+  the tolerance band and stays 300 ms. **End drift** (`endDriftCents`, held notes and long tones, optional field) = the
+  last 0.5 s (long tone: 0.6 s) of the steady part against the steady part before it; a finding at 10 cents or more,
+  so a sag at the end is reported instead of averaged away.
+- **Confidence**: `SungNote.confidence` (optional, absent = 'high') is 'low' when the steady part is under 200 ms (held
+  notes: under 450 ms), when a vibrato of 15 cents or wider was caught over less than one cycle, when the pitch swung
+  30 cents or more and no vibrato centre could be fitted, or (notes under two vibrato cycles) when the centres fitted
+  on the first and the last 70 % of the steady part differ by more than 10 cents. Low-confidence notes are shown with their number but kept out
+  of accuracy, bias, drift, step errors, the "worst note" finding, the pitch-test summary and the progress stats
+  (`countsForTuning`), and a finding says so. A sung interval with a low-confidence note is never `within`.
+- **Not scored, with the reason**: a take whose only note was too short to measure says "too short" (not "no steady
+  sung note"); a steady pure tone (harmonics 2-10 under -30 dB of the fundamental, at most one above the noise, and
+  pitch roughness under 2.5 cents: a speaker leaking the prompt, a tuning app) is status `no-pitch` with a finding that
+  it sounded like an electronic tone, for held notes, lines, intervals and long tones.
 - **Octave**: `octaveOffset = round((held - target) / 12)`; errors are always judged on pitch class (|error| <= 600);
   non-zero offset gives an info finding "right note, different octave", never a 1200-cent miss.
 - **Notes in a line**: a note is >= 120 ms of smoothed pitch within 50 cents of its running median; boundaries where
   pitch moves > 60 cents and stays 80 ms, or an unvoiced gap >= 60 ms, or a level dip >= 6 dB (repeated notes); frames
-  with |slope| > 4 semitones/s (glides) belong to no note; gaps < 100 ms bridged.
+  with |slope| > 4 semitones/s (glides) belong to no note; gaps < 100 ms bridged. With vibrato, a pitch boundary is
+  kept only when the step is still >= 60 cents with the vibrato fitted across both sides (a wide vibrato swing is never
+  two notes), and a short straight ramp heading into the next note (a scoop) or leaving the previous one (a fall) is
+  part of that note, not an extra note.
 - **Alignment** (DP, monotone): match cost min(|cents|, 400)/100, missing 2.5, extra 1.5 (extra < 200 ms: 0.5). Whole-
   take octave offset k in -2..2 chosen by lowest total cost; a single note > 600 cents off after k is folded and
   flagged `octaveSlip`.

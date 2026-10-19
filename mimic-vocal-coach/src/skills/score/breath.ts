@@ -4,6 +4,8 @@ import { trackPitch } from '../../dsp/pitch';
 import { median, percentile, std } from '../../dsp/stats';
 import type { Finding, HissScore, LongToneScore } from '../types';
 import {
+  END_DRIFT_FINDING_CENTS,
+  LONG_TONE_END_DRIFT_SEC,
   HISS_ABOVE_FLOOR_DB,
   HISS_ABS_MIN_DB,
   HISS_BIT_UNEVEN_DB,
@@ -27,7 +29,8 @@ import {
   SMOOTH_SEC,
   TRACE_STEP_SEC,
 } from './constants';
-import { analyseTake, heldPitch, sdCents, smoothRange, takeStatus, unscoredFinding, voicedStretches } from './frames';
+import { analyseTake, heldPitch, isPureTone, pureToneFinding, sdCents, smoothRange, takeStatus, unscoredFindingFor, voiceCheck, voicedStretches } from './frames';
+import { endDriftCents, endDriftWords } from './held';
 
 const db = (ms: number) => (ms > 0 ? Math.max(-120, 10 * Math.log10(ms)) : -120);
 
@@ -240,7 +243,9 @@ const LONG_TONE_TAIL_SEC = 0.8;
 /**
  * Long tone: the longest voiced run (gaps up to 150 ms bridged). Pitch steadiness = SD of the 200 ms-smoothed pitch
  * after the first 300 ms (vibrato not counted); loudness steadiness = SD of the 100 ms-smoothed level
- * (without the last 0.8 s, where a natural taper is fine). Tracker slips over 1.5 semitones are dropped first.
+ * (without the last 0.8 s, where a natural taper is fine). Tracker slips over 1.5 semitones are dropped first. A sag
+ * over the last second is measured on its own (endDriftCents) and reported, so it is not averaged away. A steady pure
+ * tone is refused (voice check).
  */
 export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: { a4Hz: number }): LongToneScore {
   const fr = analyseTake(samples, sampleRate, opts.a4Hz);
@@ -255,11 +260,12 @@ export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: {
     pitchTrace: [],
     findings: [],
   };
-  if (status !== 'ok') return { ...base, findings: [unscoredFinding(status)] };
+  if (status !== 'ok') return { ...base, findings: [unscoredFindingFor(fr, status)] };
   let best: [number, number] | null = null;
   for (const s of voicedStretches(fr, LONG_TONE_BRIDGE_SEC)) if (!best || s[1] - s[0] > best[1] - best[0]) best = s;
-  if (!best) return { ...base, status: 'no-pitch', findings: [unscoredFinding('no-pitch')] };
+  if (!best) return { ...base, status: 'no-pitch', findings: [unscoredFindingFor(fr, 'no-pitch')] };
   const [a, b] = best;
+  if (isPureTone(voiceCheck(samples, sampleRate, fr, a, b))) return { ...base, status: 'no-pitch', findings: [pureToneFinding()] };
   const hop = fr.hop;
   const durationSec = (b - a) * hop;
   // Tracker slips (a soft tone in a noisy room can read an octave or a 5th off for a few frames) are dropped before
@@ -292,6 +298,11 @@ export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: {
   const tail = Math.min(Math.round(LONG_TONE_TAIL_SEC / hop), Math.floor(lvSm.length * 0.15));
   const loudnessSdDb = std(lvSm.subarray(skip, Math.max(skip + 1, lvSm.length - Math.max(tail, Math.round(0.15 / hop)))));
   const midi = heldPitch(fr.midi.subarray(a + skip, b), undefined, hop);
+  // A sag (or a creep) over the last second: the overall SD averages it away, so it is measured on its own.
+  const endFrames: number[] = [];
+  for (let k = a + skip; k < b - Math.round(0.15 / hop); k++) if (!Number.isNaN(clean[k - a])) endFrames.push(k);
+  const endDrift = tooNoisy ? null : endDriftCents(fr, endFrames, null, LONG_TONE_END_DRIFT_SEC);
+  const sagged = endDrift !== null && Math.abs(endDrift) >= END_DRIFT_FINDING_CENTS;
   const findings: Finding[] = [];
   if (pitchSdCents === null) {
     findings.push({ tone: 'info', text: `${durationSec.toFixed(1)} seconds. The pitch could not be followed cleanly (a noisy room or a very soft tone), so its steadiness is not judged this time.` });
@@ -304,7 +315,10 @@ export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: {
         : pitchSdCents <= LONG_TONE_WOBBLY_CENTS
           ? 'a little wobbly'
           : 'wobbly';
-  findings.push({ tone: pitchSdCents <= LONG_TONE_STEADY_CENTS ? 'good' : 'work', text: `${durationSec.toFixed(1)} seconds, pitch ${words} (it moved about ${Math.round(pitchSdCents)} cents, vibrato not counted).` });
+  findings.push({ tone: pitchSdCents <= LONG_TONE_STEADY_CENTS && !sagged ? 'good' : 'work', text: `${durationSec.toFixed(1)} seconds, pitch ${words}${sagged ? ' until the last second' : ''} (it moved about ${Math.round(pitchSdCents)} cents, vibrato not counted).` });
+  }
+  if (sagged && endDrift !== null) {
+    findings.push({ tone: 'work', text: `Over the last second the pitch ${endDriftWords(endDrift)}. Keep the support going right to the end, and stop before you run out of air.` });
   }
   if (loudnessSdDb > HISS_STEADY_DB) findings.push({ tone: 'work', text: `The volume varied by about ${loudnessSdDb.toFixed(1)} dB. Keep a steady medium volume all the way.` });
   else findings.push({ tone: 'good', text: `Even volume (varied ${loudnessSdDb.toFixed(1)} dB).` });
@@ -313,6 +327,7 @@ export function scoreLongTone(samples: Float32Array, sampleRate: number, opts: {
     durationSec,
     midi: Number.isFinite(midi) ? midi : null,
     pitchSdCents,
+    endDriftCents: endDrift,
     loudnessSdDb,
     levelTrace: trace(fr.rmsDb, a, b, hop),
     pitchTrace: trace(sm, 0, sm.length, hop),

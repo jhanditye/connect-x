@@ -35,6 +35,74 @@ export const SPLIT_CENTS = 60;
 export const SPLIT_WINDOW_SEC = 0.2;
 /** Both means need at least this much voiced pitch (a shorter window is too exposed to vibrato). */
 export const SPLIT_MIN_SIDE_SEC = 0.08;
+/**
+ * A pitch boundary inside a stretch is kept only if the step, with the take's vibrato fitted across both sides, is at
+ * least SPLIT_CENTS. Each side uses at most this much of its note.
+ */
+export const VIB_STEP_WINDOW_SEC = 0.35;
+/** Scoops and falls: a span of at most RAMP_MAX_SEC that is a straight ramp (R^2 >= RAMP_MIN_R2; vibrato on the ramp
+ * lowers it) over at least max(RAMP_MIN_ST, RAMP_VIB_FACTOR * vibrato extent) semitones, ending within RAMP_REACH_ST
+ * of the next note it heads into (or starting that close to the previous note it leaves), belongs to that note. */
+export const RAMP_MAX_SEC = 0.3;
+export const RAMP_MIN_R2 = 0.5;
+export const RAMP_MIN_ST = 0.6;
+export const RAMP_VIB_FACTOR = 2;
+export const RAMP_REACH_ST = 2;
+
+/** Note confidence: a steady part shorter than this is too short to trust. */
+export const CONFIDENT_STEADY_SEC = 0.2;
+/** A vibrato this wide (semitones) or wider must be caught over at least one whole cycle. (Relaxing this to 0.12 s and
+ * 0.6 cycle when the take's rate is known let 0.3 s notes through 47 cents off, so it stays strict.) */
+export const VIB_CONFIDENCE_AMP = 0.15;
+/** Centre check on short notes (segment.ts centreAgrees): the centres fitted on the first and on the last 70 % of the
+ * steady frames must agree within 10 cents. */
+export const CENTRE_CHECK_SHARE = 0.7;
+export const CENTRE_CHECK_CENTS = 10;
+/** No vibrato centre fitted and the pitch swung this far (half the 10-90 % range, semitones): the median is a guess. */
+export const UNFITTED_SPREAD_ST = 0.3;
+/**
+ * A held note (pitch test, match) needs this much steady pitch for its number to be more than rough. Measured on the
+ * calibration singer (steady part / largest error, cents, at A2, A3 and E4): 0.35 s notes 0.22 s / 9, 0.4 s notes
+ * 0.24 s / 6.2, 0.45 s notes 0.28 s / 3.5, 0.6 s notes 0.36 s / 1.8. So notes from about 0.45 s are trusted.
+ */
+export const HELD_CONFIDENT_STEADY_SEC = 0.26;
+/**
+ * Line notes measured with low confidence are kept out of the figures, but they are not ignored: a rough reading is
+ * trusted only to within its margin, its own swing (the whole 10-90 % range of the steady pitch, or twice the vibrato
+ * extent found) and at least LOW_CONF_MARGIN_CENTS. A rough note more than ROUGH_WRONG_NOTE_CENTS beyond its margin is
+ * nearer another semitone whatever the error, so it is named as a different note; one that reads off by more than the
+ * tolerance and beyond its margin is named as a rough reading and blocks praise. (Calibration singer, in tune: 0.15 s
+ * notes read up to 27 cents off, 0.3 s notes up to 13; with a +/-100-cent vibrato 0.3 s notes read up to 72 off,
+ * inside their swing of 150 or more.)
+ */
+export const LOW_CONF_MARGIN_CENTS = 30;
+export const ROUGH_WRONG_NOTE_CENTS = 50;
+/** Praise and an accuracy figure need this share of a line's notes measured with confidence (else "not scored"). */
+export const MIN_COUNTED_SHARE = 0.5;
+/** "Too short to measure" is said only of a note voiced for less than this; a longer one failed for another reason. */
+export const SHORT_NOTE_MAX_SEC = 0.6;
+
+/** A steady stretch of voicing at least this long that is still too short to score is named as "too short". */
+export const SHORT_NOTE_MIN_SEC = 0.08;
+/**
+ * Voice check (frames.ts isPureTone) switched OFF. In review it refused 25 of 648 synthetic straight-tone voices (pure "oo"
+ * falsetto looks like a sine) while still letting quiet sines, sines with vibrato and square tones through. Refusing a real
+ * singer is the worse error, and the prompts play before the microphone opens, so leakage only matters with the drone
+ * (which asks about headphones first). The measurement stays for a later, better check.
+ */
+export const PURE_TONE_REFUSAL = false;
+/** Voice check (frames.ts isPureTone): harmonics 2..10 under this share of the fundamental's energy (-30 dB)... */
+export const PURE_TONE_HARMONIC_RATIO = 1e-3;
+/** ...and pitch roughness under this (cents): a steady pure tone, not a voice. */
+export const PURE_TONE_ROUGHNESS_CENTS = 2.5;
+/** Held note / long tone: the pitch over the last END_DRIFT_SEC against the steady part before it, reported when it
+ * moved END_DRIFT_FINDING_CENTS or more (a sag at the end is not averaged away). The note needs END_DRIFT_MIN_SEC of
+ * steady pitch before that window. */
+export const END_DRIFT_SEC = 0.5;
+export const LONG_TONE_END_DRIFT_SEC = 0.6;
+export const END_DRIFT_MIN_SEC = 0.5;
+export const END_DRIFT_FINDING_CENTS = 10;
+
 /** Unvoiced gaps shorter than this are bridged. */
 export const GAP_BRIDGE_SEC = 0.06;
 /** Gaps from GAP_BRIDGE_SEC up to this are bridged only when the level does not dip (a pitch-tracker dropout). */

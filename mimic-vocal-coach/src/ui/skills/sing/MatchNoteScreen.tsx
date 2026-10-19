@@ -100,7 +100,8 @@ export function MatchNoteScreen(props: MatchNoteScreenProps) {
       register: target.register,
       locked: got.lockSec !== null,
       lockSec: got.lockSec,
-      heldCents: held.status === 'ok' ? held.heldCents : null,
+      // A rough reading (too short or unsteady to measure reliably) is not reported as a number.
+      heldCents: held.status === 'ok' && held.sung?.confidence !== 'low' ? held.heldCents : null,
     };
     setCurrent(a);
     const nextList = [...attempts, a];

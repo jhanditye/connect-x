@@ -17,9 +17,12 @@ import { WIDE_BAND_CENTS } from '../types';
 import {
   BIAS_FINDING_CENTS,
   BIAS_FINDING_MIN_NOTES,
+  END_DRIFT_FINDING_CENTS,
+  END_DRIFT_MIN_SEC,
+  END_DRIFT_SEC,
+  HELD_CONFIDENT_STEADY_SEC,
   LAND_SMOOTH_SEC,
   LAND_STAY_SEC,
-  LANDING_SLOPE_ST_PER_SEC,
   LANDING_WINDOW_SEC,
   LOCK_AVERAGE_SEC,
   LOCK_DROPOUT_SEC,
@@ -29,20 +32,81 @@ import {
   REGISTER_FINDING_CENTS,
   REGISTER_FINDING_MIN_NOTES,
   SCOOP_FINDING_CENTS,
+  SHORT_NOTE_MAX_SEC,
   SMOOTH_SEC,
   WANDER_FINDING_CENTS,
   WRONG_NOTE_CENTS,
 } from './constants';
 import { centsMeaning, sharpFlat } from './format';
-import { analyseTake, foldCents, octaveAndCents, slopeAt, smoothRange, takeStatus, unscoredFinding, voicedStretches } from './frames';
-import { buildNote, landingPitch } from './segment';
+import {
+  analyseTake,
+  foldCents,
+  heldPitch,
+  isPureTone,
+  octaveAndCents,
+  pureToneFinding,
+  smoothRange,
+  takeStatus,
+  unscoredFindingFor,
+  voiceCheck,
+  voicedStretches,
+  type TakeFrames,
+} from './frames';
+import { buildNote, type NoteSpan } from './segment';
+
+/**
+ * Landing: the mean pitch over the first LANDING_WINDOW_SEC (200 ms) of the voice, from the first voiced frame of the
+ * stretch. A scoop pulls it down in proportion to its depth and length (a 150-cent scoop over 120 ms reads about -40,
+ * a 300-cent one over 350 ms about -210), so "you arrived under the note" grows with the scoop. A vibrato that starts
+ * at the onset moves it at most about 25 cents (+/-100 cents at 4 Hz), under the scoop finding's 30. (A window of one
+ * vibrato cycle was tried: a vibrato that starts 150 ms late then reads +31 on an in-tune note.) Frames more than 6
+ * semitones from the held pitch (tracker slips at the onset) are left out. Fractional MIDI, or null when unvoiced.
+ */
+export function onsetLanding(fr: TakeFrames, s0: number, s1: number, span: Pick<NoteSpan, 'note'>): number | null {
+  let k0 = s0;
+  while (k0 < s1 && Number.isNaN(fr.midi[k0])) k0++;
+  k0++; // the very first voiced frame straddles the onset
+  const k1 = Math.min(s1, k0 + Math.round(LANDING_WINDOW_SEC / fr.hop));
+  let sum = 0;
+  let n = 0;
+  for (let k = k0; k < k1; k++) {
+    const m = fr.midi[k];
+    if (Number.isNaN(m) || Math.abs(m - span.note.midi) > 6) continue;
+    sum += m;
+    n++;
+  }
+  return n >= 3 ? sum / n : null;
+}
+
+/**
+ * How far the pitch moved over the last END_DRIFT_SEC (`tailSec`) of a note's steady part against the steady part
+ * before it, cents (- = sagged flat), each measured as a vibrato centre at the note's rate. Null when the note is too
+ * short to tell (under END_DRIFT_MIN_SEC before the window).
+ */
+export function endDriftCents(fr: TakeFrames, steady: readonly number[], rateHz: number | null, tailSec = END_DRIFT_SEC): number | null {
+  if (!steady.length) return null;
+  const tEnd = steady[steady.length - 1];
+  const cut = tEnd - Math.round(tailSec / fr.hop);
+  const head = steady.filter((k) => k <= cut);
+  const tail = steady.filter((k) => k > cut);
+  if ((head.length ? head[head.length - 1] - head[0] : 0) * fr.hop < END_DRIFT_MIN_SEC || tail.length < 10) return null;
+  const a = heldPitch(head.map((k) => fr.midi[k]), head, fr.hop, rateHz);
+  const b = heldPitch(tail.map((k) => fr.midi[k]), tail, fr.hop, rateHz);
+  return Number.isFinite(a) && Number.isFinite(b) ? (b - a) * 100 : null;
+}
+
+/** "sagged about 30 cents flat" / "crept up about 20 cents sharp" for an end drift. */
+export function endDriftWords(c: number): string {
+  return c < 0 ? `sagged about ${Math.round(-c)} cents flat` : `crept up about ${Math.round(c)} cents sharp`;
+}
 
 /**
  * Scores one held note against `targetMidi`. The main note is the longest voiced stretch (gaps under 100 ms
- * bridged). Held = pitch over the steady part (whole vibrato cycles); landing = the first 200 ms after the 200 ms-
- * smoothed slope first drops under 3 semitones/s, measured from the voice onset (a flat landing that is then
- * corrected shows here; a quick scoop does not, it shows in timeToLandSec); stability = SD of the smoothed pitch.
- * Octave errors: pitch class is judged and octaveOffset says how many octaves away the voice was.
+ * bridged). Held = pitch over the steady part (whole vibrato cycles); landing = the mean over the first moment of the
+ * voice (onsetLanding: grows with the depth and length of a scoop); stability = SD of the smoothed pitch; endDriftCents
+ * = the last 0.5 s against the rest (a sag is reported, not averaged away). A steady pure tone is refused (voice check),
+ * a note too short to measure says so, and a short note (under HELD_CONFIDENT_STEADY_SEC of steady pitch) is marked
+ * low confidence. Octave errors: pitch class is judged and octaveOffset says how many octaves away the voice was.
  */
 export function scoreHeldNote(
   samples: Float32Array,
@@ -66,7 +130,7 @@ export function scoreHeldNote(
   });
   const fr = analyseTake(samples, sampleRate, opts.a4Hz);
   const status = takeStatus(fr);
-  if (status !== 'ok') return empty(status, [unscoredFinding(status)]);
+  if (status !== 'ok') return empty(status, [unscoredFindingFor(fr, status)]);
 
   let best: [number, number] | null = null;
   let bestCount = 0;
@@ -79,8 +143,14 @@ export function scoreHeldNote(
     }
   }
   const span = best ? buildNote(fr, best[0], best[1], 0.2) : null;
-  if (!best || !span) return empty('no-pitch', [unscoredFinding('no-pitch')]);
+  if (!best || !span) return empty('no-pitch', [unscoredFindingFor(fr, 'no-pitch')]);
+  // A steady pure tone (the prompt leaking from a speaker, a tuning app) is not a sung note.
+  if (isPureTone(voiceCheck(samples, sampleRate, fr, span.i0, span.i1))) return empty('no-pitch', [pureToneFinding()]);
   const note = span.note;
+  // A held note needs more steady pitch than a line note before its number is more than rough.
+  const tooShort = note.steadySec < HELD_CONFIDENT_STEADY_SEC;
+  if (tooShort) note.confidence = 'low';
+  const lowConfidence = note.confidence === 'low';
   const hop = fr.hop;
   const tol = opts.toleranceCents;
 
@@ -94,15 +164,8 @@ export function scoreHeldNote(
   // Landing and time to land are measured from the voice onset over the whole stretch (scoops included).
   const [s0, s1] = best;
   const sm = smoothRange(fr.midi, s0, s1, Math.max(3, Math.round(SMOOTH_SEC / hop) | 1));
-  const lw = Math.round(LANDING_WINDOW_SEC / hop);
-  let landingCents: number | null = null;
-  for (let k = 0; k + lw <= sm.length; k++) {
-    const sl = slopeAt(sm, k, hop);
-    if (Number.isNaN(sl) || Math.abs(sl) >= LANDING_SLOPE_ST_PER_SEC) continue;
-    const m = landingPitch(fr, s0 + k, lw);
-    if (!Number.isNaN(m)) landingCents = centsOf(m);
-    break;
-  }
+  const landMidi = onsetLanding(fr, s0, s1, span);
+  const landingCents: number | null = landMidi === null ? null : centsOf(landMidi);
   if (landingCents !== null) note.landingMidi = targetMidi + 12 * octaveOffset + landingCents / 100;
   // Time to land: averaged over whole vibrato cycles (LAND_SMOOTH_SEC), so a centred vibrato counts as landed.
   const smLand = smoothRange(fr.midi, s0, s1, Math.max(3, Math.round(LAND_SMOOTH_SEC / hop) | 1));
@@ -122,7 +185,9 @@ export function scoreHeldNote(
     } else run = 0;
   }
 
-  const within = Math.abs(heldCents) <= tol;
+  // A rough reading never claims "in tune": the number is shown, but `within` is not given on it.
+  const within = !lowConfidence && Math.abs(heldCents) <= tol;
+  const endDrift = endDriftCents(fr, span.steady, span.vibRateHz);
   const findings: Finding[] = [];
   if (octaveOffset !== 0) {
     findings.push({
@@ -136,8 +201,21 @@ export function scoreHeldNote(
   if (!wrongNote && landingCents !== null && landingCents - heldCents <= SCOOP_FINDING_CENTS) {
     findings.push({ tone: 'work', text: `You arrived about ${Math.round(heldCents - landingCents)} cents under the note and then slid up. Aim for the centre straight away.` });
   }
+  if (!wrongNote && endDrift !== null && Math.abs(endDrift) >= END_DRIFT_FINDING_CENTS) {
+    findings.push({ tone: 'work', text: `Towards the end the pitch ${endDriftWords(endDrift)}. Keep the air flowing right to the end of the note.` });
+  }
   if (note.stabilityCents > WANDER_FINDING_CENTS) {
     findings.push({ tone: 'work', text: `The pitch wandered (about ${Math.round(note.stabilityCents)} cents up and down, vibrato not counted).` });
+  }
+  if (lowConfidence) {
+    // Said first: the number is shown, but it is rough.
+    // The reason given is the real one: a short note, or a long one whose pitch could not be pinned down.
+    findings.unshift({
+      tone: 'info',
+      text: tooShort && note.endSec - note.startSec < SHORT_NOTE_MAX_SEC
+        ? `That note was short (about ${(note.endSec - note.startSec).toFixed(1)} seconds), so this reading is rough and is not counted in your averages. Hold each note for about a second.`
+        : `The pitch of that note was hard to pin down (it was very soft or unsteady), so this reading is rough and is not counted in your averages. Sing a little louder on a clear "ah".`,
+    });
   }
   return {
     status: 'ok',
@@ -150,6 +228,7 @@ export function scoreHeldNote(
     timeToLandSec,
     within,
     register,
+    endDriftCents: endDrift,
     findings: findings.slice(0, MAX_FINDINGS),
   };
 }
@@ -183,7 +262,9 @@ function registerStats(notes: HeldNoteScore[], tol: number): RegisterStats {
 
 /** Summary of a pitch test: accuracy, bias, by register, and up to three plain findings. */
 export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: number): PitchTestSummary {
-  const allScored = notes.filter((n) => n.status === 'ok' && n.heldCents !== null);
+  // Low-confidence notes (too short to measure reliably) are shown on their own but kept out of every figure here.
+  const lowConfidence = notes.filter((n) => n.status === 'ok' && n.heldCents !== null && n.sung?.confidence === 'low');
+  const allScored = notes.filter((n) => n.status === 'ok' && n.heldCents !== null && n.sung?.confidence !== 'low');
   // Different notes are counted, named and kept out of the averages (one misheard note must not read as a flat voice).
   const wrong = allScored.filter((n) => isWrongHeldNote(n));
   const scored = allScored.filter((n) => !isWrongHeldNote(n));
@@ -204,7 +285,14 @@ export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: numbe
 
   const findings: Finding[] = [];
   if (!allScored.length) {
-    findings.push({ tone: 'info', text: 'No notes could be scored this time. Check the microphone and sing a clear "ah".' });
+    findings.push(
+      lowConfidence.length
+        ? {
+            tone: 'info',
+            text: `${lowConfidence.length === 1 ? 'The note was' : `All ${lowConfidence.length} notes were`} too short or too unsteady to measure reliably, so nothing is scored this time. Hold each note for about a second.`,
+          }
+        : { tone: 'info', text: 'No notes could be scored this time. Check the microphone and sing a clear "ah".' },
+    );
   } else {
     if (shareWithin !== null && shareWithin >= PRAISE_SHARE) {
       findings.push({ tone: 'good', text: `${Math.round(shareWithin * 100)} % of your notes were within ${toleranceCents} cents. Strong, reliable tuning.` });
@@ -241,6 +329,12 @@ export function summarisePitchTest(notes: HeldNoteScore[], toleranceCents: numbe
     }
     if (octaveSlips > 0) {
       findings.push({ tone: 'info', text: `${octaveSlips} ${octaveSlips === 1 ? 'note was' : 'notes were'} sung in a different octave. That is fine: the note name was judged.` });
+    }
+    if (lowConfidence.length > 0) {
+      findings.push({
+        tone: 'info',
+        text: `${lowConfidence.length} ${lowConfidence.length === 1 ? 'note was' : 'notes were'} too short to measure reliably, so ${lowConfidence.length === 1 ? 'it is' : 'they are'} left out of these figures. Hold each note for about a second.`,
+      });
     }
     if (!findings.length && meanAbsCents !== null) {
       findings.push({ tone: 'info', text: `On average you were ${Math.round(meanAbsCents)} cents from the note (${centsMeaning(meanAbsCents)}).` });

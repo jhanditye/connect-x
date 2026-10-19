@@ -23,22 +23,44 @@ import {
   FORCE_SPLIT_MIN_CENTS,
   LINE_SHIFT_CENTS,
   LINE_SHIFT_SPREAD_CENTS,
+  LOW_CONF_MARGIN_CENTS,
   MAX_FINDINGS,
+  MIN_COUNTED_SHARE,
+  NOTE_MIN_SEC,
   OCTAVE_OFFSETS,
   PRAISE_SHARE,
+  ROUGH_WRONG_NOTE_CENTS,
   WRONG_DIRECTION_CENTS,
   WRONG_NOTE_CENTS,
 } from './constants';
 import { centsMeaning, sharpFlat } from './format';
-import { analyseTake, foldCents, octaveAndCents, takeStatus, unscoredFinding, type TakeFrames } from './frames';
-import { segmentSpans, splitSpanInTwo, type NoteSpan } from './segment';
+import { analyseTake, foldCents, isPureTone, octaveAndCents, pureToneFinding, takeStatus, unscoredFindingFor, voiceCheck, type TakeFrames } from './frames';
+import { buildNote, segmentSpans, splitSpanInTwo, type NoteSpan } from './segment';
 
-function sungSpansOf(samples: Float32Array, sampleRate: number, a4Hz: number): { status: TakeStatus; spans: NoteSpan[]; fr: TakeFrames } {
+function sungSpansOf(samples: Float32Array, sampleRate: number, a4Hz: number): { status: TakeStatus; spans: NoteSpan[]; fr: TakeFrames; why: Finding | null } {
   const fr = analyseTake(samples, sampleRate, a4Hz);
   const status = takeStatus(fr);
-  if (status !== 'ok') return { status, spans: [], fr };
+  if (status !== 'ok') return { status, spans: [], fr, why: unscoredFindingFor(fr, status) };
   const spans = segmentSpans(fr);
-  return { status: spans.length ? 'ok' : 'no-pitch', spans, fr };
+  if (!spans.length) return { status: 'no-pitch', spans, fr, why: unscoredFindingFor(fr, 'no-pitch') };
+  // Voice check: a take whose notes are mostly steady pure tones (a speaker, a tuning app) is not singing.
+  const pure = spans.filter((sp) => sp.steady.length > 0 && isPureTone(voiceCheck(samples, sampleRate, fr, sp.steady[0], sp.steady[sp.steady.length - 1] + 1, 4))).length;
+  if (pure * 2 > spans.length) return { status: 'no-pitch', spans: [], fr, why: pureToneFinding() };
+  return { status: 'ok', spans, fr, why: null };
+}
+
+/** A sung note whose pitch was too short or swung too widely to measure reliably (shown, not counted). */
+const isLow = (n: SungNote | null): boolean => n?.confidence === 'low';
+
+/**
+ * How far a rough (low-confidence) note's reading can be trusted, in cents: its own swing (the whole 10-90 % range of
+ * its steady pitch, or twice the vibrato extent found), at least LOW_CONF_MARGIN_CENTS. A partial vibrato cycle can
+ * pull a short note's centre by most of one extent (72 cents with a +/-100 vibrato), so half the range is not enough.
+ */
+function roughMarginCents(fr: TakeFrames, sp: NoteSpan): number {
+  const v = sp.steady.map((k) => fr.midi[k]).filter((x) => !Number.isNaN(x)).sort((a, b) => a - b);
+  const range = v.length ? v[Math.floor(0.9 * (v.length - 1))] - v[Math.floor(0.1 * (v.length - 1))] : 0;
+  return Math.max(LOW_CONF_MARGIN_CENTS, 100 * Math.max(range, 2 * sp.vibAmp));
 }
 
 /** A matched note that is a different note from the written one (not just out of tune), or in another octave. */
@@ -48,10 +70,11 @@ export function isWrongNote(n: Pick<SequenceNoteScore, 'cents' | 'octaveSlip'>):
 
 /**
  * Whether a scored note may feed the per-degree tuning profile: sung, in the take's octave, a tuning error rather than
- * a different note, and the line was in the key (not the right shape a few semitones away).
+ * a different note, measured with confidence (not a note too short to trust), and the line was in the key (not the
+ * right shape a few semitones away).
  */
 export function countsForTuning(n: SequenceNoteScore, score: Pick<SequenceScore, 'keyShiftCents'>): boolean {
-  return n.sung !== null && n.cents !== null && !isWrongNote(n) && (score.keyShiftCents ?? null) === null;
+  return n.sung !== null && n.cents !== null && !isWrongNote(n) && !isLow(n.sung) && (score.keyShiftCents ?? null) === null;
 }
 
 const withArticle = (name: string) => `${/^[aeiou]/.test(name) || name.startsWith('octave') ? 'an' : 'a'} ${name}`;
@@ -76,6 +99,12 @@ export function theilSenSlope(x: readonly number[], y: readonly number[]): numbe
   return s.length ? median(s) : NaN;
 }
 
+/** The sung note matched before expected note i (null when none). */
+function prevSung(notes: readonly SequenceNoteScore[], i: number): SungNote | null {
+  for (let p = i - 1; p >= 0; p--) if (notes[p].sung) return notes[p].sung;
+  return null;
+}
+
 const octaveWords = (k: number) =>
   `${Math.abs(k) === 1 ? 'an octave' : `${Math.abs(k)} octaves`} ${k < 0 ? 'lower' : 'higher'}`;
 
@@ -88,8 +117,9 @@ const octaveWords = (k: number) =>
  */
 export function scoreSequence(samples: Float32Array, sampleRate: number, target: SequenceTarget, opts: ScoreOptions): SequenceScore {
   const tol = opts.toleranceCents;
-  const { status, spans } = sungSpansOf(samples, sampleRate, opts.a4Hz);
+  const { status, spans, fr, why } = sungSpansOf(samples, sampleRate, opts.a4Hz);
   const sung = spans.map((s) => s.note);
+  const margins = new Map<SungNote, number>(spans.map((sp) => [sp.note, roughMarginCents(fr, sp)]));
   const blankNotes = (): SequenceNoteScore[] =>
     target.notes.map((n, i) => ({
       index: i,
@@ -116,7 +146,7 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
       meanAbsIntervalCents: null,
       driftCents: null,
       keyShiftCents: null,
-      findings: [unscoredFinding(status)],
+      findings: why ? [why] : [],
     };
   }
   let al = bestOctaveAlignment(target.midis, sung);
@@ -153,22 +183,31 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
     prev = ns;
   }
   const matched = notes.filter((n) => n.cents !== null);
-  const tuned = matched.filter((n) => !isWrongNote(n));
-  const wrong = matched.filter((n) => isWrongNote(n));
+  // Notes too short to measure reliably are shown with their numbers and kept out of the tuning figures. They are not
+  // ignored: one that is a different note even after allowing for its own swing is still named (and counted as not
+  // in tune), and one that reads off by more than the tolerance and its swing is named as rough and blocks praise.
+  const lowConf = matched.filter((n) => isLow(n.sung));
+  const confident = matched.filter((n) => !isLow(n.sung));
+  const beyondSwing = (n: SequenceNoteScore) => Math.abs(n.cents as number) - (margins.get(n.sung as SungNote) ?? LOW_CONF_MARGIN_CENTS);
+  const lowWrong = lowConf.filter((n) => !n.octaveSlip && beyondSwing(n) >= ROUGH_WRONG_NOTE_CENTS);
+  const lowOff = lowConf.filter((n) => !lowWrong.includes(n) && !n.octaveSlip && Math.abs(n.cents as number) > tol && beyondSwing(n) > 0);
+  const uncounted = lowConf.filter((n) => !lowWrong.includes(n));
+  const tuned = confident.filter((n) => !isWrongNote(n));
+  const wrong = [...confident.filter((n) => isWrongNote(n)), ...lowWrong];
   const missing = notes.length - matched.length;
-  const allSteps = notes.filter((n) => n.intervalCents !== null);
+  const allSteps = notes.filter((n) => n.intervalCents !== null && !isLow(n.sung) && !isLow(prevSung(notes, n.index)));
   const wrongSteps = allSteps.filter((n) => Math.abs(n.intervalCents as number) >= WRONG_NOTE_CENTS * 1.5);
   const steps = allSteps.filter((n) => Math.abs(n.intervalCents as number) < WRONG_NOTE_CENTS * 1.5).map((n) => n.intervalCents as number);
 
   // A whole line shifted off the key with the right shape (every note about the same distance away).
   let keyShiftCents: number | null = null;
-  if (matched.length >= 3 && !matched.some((n) => n.octaveSlip)) {
-    const c = matched.map((n) => n.cents as number);
+  if (confident.length >= 3 && !confident.some((n) => n.octaveSlip)) {
+    const c = confident.map((n) => n.cents as number);
     const med = median(c);
     const spread = Math.max(...c.map((x) => Math.abs(x - med)));
     if (Math.abs(med) >= LINE_SHIFT_CENTS && spread <= LINE_SHIFT_SPREAD_CENTS) keyShiftCents = med;
   }
-  if (keyShiftCents === null && shiftSemis !== 0 && matched.length >= 2) keyShiftCents = median(matched.map((n) => n.cents as number));
+  if (keyShiftCents === null && shiftSemis !== 0 && confident.length >= 2) keyShiftCents = median(confident.map((n) => n.cents as number));
 
   let driftCents: number | null = null;
   if (tuned.length >= 3) {
@@ -179,9 +218,12 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
     );
     if (Number.isFinite(slope)) driftCents = slope * (t[t.length - 1] - t[0]);
   }
-  const noteAccuracy = notes.length ? matched.filter((n) => n.within).length / notes.length : null;
+  // Accuracy is over the notes that could be judged (a clear wrong note is judged, even when short). With fewer than
+  // MIN_COUNTED_SHARE of the line judged there is no accuracy figure: "not scored", not a number from one or two notes.
+  const counted = notes.length - uncounted.length;
+  const noteAccuracy = counted > 0 && counted >= MIN_COUNTED_SHARE * notes.length ? confident.filter((n) => n.within).length / counted : null;
   const tunedCents = tuned.map((n) => n.cents as number);
-  const meanAbsCents = tunedCents.length ? mean(tunedCents.map(Math.abs)) : matched.length ? mean(matched.map((n) => Math.abs(n.cents as number))) : null;
+  const meanAbsCents = tunedCents.length ? mean(tunedCents.map(Math.abs)) : confident.length ? mean(confident.map((n) => Math.abs(n.cents as number))) : null;
   const biasCents = tunedCents.length ? mean(tunedCents) : null;
   const extras = al.extras.map((j) => sung[j]);
 
@@ -194,10 +236,18 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
       text: `Right shape, but the whole line sat ${how} ${keyShiftCents > 0 ? 'above' : 'below'} the key. Listen to the chords and the home note again, then start on the ${target.notes[0].written}.`,
     });
   }
+  // Praise needs nearly the whole line judged (PRAISE_SHARE of the notes), not one or two notes among many rough ones.
   const praise =
-    keyShiftCents === null && noteAccuracy !== null && noteAccuracy >= PRAISE_SHARE && missing === 0 && wrong.length === 0 && wrongSteps.length === 0;
+    keyShiftCents === null &&
+    noteAccuracy !== null &&
+    noteAccuracy >= PRAISE_SHARE &&
+    counted >= PRAISE_SHARE * notes.length &&
+    missing === 0 &&
+    wrong.length === 0 &&
+    lowOff.length === 0 &&
+    wrongSteps.length === 0;
   if (praise) {
-    findings.push({ tone: 'good', text: `${matched.filter((n) => n.within).length} of ${notes.length} notes within ${tol} cents. Well pitched.` });
+    findings.push({ tone: 'good', text: `${confident.filter((n) => n.within).length} of ${counted} notes within ${tol} cents. Well pitched.` });
   }
   if (keyShiftCents === null) {
     // A wrong leap first (the shape of the line), then a different note, then the worst tuning.
@@ -223,8 +273,10 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
       const away = semis >= 1 ? `${semis === 1 ? 'a semitone' : `${semis} semitones`} ${c > 0 ? 'sharp' : 'flat'}` : sharpFlat(c);
       findings.push({
         tone: 'work',
-        text:
-          deg !== null && deg !== n.degree
+        // A rough note is named as a different note, but its size and the note it landed on are not claimed.
+        text: isLow(n.sung)
+          ? `Your ${n.written} was clearly a different note (it read about ${Math.round(Math.abs(c))} cents ${c > 0 ? 'sharp' : 'flat'}, but it was short, so that size is rough).`
+          : deg !== null && deg !== n.degree
             ? `You sang a ${deg} where the ${n.written} was written (${away}).`
             : `Your ${n.written} was a different note, ${away}.`,
       });
@@ -233,6 +285,19 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
     if (worst && !worst.within) {
       const c = worst.cents as number;
       findings.push({ tone: 'work', text: `Your ${worst.written} sat ${sharpFlat(c)} (${centsMeaning(c)}).` });
+    } else if (lowOff.length) {
+      // No measured note was out of tune, but a rough one read clearly off: say so, as a rough reading.
+      const n = lowOff.reduce((w, x) => (Math.abs(x.cents as number) > Math.abs(w.cents as number) ? x : w));
+      const c = n.cents as number;
+      // The size is given only when the note held still (its margin is the floor); a note that swung widely gets the
+      // direction alone.
+      const still = (margins.get(n.sung as SungNote) ?? Infinity) <= LOW_CONF_MARGIN_CENTS;
+      findings.push({
+        tone: 'work',
+        text: still
+          ? `Your ${n.written} sounded about ${Math.round(Math.abs(c))} cents ${c > 0 ? 'sharp' : 'flat'}, but it was too short to measure reliably.`
+          : `Your ${n.written} sounded ${c > 0 ? 'sharp' : 'flat'}, but it was too short and swung too widely to say how far.`,
+      });
     }
     if (driftCents !== null && tuned.length >= DRIFT_MIN_NOTES && Math.abs(driftCents) >= DRIFT_FINDING_CENTS) {
       findings.push({
@@ -253,8 +318,14 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
       findings.push({ tone: 'info', text: `${parts.join(' and ')}; the rest were matched in order.` });
     }
   }
+  if (uncounted.length > 0) {
+    findings.push({
+      tone: 'info',
+      text: `${uncounted.length} ${uncounted.length === 1 ? 'note was' : 'notes were'} too short to measure reliably, so ${uncounted.length === 1 ? 'it is' : 'they are'} shown but not counted${noteAccuracy === null ? ', and the line is not scored' : ''}. Give each note a little more time.`,
+    });
+  }
   if (k !== 0) findings.push({ tone: 'info', text: `You sang the line ${octaveWords(k)}. That is fine: each note was judged in your octave.` });
-  const slips = matched.filter((n) => n.octaveSlip).length;
+  const slips = confident.filter((n) => n.octaveSlip).length;
   if (slips > 0) {
     findings.push({
       tone: 'work',
@@ -279,13 +350,45 @@ export function scoreSequence(samples: Float32Array, sampleRate: number, target:
   };
 }
 
-/** The two notes of an interval take, in time order: blips under 200 ms are skipped, and one long note that glides
- * from the first pitch to the second (or a unison sung without a break) is split in two. */
-function twoNotes(fr: TakeFrames, spans: NoteSpan[], unison: boolean): [SungNote | null, SungNote | null] {
-  let use = spans.filter((s) => s.note.endSec - s.note.startSec >= ALIGN_SHORT_EXTRA_SEC);
+/** Two spans this close to an exact octave apart that touch (no gap between them) are one note read in two octaves. */
+const OCTAVE_SLIP_ST = 0.5;
+
+/**
+ * Pitch-tracker octave slips inside the second note: after the first note, two spans that touch (no unvoiced frame
+ * between them) and sit an octave apart (within OCTAVE_SLIP_ST) are one note read in two octaves, since no voice
+ * jumps an exact octave mid-note without a break. They are rebuilt as one note in the octave nearer the expected
+ * second note (the pitch class, which is all the octave choice changes, is the same either way).
+ */
+function foldOctaveSlips(fr: TakeFrames, use: NoteSpan[], step: number): NoteSpan[] {
+  if (use.length < 3) return use;
+  const out = [...use];
+  for (let i = 1; i + 1 < out.length; i++) {
+    const a = out[i];
+    const b = out[i + 1];
+    const d = b.note.midi - a.note.midi;
+    if (b.i0 - a.i1 > 1 || Math.abs(Math.abs(d) - 12) > OCTAVE_SLIP_ST) continue;
+    const expected = out[0].note.midi + step;
+    // Keep the octave of whichever reading is nearer the expected note; shift the other one onto it.
+    const keepA = Math.abs(a.note.midi - expected) <= Math.abs(b.note.midi - expected);
+    const midi = fr.midi.slice();
+    const [s0, s1, shift] = keepA ? [b.i0, b.i1, -Math.sign(d) * 12] : [a.i0, a.i1, Math.sign(d) * 12];
+    for (let k = s0; k < s1; k++) if (!Number.isNaN(midi[k])) midi[k] += shift;
+    const merged = buildNote({ ...fr, midi }, a.i0, b.i1, NOTE_MIN_SEC, a.vibRateHz ?? b.vibRateHz);
+    if (!merged) continue;
+    out.splice(i, 2, merged);
+    i--;
+  }
+  return out;
+}
+
+/** The two notes of an interval take, in time order: blips under 200 ms are skipped, tracker octave slips inside the
+ * second note are folded back (foldOctaveSlips), and one long note that glides from the first pitch to the second (or
+ * a unison sung without a break) is split in two. `step` is the expected step in semitones (signed). */
+function twoNotes(fr: TakeFrames, spans: NoteSpan[], unison: boolean, step: number): [SungNote | null, SungNote | null] {
+  let use = foldOctaveSlips(fr, spans.filter((s) => s.note.endSec - s.note.startSec >= ALIGN_SHORT_EXTRA_SEC), step);
   if (use.length < 2 && spans.length >= 2) use = spans;
   if (use.length === 1) {
-    const sp = splitSpanInTwo(fr, use[0]);
+    const sp = splitSpanInTwo(fr, use[0], unison);
     if (sp && (unison || Math.abs(sp[1].note.midi - sp[0].note.midi) * 100 >= FORCE_SPLIT_MIN_CENTS)) use = sp;
   }
   return [use[0]?.note ?? null, use[1]?.note ?? null];
@@ -317,9 +420,9 @@ export function scoreSungInterval(samples: Float32Array, sampleRate: number, tar
     within: false,
     findings: [],
   };
-  const { status, spans, fr } = sungSpansOf(samples, sampleRate, opts.a4Hz);
-  if (status !== 'ok') return { ...base, status, findings: [unscoredFinding(status)] };
-  const [first, second] = twoNotes(fr, spans, semis === 0);
+  const { status, spans, fr, why } = sungSpansOf(samples, sampleRate, opts.a4Hz);
+  if (status !== 'ok') return { ...base, status, findings: why ? [why] : [] };
+  const [first, second] = twoNotes(fr, spans, semis === 0, sign * semis);
   const ref = first ? octaveAndCents((first.midi - target.referenceMidi) * 100) : { octaves: 0, cents: 0 };
   const k = ref.octaves;
   const out: SungIntervalScore = { ...base, first, second, octaveOffset: k };
@@ -367,6 +470,13 @@ export function scoreSungInterval(samples: Float32Array, sampleRate: number, tar
           ? `Your first note was ${sungStepPhrase(c / 100).replace(/ (up|down)$/, (m) => (m === ' up' ? ' above' : ' below'))} the given note; the interval is judged from where you started.`
           : `Your first note started ${sharpFlat(c)}; the interval is judged from where you started.`,
     });
+  }
+  if (isLow(first) || isLow(second)) {
+    // Said first: the numbers are shown but rough, and `within` is not claimed on them (nor praised: "a clean ..."
+    // would contradict "rough").
+    out.within = false;
+    for (let i = findings.length - 1; i >= 0; i--) if (findings[i].tone === 'good') findings.splice(i, 1);
+    findings.unshift({ tone: 'info', text: 'One of the notes was too short to measure reliably, so these numbers are rough. Hold each note for about a second.' });
   }
   if (k !== 0) findings.push({ tone: 'info', text: `You sang it ${octaveWords(k)}; that is fine.` });
   out.findings = findings.slice(0, MAX_FINDINGS);

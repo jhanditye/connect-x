@@ -219,6 +219,12 @@ export interface SungNote {
   stabilityCents: number;
   steadySec: number;
   meanRmsDb: number;
+  /**
+   * How far `midi` can be trusted. 'low' = too little steady pitch to measure reliably (a very short note, or a wide
+   * vibrato caught over less than one cycle): shown, but kept out of averages, drift and the progress stats. Absent
+   * means 'high'.
+   */
+  confidence?: 'high' | 'low';
 }
 
 export interface HeldNoteScore {
@@ -234,6 +240,11 @@ export interface HeldNoteScore {
   timeToLandSec: number | null;
   within: boolean;
   register: RegisterThird;
+  /**
+   * Pitch over the last 0.5 s of the steady part against the steady part before it, cents (- = sagged flat). Null
+   * when the note was too short to tell; absent on older results.
+   */
+  endDriftCents?: number | null;
   findings: Finding[];
 }
 
@@ -348,6 +359,11 @@ export interface LongToneScore {
   midi: number | null;
   /** SD of the 200 ms-smoothed pitch, cents (vibrato not counted). */
   pitchSdCents: number | null;
+  /**
+   * Pitch over the last second against the steady part before it, cents (- = sagged flat), vibrato not counted. A
+   * sag at the end is reported even when the overall SD reads steady. Null when too short; absent on older results.
+   */
+  endDriftCents?: number | null;
   loudnessSdDb: number | null;
   levelTrace: number[];
   pitchTrace: number[];
